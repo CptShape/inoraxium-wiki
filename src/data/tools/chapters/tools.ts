@@ -1,5 +1,6 @@
 import { Chapter } from '../../../types';
 import { battleTrackerChapter } from './battle-tracker';
+import { charactersChapter } from './characters';
 import { diceMacrosChapter } from './dice-macros';
 import { messageSenderChapter } from './message-sender';
 
@@ -9,7 +10,7 @@ export const toolsChapter: Chapter = {
   subtitle: 'Instruments and Utilities for the Game Master',
   icon: '🛠️',
   content: 'src/data/tools/chapters/tools.md',
-  subChapters: [battleTrackerChapter, diceMacrosChapter, messageSenderChapter],
+  subChapters: [battleTrackerChapter, diceMacrosChapter, messageSenderChapter, charactersChapter],
 };
 
-export { battleTrackerChapter, diceMacrosChapter, messageSenderChapter };
+export { battleTrackerChapter, diceMacrosChapter, messageSenderChapter, charactersChapter };

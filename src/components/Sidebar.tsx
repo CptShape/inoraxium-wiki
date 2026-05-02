@@ -2,6 +2,7 @@ import React from 'react';
 import { BookOpen } from 'lucide-react';
 import { Chapter } from '../types';
 import { ChapterTree } from './ChapterTree';
+import { LoginButton } from './LoginButton';
 
 interface SidebarProps {
   chapters: Chapter[];
@@ -81,6 +82,10 @@ export const Sidebar: React.FC<SidebarProps> = ({
           <p>🔮 Click chapters to expand</p>
           <p>✨ Navigate through the lore</p>
         </div>
+      </div>
+      {/* Login */}
+      <div className="mt-3 pt-3 border-t border-amber-800/40">
+        <LoginButton />
       </div>
     </div>
   );

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "clsx": "2.1.1",
+    "firebase": "^12.12.1",
     "gray-matter": "^4.0.3",
     "lucide-react": "^1.0.1",
     "react": "19.2.3",

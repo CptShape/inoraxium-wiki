@@ -8,6 +8,7 @@ import { BattleTracker } from './BattleTracker';
 import { DiceMacros } from './DiceMacros';
 import { MessageSender } from './MessageSender';
 import { WorldMap } from './WorldMap';
+import Characters from './Characters';
 
 interface ContentViewProps {
   activeChapter: Chapter | null;
@@ -433,13 +434,6 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
-          {/* ── Message Sender (special chapter) ───────────────────────────── */}
-          {activeChapter.content === 'message-sender' ? (
-            <div className="-mx-4 -mb-6">
-              <MessageSender />
-            </div>
-          ) : null}
-
           {/* ── World Map (special chapter) ───────────────────────────────── */}
           {activeChapter.content === 'world-map' ? (
             <div className="-mx-4 -mb-6">
@@ -447,8 +441,15 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
+          {/* ── Characters Module (special chapter) ───────────────────────── */}
+          {activeChapter.content === 'characters' ? (
+            <div className="-mx-4 -mb-6">
+              <Characters />
+            </div>
+          ) : null}
+
           {/* ── Markdown content ───────────────────────────────────────────── */}
-          {activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'dice-macros' && activeChapter.content !== 'message-sender' && activeChapter.content !== 'world-map' && (
+          {activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'dice-macros' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && (
             <div style={{ fontFamily: "'IM Fell English', serif" }}>
               <MarkdownRenderer
                 path={activeChapter.content}
