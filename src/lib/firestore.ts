@@ -44,6 +44,7 @@ async function getFirestore() {
 // ─── Implementation ────────────────────────────────────────────────────────────
 
 const STORAGE_KEY_LOCAL = 'battleTrackerLocalCharacters';
+const USER_DICE_SETTINGS_LOCAL = 'battleTrackerUserDiceSettings';
 
 /** Load characters visible to `userId`:
  *  - Own characters (all visibilities)
@@ -196,4 +197,64 @@ export const toggleFavorite = async (userId: string | null, characterId: string,
   }
 
   return !isCurrentlyFav;
+};
+
+export interface UserDiceSettings {
+  macros: Array<{
+    id: string;
+    name: string;
+    formula: string;
+  }>;
+  webhookUrl?: string;
+  autoSend?: boolean;
+}
+
+export const loadUserDiceSettings = async (userId: string | null): Promise<UserDiceSettings> => {
+  const localRaw = localStorage.getItem(USER_DICE_SETTINGS_LOCAL);
+  const localParsed = localRaw ? JSON.parse(localRaw) : {};
+  const localState: UserDiceSettings = {
+    macros: localParsed.macros ?? [],
+    webhookUrl: localParsed.webhookUrl ?? '',
+    autoSend: localParsed.autoSend ?? false,
+  };
+
+  if (!userId || userId === 'guest') return localState;
+
+  const fs = await getFirestore();
+  if (!fs) return localState;
+
+  try {
+    const snap = await fs.getDocs(fs.query(fs.collection(fs.db, 'userDiceSettings'), fs.where('userId', '==', userId)));
+    const first = snap.docs?.[0];
+    if (!first) return localState;
+    const data = first.data();
+    return {
+      macros: data.macros ?? [],
+      webhookUrl: data.webhookUrl ?? '',
+      autoSend: data.autoSend ?? false,
+    };
+  } catch (err) {
+    console.error('Failed to load user dice settings from Firestore:', err);
+    return localState;
+  }
+};
+
+export const saveUserDiceSettings = async (userId: string | null, settings: UserDiceSettings): Promise<void> => {
+  localStorage.setItem(USER_DICE_SETTINGS_LOCAL, JSON.stringify(settings));
+
+  if (!userId || userId === 'guest') return;
+
+  const fs = await getFirestore();
+  if (!fs) return;
+
+  try {
+    await fs.setDoc(fs.doc(fs.db, 'userDiceSettings', userId), {
+      userId,
+      macros: settings.macros,
+      webhookUrl: settings.webhookUrl ?? '',
+      autoSend: settings.autoSend ?? false,
+    });
+  } catch (err) {
+    console.error('Failed to save user dice settings to Firestore:', err);
+  }
 };

@@ -4,6 +4,19 @@ export interface CustomAttribute {
   value: string;
 }
 
+export interface CharacterBar {
+  id: string;
+  name: string;
+  currentValue: string;
+  maxValue: string;
+}
+
+export interface CharacterDiceMacro {
+  id: string;
+  name: string;
+  formula: string;
+}
+
 export interface StatusEffect {
   targetId: string;
   value: string;
@@ -31,6 +44,9 @@ export interface CharacterData {
   tags?: string[];
   mainAttributes?: CustomAttribute[];
   secondaryAttributes?: CustomAttribute[];
+  otherAttributes?: CustomAttribute[];
+  bars?: CharacterBar[];
+  diceMacros?: CharacterDiceMacro[];
   statuses?: CharacterStatus[];
   modifierFormula?: string;
 }
