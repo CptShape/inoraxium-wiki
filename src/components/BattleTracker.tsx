@@ -1,5 +1,14 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowDownAZ, ArrowUpZA, ChevronDown, ChevronUp, Plus, Trash2, Send } from 'lucide-react';
+import {
+  BATTLE_TRACKER_STORAGE_KEY_ACTIVE_INDEX,
+  BATTLE_TRACKER_STORAGE_KEY_DESC,
+  BATTLE_TRACKER_STORAGE_KEY_WEBHOOK,
+  clearBattleTrackerCombatants,
+  DEFAULT_BATTLE_TRACKER_COLUMNS,
+  loadBattleTrackerRows,
+  saveBattleTrackerRows,
+} from '../lib/battleTracker';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -17,31 +26,20 @@ type Row = {
 
 const STORAGE_KEY_COLUMNS = 'battleTrackerColumns';
 const STORAGE_KEY_ROWS = 'battleTrackerRows';
-const STORAGE_KEY_ACTIVE_INDEX = 'battleTrackerActiveRowIndex';
-const STORAGE_KEY_WEBHOOK = 'battleTrackerWebhookUrl';
-const STORAGE_KEY_DESC = 'battleTrackerEncounterDescription';
+const STORAGE_KEY_ACTIVE_INDEX = BATTLE_TRACKER_STORAGE_KEY_ACTIVE_INDEX;
+const STORAGE_KEY_WEBHOOK = BATTLE_TRACKER_STORAGE_KEY_WEBHOOK;
+const STORAGE_KEY_DESC = BATTLE_TRACKER_STORAGE_KEY_DESC;
 
 export const BattleTracker: React.FC = () => {
   // ─── State & Persistence ────────────────────────────────────────────────────
   
   const [columns, setColumns] = useState<Column[]>(() => {
     const saved = localStorage.getItem(STORAGE_KEY_COLUMNS);
-    return saved ? JSON.parse(saved) : [
-      { id: 'name', name: 'Name', isStatic: true },
-      { id: 'initiative', name: 'Initiative', isStatic: true },
-    ];
+    return saved ? JSON.parse(saved) : DEFAULT_BATTLE_TRACKER_COLUMNS;
   });
   
   const [rows, setRows] = useState<Row[]>(() => {
-    const saved = localStorage.getItem(STORAGE_KEY_ROWS);
-    if (saved) {
-      const parsed = JSON.parse(saved);
-      return parsed.map((r: any) => ({
-        ...r,
-        status: r.status ?? 'fighting'
-      }));
-    }
-    return [];
+    return loadBattleTrackerRows();
   });
   
   const [activeRowIndex, setActiveRowIndex] = useState<number>(() => {
@@ -67,8 +65,17 @@ export const BattleTracker: React.FC = () => {
   }, [columns]);
 
   useEffect(() => {
-    localStorage.setItem(STORAGE_KEY_ROWS, JSON.stringify(rows));
+    saveBattleTrackerRows(rows);
   }, [rows]);
+
+  useEffect(() => {
+    const syncRows = () => {
+      setRows(loadBattleTrackerRows());
+    };
+
+    window.addEventListener('battle-tracker:rows-updated', syncRows as EventListener);
+    return () => window.removeEventListener('battle-tracker:rows-updated', syncRows as EventListener);
+  }, []);
 
   useEffect(() => {
     localStorage.setItem(STORAGE_KEY_ACTIVE_INDEX, activeRowIndex.toString());
@@ -272,6 +279,18 @@ export const BattleTracker: React.FC = () => {
             style={{ fontFamily: "'Cinzel', serif" }}
           >
             <span>Next Turn</span>
+          </button>
+          <button
+            onClick={() => {
+              clearBattleTrackerCombatants();
+              setRows([]);
+              setActiveRowIndex(0);
+            }}
+            disabled={rows.length === 0}
+            className="flex items-center gap-2 px-4 py-2 bg-red-950/40 border border-red-800/40 rounded-md hover:bg-red-950/60 hover:border-red-500/80 text-red-100 disabled:opacity-25 disabled:cursor-not-allowed transition-all text-sm cursor-pointer shadow-md"
+          >
+            <Trash2 size={16} />
+            <span>Clear</span>
           </button>
         </div>
       </div>

@@ -9,12 +9,43 @@ export interface CharacterBar {
   name: string;
   currentValue: string;
   maxValue: string;
+  color?: string;
 }
 
 export interface CharacterDiceMacro {
   id: string;
   name: string;
   formula: string;
+}
+
+export interface CharacterDisplayStat {
+  id: string;
+  referenceId: string;
+}
+
+export interface CharacterSpell {
+  id: string;
+  name: string;
+  description: string;
+  level: string;
+  resourceCost: string;
+  usageRemaining: string;
+  totalUsage: string;
+  magicSchool: string;
+  color: string;
+  macros: CharacterDiceMacro[];
+}
+
+export interface CharacterInventoryItem {
+  id: string;
+  name: string;
+  description: string;
+  quantity: number;
+  status: string;
+  rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical' | 'unique';
+  equipped?: boolean;
+  macros: CharacterDiceMacro[];
+  effects?: StatusEffect[];
 }
 
 export interface StatusEffect {
@@ -33,21 +64,25 @@ export interface CharacterStatus {
 export interface CharacterData {
   id: string;
   name: string;
-  level: number;
   race: string;
   className: string;
   visibility?: 'private' | 'public';
   userId?: string | null;
-  attributes?: Record<string, number>;
   bio?: string;
+  backstory?: string;
+  notes?: string;
+  portraitUrl?: string;
   createdAt?: number;
   tags?: string[];
+  displayStats?: CharacterDisplayStat[];
   mainAttributes?: CustomAttribute[];
   secondaryAttributes?: CustomAttribute[];
   otherAttributes?: CustomAttribute[];
   bars?: CharacterBar[];
   diceMacros?: CharacterDiceMacro[];
   statuses?: CharacterStatus[];
+  inventory?: CharacterInventoryItem[];
+  spells?: CharacterSpell[];
   modifierFormula?: string;
 }
 

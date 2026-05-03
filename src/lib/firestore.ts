@@ -1,4 +1,4 @@
-import { CharacterData } from '../types/character';
+import { CharacterData, CharacterInventoryItem } from '../types/character';
 
 // ─── Firebase Firestore Abstraction ──────────────────────────────────────────
 
@@ -117,6 +117,34 @@ export const saveCharacter = async (character: CharacterData): Promise<void> => 
     await fs.setDoc(fs.doc(fs.db, 'characters', character.id), normalized);
   } catch (err) {
     console.error('Failed to save to Firestore:', err);
+  }
+};
+
+export const saveCharacterInventory = async (
+  characterId: string,
+  inventory: CharacterInventoryItem[],
+  userId: string | null
+): Promise<void> => {
+  const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+  const existIdx = localData.findIndex(c => c.id === characterId);
+
+  if (existIdx >= 0) {
+    localData[existIdx] = {
+      ...localData[existIdx],
+      inventory,
+    };
+    localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(localData));
+  }
+
+  if (!userId || userId === 'guest') return;
+
+  const fs = await getFirestore();
+  if (!fs) return;
+
+  try {
+    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), { inventory }, { merge: true });
+  } catch (err) {
+    console.error('Failed to save inventory to Firestore:', err);
   }
 };
 

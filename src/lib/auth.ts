@@ -46,6 +46,8 @@ async function getFirebase() {
   const authMod = await import('firebase/auth');
   const getAuth = authMod.getAuth;
   const onAuthStateChanged = authMod.onAuthStateChanged;
+  const setPersistence = authMod.setPersistence;
+  const browserLocalPersistence = authMod.browserLocalPersistence;
   const signInWithEmailAndPassword = authMod.signInWithEmailAndPassword;
   const fbSignOut = authMod.signOut;
   const updateProfile = authMod.updateProfile;
@@ -62,6 +64,7 @@ async function getFirebase() {
 });
 
   const auth = getAuth(app);
+  await setPersistence(auth, browserLocalPersistence);
   onAuthStateChanged(auth, (user: any) => {
     if (user) {
       notify({ uid: user.uid, displayName: user.displayName || user.email });
