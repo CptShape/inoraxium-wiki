@@ -2,6 +2,7 @@ export interface CustomAttribute {
   id: string;
   name: string;
   value: string;
+  favorite?: boolean;
 }
 
 export interface CharacterBar {
@@ -10,6 +11,11 @@ export interface CharacterBar {
   currentValue: string;
   maxValue: string;
   color?: string;
+  favorite?: boolean;
+}
+
+export interface SkillAttribute extends CustomAttribute {
+  proficiencyMode?: 'none' | 'half' | 'proficient' | 'expertise';
 }
 
 export interface CharacterDiceMacro {
@@ -18,9 +24,35 @@ export interface CharacterDiceMacro {
   formula: string;
 }
 
+export interface CharacterAction {
+  id: string;
+  name: string;
+  description: string;
+  cost: string;
+  usageRemaining: string;
+  macros?: CharacterDiceMacro[];
+}
+
 export interface CharacterDisplayStat {
   id: string;
   referenceId: string;
+}
+
+export interface CharacterAttributeSectionModes {
+  main?: 'all' | 'favorites' | 'hidden';
+  secondary?: 'all' | 'favorites' | 'hidden';
+  skills?: 'all' | 'favorites' | 'hidden';
+  other?: 'all' | 'favorites' | 'hidden';
+  bars?: 'all' | 'favorites' | 'hidden';
+}
+
+export interface CharacterAttributeSectionColumns {
+  display?: number;
+  main?: number;
+  secondary?: number;
+  skills?: number;
+  other?: number;
+  bars?: number;
 }
 
 export interface CharacterSpell {
@@ -34,6 +66,16 @@ export interface CharacterSpell {
   magicSchool: string;
   color: string;
   macros: CharacterDiceMacro[];
+  actions?: CharacterAction[];
+  hidden?: boolean;
+}
+
+export interface CharacterGeneralItem {
+  id: string;
+  name: string;
+  description: string;
+  quantity: number;
+  rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical' | 'unique';
 }
 
 export interface CharacterInventoryItem {
@@ -46,11 +88,15 @@ export interface CharacterInventoryItem {
   equipped?: boolean;
   macros: CharacterDiceMacro[];
   effects?: StatusEffect[];
+  actions?: CharacterAction[];
+  hidden?: boolean;
 }
 
 export interface StatusEffect {
+  id?: string;
   targetId: string;
   value: string;
+  active?: boolean;
 }
 
 export interface CharacterStatus {
@@ -59,6 +105,8 @@ export interface CharacterStatus {
   duration: string;
   description: string;
   effects: StatusEffect[];
+  color?: string;
+  hidden?: boolean;
 }
 
 export interface CharacterData {
@@ -66,6 +114,11 @@ export interface CharacterData {
   name: string;
   race: string;
   className: string;
+  age?: string;
+  bodyAge?: string;
+  mentalAge?: string;
+  spiritualAge?: string;
+  alignment?: string;
   visibility?: 'private' | 'public';
   userId?: string | null;
   bio?: string;
@@ -75,12 +128,16 @@ export interface CharacterData {
   createdAt?: number;
   tags?: string[];
   displayStats?: CharacterDisplayStat[];
+  attributeSectionModes?: CharacterAttributeSectionModes;
+  attributeSectionColumns?: CharacterAttributeSectionColumns;
   mainAttributes?: CustomAttribute[];
   secondaryAttributes?: CustomAttribute[];
+  skills?: SkillAttribute[];
   otherAttributes?: CustomAttribute[];
   bars?: CharacterBar[];
   diceMacros?: CharacterDiceMacro[];
   statuses?: CharacterStatus[];
+  generalItems?: CharacterGeneralItem[];
   inventory?: CharacterInventoryItem[];
   spells?: CharacterSpell[];
   modifierFormula?: string;
