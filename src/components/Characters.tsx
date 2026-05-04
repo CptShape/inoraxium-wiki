@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2 } from 'lucide-react';
-import { CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
 
 function evalCharFormula(formula: string, context: Record<string, number>): number {
   if (!formula) return 0;
@@ -59,9 +59,11 @@ interface DiceRoll {
 interface CharacterAttributePreset {
   mainAttributes: CustomAttribute[];
   secondaryAttributes: CustomAttribute[];
+  skills: SkillAttribute[];
   otherAttributes: CustomAttribute[];
   bars: CharacterBar[];
   modifierFormula: string;
+  attributeSectionColumns: Required<CharacterAttributeSectionColumns>;
 }
 
 function uid(): string {
@@ -76,6 +78,35 @@ const DEFAULT_CHARACTER_DICE_STATE: CharacterDiceState = {
   webhookUrl: '',
   autoSend: false,
 };
+
+const DEFAULT_ATTRIBUTE_SECTION_MODES: Required<CharacterAttributeSectionModes> = {
+  main: 'all',
+  secondary: 'all',
+  skills: 'all',
+  other: 'all',
+  bars: 'all',
+};
+
+const DEFAULT_ATTRIBUTE_SECTION_COLUMNS: Required<CharacterAttributeSectionColumns> = {
+  display: 3,
+  main: 2,
+  secondary: 2,
+  skills: 2,
+  other: 2,
+  bars: 2,
+};
+
+const ALIGNMENT_OPTIONS = [
+  'Lawful Good',
+  'Neutral Good',
+  'Chaotic Good',
+  'Lawful Neutral',
+  'True Neutral',
+  'Chaotic Neutral',
+  'Lawful Evil',
+  'Neutral Evil',
+  'Chaotic Evil',
+] as const;
 
 const INVENTORY_RARITIES = ['common', 'uncommon', 'rare', 'epic', 'legendary', 'mythical', 'unique'] as const;
 
@@ -326,6 +357,11 @@ export const Characters: React.FC = () => {
   const [editName, setEditName] = useState('');
   const [editRace, setEditRace] = useState('');
   const [editClass, setEditClass] = useState('');
+  const [editAge, setEditAge] = useState('');
+  const [editBodyAge, setEditBodyAge] = useState('');
+  const [editMentalAge, setEditMentalAge] = useState('');
+  const [editSpiritualAge, setEditSpiritualAge] = useState('');
+  const [editAlignment, setEditAlignment] = useState('');
   const [editVisibility, setEditVisibility] = useState<'private' | 'public'>('private');
   const [backstory, setBackstory] = useState('');
   const [notes, setNotes] = useState('');
@@ -333,18 +369,27 @@ export const Characters: React.FC = () => {
   const [portraitImportUrl, setPortraitImportUrl] = useState('');
   const [portraitLoadError, setPortraitLoadError] = useState(false);
   const [displayStats, setDisplayStats] = useState<CharacterDisplayStat[]>([]);
+  const [attributeSectionModes, setAttributeSectionModes] = useState<Required<CharacterAttributeSectionModes>>(DEFAULT_ATTRIBUTE_SECTION_MODES);
+  const [attributeSectionColumns, setAttributeSectionColumns] = useState<Required<CharacterAttributeSectionColumns>>(DEFAULT_ATTRIBUTE_SECTION_COLUMNS);
   const [charTags, setCharTags] = useState<string[]>([]);
   const [charTagInput, setCharTagInput] = useState('');
   
   const [mainAttrs, setMainAttrs] = useState<CustomAttribute[]>([]);
   const [secondaryAttrs, setSecondaryAttrs] = useState<CustomAttribute[]>([]);
+  const [skills, setSkills] = useState<SkillAttribute[]>([]);
   const [otherAttrs, setOtherAttrs] = useState<CustomAttribute[]>([]);
   const [bars, setBars] = useState<CharacterBar[]>([]);
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
+  const [expandedStatusDescriptions, setExpandedStatusDescriptions] = useState<string[]>([]);
+  const [charGeneralItems, setCharGeneralItems] = useState<CharacterGeneralItem[]>([]);
+  const [expandedGeneralItemDescriptions, setExpandedGeneralItemDescriptions] = useState<string[]>([]);
   const [charInventory, setCharInventory] = useState<CharacterInventoryItem[]>([]);
+  const [collapsedInventoryItems, setCollapsedInventoryItems] = useState<string[]>([]);
   const [expandedInventoryDescriptions, setExpandedInventoryDescriptions] = useState<string[]>([]);
+  const [expandedInventoryActionDescriptions, setExpandedInventoryActionDescriptions] = useState<string[]>([]);
   const [charSpells, setCharSpells] = useState<CharacterSpell[]>([]);
   const [expandedSpellDescriptions, setExpandedSpellDescriptions] = useState<string[]>([]);
+  const [expandedSpellActionDescriptions, setExpandedSpellActionDescriptions] = useState<string[]>([]);
   const [expandedBackstory, setExpandedBackstory] = useState(false);
   const [expandedNotes, setExpandedNotes] = useState(false);
   const [showPortraitPicker, setShowPortraitPicker] = useState(false);
@@ -364,8 +409,12 @@ export const Characters: React.FC = () => {
   const [quickAttrRefs, setQuickAttrRefs] = useState<string[]>([]);
   const [hasLoadedMainDiceState, setHasLoadedMainDiceState] = useState(false);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const statusDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const generalItemDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const inventoryDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const inventoryActionDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const spellDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
+  const spellActionDescriptionRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   const backstoryRef = useRef<HTMLTextAreaElement | null>(null);
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const attributeImportInputRef = useRef<HTMLInputElement | null>(null);
@@ -404,6 +453,11 @@ export const Characters: React.FC = () => {
       setEditName(selectedCharacter.name);
       setEditRace(selectedCharacter.race);
       setEditClass(selectedCharacter.className);
+      setEditAge(selectedCharacter.age || '');
+      setEditBodyAge(selectedCharacter.bodyAge || '');
+      setEditMentalAge(selectedCharacter.mentalAge || '');
+      setEditSpiritualAge(selectedCharacter.spiritualAge || '');
+      setEditAlignment(selectedCharacter.alignment || '');
       setEditVisibility(selectedCharacter.visibility ?? 'private');
       setBackstory(selectedCharacter.backstory ?? selectedCharacter.bio ?? '');
       setNotes(selectedCharacter.notes || '');
@@ -411,15 +465,20 @@ export const Characters: React.FC = () => {
       setPortraitImportUrl(selectedCharacter.portraitUrl || '');
       setPortraitLoadError(false);
       setDisplayStats(selectedCharacter.displayStats || []);
+      setAttributeSectionModes({ ...DEFAULT_ATTRIBUTE_SECTION_MODES, ...(selectedCharacter.attributeSectionModes || {}) });
+      setAttributeSectionColumns({ ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS, ...(selectedCharacter.attributeSectionColumns || {}) });
       setCharTags(selectedCharacter.tags || []);
       setMainAttrs(selectedCharacter.mainAttributes || []);
       setSecondaryAttrs(selectedCharacter.secondaryAttributes || []);
+      setSkills(selectedCharacter.skills || []);
       setOtherAttrs(selectedCharacter.otherAttributes || []);
       setBars(selectedCharacter.bars || []);
       setSheetDiceMacros(selectedCharacter.diceMacros || DEFAULT_CHARACTER_DICE_STATE.macros);
       setCharStatuses(selectedCharacter.statuses || []);
+      setCharGeneralItems(selectedCharacter.generalItems || []);
       setCharInventory(selectedCharacter.inventory || []);
       setCharSpells(selectedCharacter.spells || []);
+      setCollapsedInventoryItems((selectedCharacter.inventory || []).filter(item => item.hidden).map(item => item.id));
       setModFormula(selectedCharacter.modifierFormula || 'Math.floor((@value - 10) / 2)');
     }
   }, [selectedCharacter]);
@@ -436,12 +495,42 @@ export const Characters: React.FC = () => {
     setQuickDescription('');
     setQuickAttrInput('');
     setQuickAttrRefs([]);
+    setExpandedStatusDescriptions([]);
+    setExpandedGeneralItemDescriptions([]);
     setExpandedInventoryDescriptions([]);
+    setExpandedInventoryActionDescriptions([]);
     setExpandedSpellDescriptions([]);
+    setExpandedSpellActionDescriptions([]);
     setExpandedBackstory(false);
     setExpandedNotes(false);
     setShowPortraitPicker(false);
   }, [selectedCharacter]);
+
+  useEffect(() => {
+    charStatuses.forEach((status) => {
+      const el = statusDescriptionRefs.current[status.id];
+      if (!el) return;
+      if (expandedStatusDescriptions.includes(status.id)) {
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+      } else {
+        el.style.height = '';
+      }
+    });
+  }, [charStatuses, expandedStatusDescriptions]);
+
+  useEffect(() => {
+    charGeneralItems.forEach((item) => {
+      const el = generalItemDescriptionRefs.current[item.id];
+      if (!el) return;
+      if (expandedGeneralItemDescriptions.includes(item.id)) {
+        el.style.height = 'auto';
+        el.style.height = `${el.scrollHeight}px`;
+      } else {
+        el.style.height = '';
+      }
+    });
+  }, [charGeneralItems, expandedGeneralItemDescriptions]);
 
   useEffect(() => {
     charInventory.forEach((item) => {
@@ -457,6 +546,21 @@ export const Characters: React.FC = () => {
   }, [charInventory, expandedInventoryDescriptions]);
 
   useEffect(() => {
+    charInventory.forEach((item) => {
+      (item.actions || []).forEach((action) => {
+        const el = inventoryActionDescriptionRefs.current[action.id];
+        if (!el) return;
+        if (expandedInventoryActionDescriptions.includes(action.id)) {
+          el.style.height = 'auto';
+          el.style.height = `${el.scrollHeight}px`;
+        } else {
+          el.style.height = '';
+        }
+      });
+    });
+  }, [charInventory, expandedInventoryActionDescriptions]);
+
+  useEffect(() => {
     charSpells.forEach((spell) => {
       const el = spellDescriptionRefs.current[spell.id];
       if (!el) return;
@@ -468,6 +572,21 @@ export const Characters: React.FC = () => {
       }
     });
   }, [charSpells, expandedSpellDescriptions]);
+
+  useEffect(() => {
+    charSpells.forEach((spell) => {
+      (spell.actions || []).forEach((action) => {
+        const el = spellActionDescriptionRefs.current[action.id];
+        if (!el) return;
+        if (expandedSpellActionDescriptions.includes(action.id)) {
+          el.style.height = 'auto';
+          el.style.height = `${el.scrollHeight}px`;
+        } else {
+          el.style.height = '';
+        }
+      });
+    });
+  }, [charSpells, expandedSpellActionDescriptions]);
 
   useEffect(() => {
     if (!backstoryRef.current) return;
@@ -516,8 +635,13 @@ export const Characters: React.FC = () => {
       const parsed = JSON.parse(raw) as Partial<CharacterAttributePreset>;
       setMainAttrs(Array.isArray(parsed.mainAttributes) ? parsed.mainAttributes : []);
       setSecondaryAttrs(Array.isArray(parsed.secondaryAttributes) ? parsed.secondaryAttributes : []);
+      setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
       setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
       setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
+      setAttributeSectionColumns({
+        ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
+        ...(parsed.attributeSectionColumns || {}),
+      });
       if (typeof parsed.modifierFormula === 'string' && parsed.modifierFormula.trim()) {
         setModFormula(parsed.modifierFormula);
       }
@@ -528,8 +652,12 @@ export const Characters: React.FC = () => {
 
   const getCharacterContext = () => {
     const context: Record<string, number> = {};
-    const allAttrs = [...(mainAttrs || []), ...(secondaryAttrs || []), ...(otherAttrs || [])];
+    const baseAttrs = [...(mainAttrs || []), ...(secondaryAttrs || []), ...(otherAttrs || [])];
+    const skillAttrs = skills || [];
+    const allAttrs = [...baseAttrs, ...skillAttrs];
     const mainAttrIds = (mainAttrs || []).map(a => a.id).filter(Boolean);
+    const baseAttrIds = baseAttrs.map(a => a.id).filter(Boolean);
+    const skillIds = skillAttrs.map(a => a.id).filter(Boolean);
     const attrIds = allAttrs.map(a => a.id).filter(Boolean);
     const modIds = mainAttrIds.map(id => `${id}_mod`);
 
@@ -542,7 +670,7 @@ export const Characters: React.FC = () => {
 
       (charStatuses || []).forEach(status => {
         (status.effects || []).forEach(effect => {
-          if (effect.targetId && targetIds.includes(effect.targetId)) {
+          if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
             const effVal = evalCharFormula(effect.value || '0', sourceContext);
             nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
           }
@@ -563,7 +691,7 @@ export const Characters: React.FC = () => {
         if (!item.equipped) return;
 
         (item.effects || []).forEach(effect => {
-          if (effect.targetId && targetIds.includes(effect.targetId)) {
+          if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
             const effVal = evalCharFormula(effect.value || '0', sourceContext);
             nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
           }
@@ -592,20 +720,20 @@ export const Characters: React.FC = () => {
       const previousContext = { ...context };
       const nextContext: Record<string, number> = {};
 
-      allAttrs.forEach(attr => {
+      baseAttrs.forEach(attr => {
         if (attr.id) {
           nextContext[attr.id] = evalCharFormula(attr.value || '0', previousContext);
         }
       });
 
       const attributesWithStatuses = applyStatusEffects(
-        attrIds,
+        baseAttrIds,
         nextContext,
         { ...previousContext, ...nextContext }
       );
 
       const attributesWithItemEffects = applyInventoryEffects(
-        attrIds,
+        baseAttrIds,
         attributesWithStatuses,
         { ...previousContext, ...attributesWithStatuses }
       );
@@ -631,25 +759,55 @@ export const Characters: React.FC = () => {
         { ...previousContext, ...withModStatuses }
       );
 
+      skillAttrs.forEach((skill) => {
+        if (!skill.id) return;
+        const baseValue = evalCharFormula(skill.value || '0', {
+          ...previousContext,
+          ...withModItemEffects,
+        });
+        const proficiencyValue = withModItemEffects.proficiency ?? 0;
+        const mode = skill.proficiencyMode || 'none';
+        const proficiencyBonus = mode === 'half'
+          ? Math.floor(proficiencyValue / 2)
+          : mode === 'proficient'
+            ? proficiencyValue
+            : mode === 'expertise'
+              ? proficiencyValue * 2
+              : 0;
+        withModItemEffects[skill.id] = baseValue + proficiencyBonus;
+      });
+
+      const skillValuesWithStatuses = applyStatusEffects(
+        skillIds,
+        withModItemEffects,
+        { ...previousContext, ...withModItemEffects }
+      );
+
+      const allValuesWithEffects = applyInventoryEffects(
+        skillIds,
+        skillValuesWithStatuses,
+        { ...previousContext, ...skillValuesWithStatuses }
+      );
+
       (bars || []).forEach(bar => {
         if (bar.id) {
-          withModItemEffects[`${bar.id}_max`] = evalCharFormula(bar.maxValue || '0', {
+          allValuesWithEffects[`${bar.id}_max`] = evalCharFormula(bar.maxValue || '0', {
             ...previousContext,
-            ...withModItemEffects,
+            ...allValuesWithEffects,
           });
-          withModItemEffects[`${bar.id}_current`] = evalCharFormula(bar.currentValue || '0', {
+          allValuesWithEffects[`${bar.id}_current`] = evalCharFormula(bar.currentValue || '0', {
             ...previousContext,
-            ...withModItemEffects,
+            ...allValuesWithEffects,
           });
         }
       });
 
-      const nextKeys = new Set([...Object.keys(context), ...Object.keys(withModItemEffects)]);
+      const nextKeys = new Set([...Object.keys(context), ...Object.keys(allValuesWithEffects)]);
       let hasChanged = false;
 
       nextKeys.forEach((key) => {
         const prevValue = previousContext[key] ?? 0;
-        const nextValue = withModItemEffects[key] ?? 0;
+        const nextValue = allValuesWithEffects[key] ?? 0;
         context[key] = nextValue;
         if (Math.abs(nextValue - prevValue) > 0.0001) {
           hasChanged = true;
@@ -666,7 +824,7 @@ export const Characters: React.FC = () => {
 
   const getCharacterReferenceIds = () => {
     const ids = new Set<string>();
-    [...mainAttrs, ...secondaryAttrs, ...otherAttrs].forEach((attr) => {
+    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
       if (attr.id) ids.add(attr.id);
     });
     mainAttrs.forEach((attr) => {
@@ -697,6 +855,8 @@ export const Characters: React.FC = () => {
         equipped: false,
         macros: [],
         effects: [],
+        actions: [],
+        hidden: false,
       },
     ]);
   };
@@ -707,6 +867,7 @@ export const Characters: React.FC = () => {
 
   const removeInventoryItem = (itemId: string) => {
     setCharInventory(prev => prev.filter(item => item.id !== itemId));
+    setCollapsedInventoryItems(prev => prev.filter(id => id !== itemId));
     setExpandedInventoryDescriptions(prev => prev.filter(id => id !== itemId));
   };
 
@@ -752,7 +913,7 @@ export const Characters: React.FC = () => {
   const addInventoryEffect = (itemId: string) => {
     updateInventoryItem(itemId, item => ({
       ...item,
-      effects: [...(item.effects || []), { targetId: '', value: '0' }],
+      effects: [...(item.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
     }));
   };
 
@@ -778,6 +939,121 @@ export const Characters: React.FC = () => {
     ));
   };
 
+  const toggleInventoryItemCollapsed = (itemId: string) => {
+    setCollapsedInventoryItems(prev => (
+      prev.includes(itemId)
+        ? prev.filter(id => id !== itemId)
+        : [...prev, itemId]
+    ));
+    updateInventoryItem(itemId, item => ({ ...item, hidden: !item.hidden }));
+  };
+
+  const toggleStatusDescription = (statusId: string) => {
+    setExpandedStatusDescriptions(prev => (
+      prev.includes(statusId) ? prev.filter(id => id !== statusId) : [...prev, statusId]
+    ));
+  };
+
+  const addGeneralItem = () => {
+    setCharGeneralItems(prev => [
+      ...prev,
+      { id: `gen_${uid()}`, name: 'New General Item', description: '', quantity: 1, rarity: 'common' },
+    ]);
+  };
+
+  const updateGeneralItem = (itemId: string, updater: (item: CharacterGeneralItem) => CharacterGeneralItem) => {
+    setCharGeneralItems(prev => prev.map(item => item.id === itemId ? updater(item) : item));
+  };
+
+  const removeGeneralItem = (itemId: string) => {
+    setCharGeneralItems(prev => prev.filter(item => item.id !== itemId));
+    setExpandedGeneralItemDescriptions(prev => prev.filter(id => id !== itemId));
+  };
+
+  const toggleGeneralItemDescription = (itemId: string) => {
+    setExpandedGeneralItemDescriptions(prev => (
+      prev.includes(itemId) ? prev.filter(id => id !== itemId) : [...prev, itemId]
+    ));
+  };
+
+  const shareGeneralItem = async (item: CharacterGeneralItem) => {
+    const webhookUrl = mainDiceState.webhookUrl || '';
+    if (!webhookUrl.trim()) {
+      setDiceError('Discord: Add a webhook URL before sharing general items.');
+      return;
+    }
+    const message = [
+      `**${item.name || 'Unnamed General Item'}**`,
+      `Rarity: ${INVENTORY_RARITY_STYLES[item.rarity || 'common'].label}`,
+      `Quantity: ${item.quantity}`,
+      item.description ? `Description: ${item.description}` : '',
+    ].filter(Boolean).join('\n');
+    const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
+    if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const toggleInventoryActionDescription = (actionId: string) => {
+    setExpandedInventoryActionDescriptions(prev => (
+      prev.includes(actionId) ? prev.filter(id => id !== actionId) : [...prev, actionId]
+    ));
+  };
+
+  const moveListItem = <T extends { id: string }>(
+    items: T[],
+    itemId: string,
+    direction: 'up' | 'down'
+  ) => {
+    const index = items.findIndex(item => item.id === itemId);
+    if (index < 0) return items;
+    const targetIndex = direction === 'up' ? index - 1 : index + 1;
+    if (targetIndex < 0 || targetIndex >= items.length) return items;
+    const next = [...items];
+    const [item] = next.splice(index, 1);
+    next.splice(targetIndex, 0, item);
+    return next;
+  };
+
+  const cycleSkillProficiency = (mode?: SkillAttribute['proficiencyMode']): SkillAttribute['proficiencyMode'] => {
+    if (!mode || mode === 'none') return 'half';
+    if (mode === 'half') return 'proficient';
+    if (mode === 'proficient') return 'expertise';
+    return 'none';
+  };
+
+  const syncDisplayStatFavorite = (referenceId: string, nextFavorite: boolean) => {
+    setDisplayStats(prev => {
+      const existing = prev.find(stat => stat.referenceId === referenceId);
+      if (nextFavorite) {
+        return existing ? prev : [...prev, { id: `display_${uid()}`, referenceId }];
+      }
+      return prev.filter(stat => stat.referenceId !== referenceId);
+    });
+  };
+
+  const moveDisplayStatReference = (referenceId: string, direction: 'up' | 'down', visibleReferenceIds: string[]) => {
+    setDisplayStats(prev => {
+      const existingByRef = new Map(prev.map(stat => [stat.referenceId, stat]));
+      const visibleStats = visibleReferenceIds
+        .map(ref => existingByRef.get(ref) || { id: `display_${uid()}`, referenceId: ref })
+        .filter(Boolean) as CharacterDisplayStat[];
+      const hiddenStats = prev.filter(stat => !visibleReferenceIds.includes(stat.referenceId));
+
+      const index = visibleStats.findIndex(stat => stat.referenceId === referenceId);
+      if (index < 0) return [...visibleStats, ...hiddenStats];
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= visibleStats.length) return [...visibleStats, ...hiddenStats];
+      const next = [...visibleStats];
+      const [item] = next.splice(index, 1);
+      next.splice(targetIndex, 0, item);
+      return [...next, ...hiddenStats];
+    });
+  };
+
+  const updateAttributeSectionColumns = (section: keyof CharacterAttributeSectionColumns, value: number) => {
+    const clamped = Math.min(6, Math.max(1, value || 1));
+    setAttributeSectionColumns(prev => ({ ...prev, [section]: clamped }));
+  };
+
   const addDisplayStat = () => {
     setDisplayStats(prev => [...prev, { id: `display_${uid()}`, referenceId: '' }]);
   };
@@ -794,9 +1070,11 @@ export const Characters: React.FC = () => {
     const payload: CharacterAttributePreset = {
       mainAttributes: mainAttrs,
       secondaryAttributes: secondaryAttrs,
+      skills,
       otherAttributes: otherAttrs,
       bars,
       modifierFormula: modFormula,
+      attributeSectionColumns,
     };
     const serialized = JSON.stringify(payload, null, 2);
     const blob = new Blob([serialized], { type: 'application/json' });
@@ -828,6 +1106,9 @@ export const Characters: React.FC = () => {
 
     const secondaryAttr = secondaryAttrs.find(attr => attr.id === referenceId);
     if (secondaryAttr) return secondaryAttr.name || referenceId;
+
+    const skillAttr = skills.find(attr => attr.id === referenceId);
+    if (skillAttr) return skillAttr.name || referenceId;
 
     const otherAttr = otherAttrs.find(attr => attr.id === referenceId);
     if (otherAttr) return otherAttr.name || referenceId;
@@ -868,6 +1149,96 @@ export const Characters: React.FC = () => {
     }
   };
 
+  const addInventoryAction = (itemId: string) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: [...(item.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [] }],
+    }));
+  };
+
+  const updateInventoryAction = (itemId: string, actionId: string, updater: (action: CharacterAction) => CharacterAction) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId ? updater(action) : action),
+    }));
+  };
+
+  const removeInventoryAction = (itemId: string, actionId: string) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).filter(action => action.id !== actionId),
+    }));
+    setExpandedInventoryActionDescriptions(prev => prev.filter(id => id !== actionId));
+  };
+
+  const addInventoryActionMacro = (itemId: string, actionId: string) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: [...(action.macros || []), { id: `macro_${uid()}`, name: 'New Action Macro', formula: '1d20' }] }
+        : action),
+    }));
+  };
+
+  const updateInventoryActionMacro = (itemId: string, actionId: string, macroId: string, updater: (macro: CharacterDiceMacro) => CharacterDiceMacro) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).map(macro => macro.id === macroId ? updater(macro) : macro) }
+        : action),
+    }));
+  };
+
+  const removeInventoryActionMacro = (itemId: string, actionId: string, macroId: string) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).filter(macro => macro.id !== macroId) }
+        : action),
+    }));
+  };
+
+  const shareInventoryAction = async (item: CharacterInventoryItem, action: CharacterAction) => {
+    const webhookUrl = mainDiceState.webhookUrl || '';
+    if (!webhookUrl.trim()) {
+      setDiceError('Discord: Add a webhook URL before sharing actions.');
+      return;
+    }
+    const message = [
+      `**${item.name || 'Unnamed Item'} Action**`,
+      action.name ? `Action: ${action.name}` : '',
+      action.cost ? `Cost: ${action.cost}` : '',
+      action.usageRemaining ? `Remaining Usage: ${action.usageRemaining}` : '',
+      action.description ? `Description: ${action.description}` : '',
+    ].filter(Boolean).join('\n');
+    const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
+    if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const rollInventoryActionMacro = async (item: CharacterInventoryItem, action: CharacterAction, macro: CharacterDiceMacro) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro(
+        { ...macro, name: `${item.name}: ${action.name || 'Action'}: ${macro.name}` },
+        context,
+        ids
+      );
+      result.description = action.description || item.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+
+      const activeDiceState = getDiceStateForMode('sheet');
+      if (activeDiceState.autoSend) {
+        const discordErr = await sendToDiscord(activeDiceState.webhookUrl || '', selectedCharacter?.name || editName, result);
+        if (discordErr) setDiceError(`Discord: ${discordErr}`);
+      }
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
+    }
+  };
+
   const addSpell = () => {
     setCharSpells(prev => [
       ...prev,
@@ -882,6 +1253,7 @@ export const Characters: React.FC = () => {
         magicSchool: '',
         color: '#7c3aed',
         macros: [],
+        hidden: false,
       },
     ]);
   };
@@ -939,6 +1311,61 @@ export const Characters: React.FC = () => {
     ));
   };
 
+  const toggleSpellActionDescription = (actionId: string) => {
+    setExpandedSpellActionDescriptions(prev => (
+      prev.includes(actionId) ? prev.filter(id => id !== actionId) : [...prev, actionId]
+    ));
+  };
+
+  const addSpellAction = (spellId: string) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: [...(spell.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [] }],
+    }));
+  };
+
+  const updateSpellAction = (spellId: string, actionId: string, updater: (action: CharacterAction) => CharacterAction) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: (spell.actions || []).map(action => action.id === actionId ? updater(action) : action),
+    }));
+  };
+
+  const removeSpellAction = (spellId: string, actionId: string) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: (spell.actions || []).filter(action => action.id !== actionId),
+    }));
+    setExpandedSpellActionDescriptions(prev => prev.filter(id => id !== actionId));
+  };
+
+  const addSpellActionMacro = (spellId: string, actionId: string) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: (spell.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: [...(action.macros || []), { id: `macro_${uid()}`, name: 'New Action Macro', formula: '1d20' }] }
+        : action),
+    }));
+  };
+
+  const updateSpellActionMacro = (spellId: string, actionId: string, macroId: string, updater: (macro: CharacterDiceMacro) => CharacterDiceMacro) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: (spell.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).map(macro => macro.id === macroId ? updater(macro) : macro) }
+        : action),
+    }));
+  };
+
+  const removeSpellActionMacro = (spellId: string, actionId: string, macroId: string) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      actions: (spell.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).filter(macro => macro.id !== macroId) }
+        : action),
+    }));
+  };
+
   const shareSpell = async (spell: CharacterSpell) => {
     const webhookUrl = mainDiceState.webhookUrl || '';
     if (!webhookUrl.trim()) {
@@ -962,6 +1389,47 @@ export const Characters: React.FC = () => {
       setDiceError(`Discord: ${discordErr}`);
     } else {
       setDiceError(null);
+    }
+  };
+
+  const shareSpellAction = async (spell: CharacterSpell, action: CharacterAction) => {
+    const webhookUrl = mainDiceState.webhookUrl || '';
+    if (!webhookUrl.trim()) {
+      setDiceError('Discord: Add a webhook URL before sharing actions.');
+      return;
+    }
+    const message = [
+      `**${spell.name || 'Unnamed Spell'} Action**`,
+      action.name ? `Action: ${action.name}` : '',
+      action.cost ? `Cost: ${action.cost}` : '',
+      action.usageRemaining ? `Remaining Usage: ${action.usageRemaining}` : '',
+      action.description ? `Description: ${action.description}` : '',
+    ].filter(Boolean).join('\n');
+    const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
+    if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const rollSpellActionMacro = async (spell: CharacterSpell, action: CharacterAction, macro: CharacterDiceMacro) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro(
+        { ...macro, name: `${spell.name}: ${action.name || 'Action'}: ${macro.name}` },
+        context,
+        ids
+      );
+      result.description = action.description || spell.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+
+      const activeDiceState = getDiceStateForMode('sheet');
+      if (activeDiceState.autoSend) {
+        const discordErr = await sendToDiscord(activeDiceState.webhookUrl || '', selectedCharacter?.name || editName, result);
+        if (discordErr) setDiceError(`Discord: ${discordErr}`);
+      }
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
     }
   };
 
@@ -1102,6 +1570,30 @@ export const Characters: React.FC = () => {
         ids
       );
       result.description = spell.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+
+      const activeDiceState = getDiceStateForMode('sheet');
+      if (activeDiceState.autoSend) {
+        const discordErr = await sendToDiscord(activeDiceState.webhookUrl || '', selectedCharacter?.name || editName, result);
+        if (discordErr) setDiceError(`Discord: ${discordErr}`);
+      }
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
+    }
+  };
+
+  const rollAttributeCheck = async (name: string, formula: string, description?: string) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro(
+        { id: `attr_roll_${uid()}`, name, formula },
+        context,
+        ids
+      );
+      result.description = description || undefined;
       setRollResults(prev => [result, ...prev]);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 
@@ -1548,6 +2040,11 @@ export const Characters: React.FC = () => {
       name: 'New Hero',
       race: 'Human',
       className: 'Vanguard',
+      age: '',
+      bodyAge: '',
+      mentalAge: '',
+      spiritualAge: '',
+      alignment: '',
       visibility: 'private',
       userId: userId || 'guest',
       bio: '',
@@ -1555,6 +2052,10 @@ export const Characters: React.FC = () => {
       notes: '',
       portraitUrl: '',
       displayStats: [],
+      attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
+      attributeSectionColumns: DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
+      skills: [],
+      generalItems: [],
       createdAt: Date.now(),
     };
     await saveCharacter(newChar);
@@ -1567,9 +2068,9 @@ export const Characters: React.FC = () => {
 
     if (!isCharacterOwner) {
       if (!canEditInventory) return;
-      await saveCharacterInventory(selectedCharacter.id, charInventory, userId);
-      const updated = { ...selectedCharacter, inventory: charInventory };
-      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, inventory: charInventory } : c)));
+      await saveCharacterInventory(selectedCharacter.id, charInventory, charGeneralItems, userId);
+      const updated = { ...selectedCharacter, generalItems: charGeneralItems, inventory: charInventory };
+      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: charGeneralItems, inventory: charInventory } : c)));
       setSelectedCharacter(updated);
       return;
     }
@@ -1579,6 +2080,11 @@ export const Characters: React.FC = () => {
       name: editName.trim() || selectedCharacter.name,
       race: editRace.trim() || selectedCharacter.race,
       className: editClass.trim() || selectedCharacter.className,
+      age: editAge,
+      bodyAge: editBodyAge,
+      mentalAge: editMentalAge,
+      spiritualAge: editSpiritualAge,
+      alignment: editAlignment,
       visibility: editVisibility,
       bio: backstory,
       backstory,
@@ -1586,12 +2092,16 @@ export const Characters: React.FC = () => {
       portraitUrl,
       tags: charTags,
       displayStats,
+      attributeSectionModes,
+      attributeSectionColumns,
       mainAttributes: mainAttrs,
       secondaryAttributes: secondaryAttrs,
+      skills,
       otherAttributes: otherAttrs,
       bars,
       diceMacros: sheetDiceMacros,
       statuses: charStatuses,
+      generalItems: charGeneralItems,
       inventory: charInventory,
       spells: charSpells,
       modifierFormula: modFormula,
@@ -1627,28 +2137,121 @@ export const Characters: React.FC = () => {
 
   if (isViewingSheet && selectedCharacter) {
     const finalContext = getCharacterContext();
+    const favoriteDisplayMap = new Map<string, { id: string; name: string; value: string }>();
+    mainAttrs.filter(attr => attr.favorite).forEach((attr) => {
+      const baseValue = finalContext[attr.id] ?? 0;
+      const modValue = finalContext[`${attr.id}_mod`] ?? 0;
+      favoriteDisplayMap.set(attr.id, {
+        id: attr.id,
+        name: attr.name || getReferenceDisplayName(attr.id),
+        value: `${baseValue} (${modValue >= 0 ? `+${modValue}` : modValue})`,
+      });
+    });
+    secondaryAttrs.filter(attr => attr.favorite).forEach((attr) => {
+      favoriteDisplayMap.set(attr.id, {
+        id: attr.id,
+        name: attr.name || getReferenceDisplayName(attr.id),
+        value: `${finalContext[attr.id] ?? 0}`,
+      });
+    });
+    skills.filter(attr => attr.favorite).forEach((attr) => {
+      favoriteDisplayMap.set(attr.id, {
+        id: attr.id,
+        name: attr.name || getReferenceDisplayName(attr.id),
+        value: `${finalContext[attr.id] ?? 0}`,
+      });
+    });
+    otherAttrs.filter(attr => attr.favorite).forEach((attr) => {
+      favoriteDisplayMap.set(attr.id, {
+        id: attr.id,
+        name: attr.name || getReferenceDisplayName(attr.id),
+        value: `${finalContext[attr.id] ?? 0}`,
+      });
+    });
+    bars.filter(bar => bar.favorite).forEach((bar) => {
+      favoriteDisplayMap.set(bar.id, {
+        id: bar.id,
+        name: bar.name || getReferenceDisplayName(bar.id),
+        value: `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_max`] ?? 0}`,
+      });
+    });
+    const orderedFavoriteIds = [
+      ...displayStats.map(stat => stat.referenceId).filter(referenceId => favoriteDisplayMap.has(referenceId)),
+      ...Array.from(favoriteDisplayMap.keys()).filter(referenceId => !displayStats.some(stat => stat.referenceId === referenceId)),
+    ];
+    const favoriteDisplayEntries = orderedFavoriteIds.map((referenceId) => favoriteDisplayMap.get(referenceId)).filter(Boolean) as Array<{ id: string; name: string; value: string }>;
+
+    const PROFICIENCY_STYLES: Record<NonNullable<SkillAttribute['proficiencyMode']>, { label: string; icon: React.ReactNode; className: string }> = {
+      none: { label: 'No Proficiency', icon: <X size={14} />, className: 'bg-stone-900/60 border-stone-700 text-stone-400' },
+      half: { label: 'Half Proficiency', icon: <Shield size={14} />, className: 'bg-sky-900/30 border-sky-500/40 text-sky-200 shadow-[0_0_14px_rgba(56,189,248,0.28)]' },
+      proficient: { label: 'Proficient', icon: <Check size={14} />, className: 'bg-emerald-900/30 border-emerald-500/40 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.28)]' },
+      expertise: { label: 'Expertise', icon: <Star size={14} />, className: 'bg-amber-900/40 border-amber-400/50 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.35)]' },
+    };
+
     const renderAttributeSection = (
       title: string,
-      items: CustomAttribute[],
-      setItems: React.Dispatch<React.SetStateAction<CustomAttribute[]>>,
-      idPrefix: string
+      items: (CustomAttribute | SkillAttribute)[],
+      setItems: React.Dispatch<React.SetStateAction<any[]>>,
+      idPrefix: string,
+      options?: { skillMode?: boolean; sectionKey: keyof CharacterAttributeSectionModes }
     ) => (
       <div className="mb-8">
         <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
-          <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-            {title}
-          </h3>
-          <button
-            onClick={() => setItems([...items, { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Attribute', value: '10' }])}
-            className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
-          >
-            + Add
-          </button>
+          <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>{title}</h3>
+          <div className="flex items-center gap-2">
+            <div className="flex items-center gap-2">
+              <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
+              <input
+                type="number"
+                min={1}
+                max={6}
+                value={attributeSectionColumns[options?.sectionKey || 'main']}
+                onChange={(e) => updateAttributeSectionColumns(options?.sectionKey || 'main', parseInt(e.target.value, 10) || 1)}
+                className="w-14 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none"
+              />
+            </div>
+            <div className="flex items-center rounded border border-amber-800/30 overflow-hidden">
+              {[
+                { key: 'all', label: 'Show All' },
+                { key: 'favorites', label: 'Show only Favorites' },
+                { key: 'hidden', label: 'Hide' },
+              ].map((mode) => (
+                <button
+                  key={mode.key}
+                  onClick={() => setAttributeSectionModes(prev => ({ ...prev, [options?.sectionKey || 'main']: mode.key as 'all' | 'favorites' | 'hidden' }))}
+                  className={`px-2 py-1 text-[11px] cursor-pointer ${attributeSectionModes[options?.sectionKey || 'main'] === mode.key ? 'bg-amber-900/40 text-amber-200' : 'bg-stone-900/40 text-stone-400 hover:text-amber-200'}`}
+                >
+                  {mode.label}
+                </button>
+              ))}
+            </div>
+            <button
+              onClick={() => setItems([
+                ...items,
+                options?.skillMode
+                  ? { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Skill', value: '0', proficiencyMode: 'none' }
+                  : { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Attribute', value: '10' },
+              ])}
+              className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+            >
+              + Add
+            </button>
+          </div>
         </div>
 
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-          {items.map((attr, idx) => {
+        {attributeSectionModes[options?.sectionKey || 'main'] !== 'hidden' && (
+        <div
+          className="grid gap-3 mb-4"
+          style={{ gridTemplateColumns: `repeat(${attributeSectionColumns[options?.sectionKey || 'main']}, minmax(0, 1fr))` }}
+        >
+          {items
+            .filter(attr => attributeSectionModes[options?.sectionKey || 'main'] === 'all' || attr.favorite)
+            .map((attr, idx, filteredItems) => {
+            const actualIndex = items.findIndex(item => item.id === attr.id);
             const evalVal = finalContext[attr.id] || 0;
+            const skillMode = options?.skillMode;
+            const proficiencyMode = skillMode ? ((attr as SkillAttribute).proficiencyMode || 'none') : 'none';
+            const proficiencyStyle = PROFICIENCY_STYLES[proficiencyMode as NonNullable<SkillAttribute['proficiencyMode']>];
 
             return (
               <div key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-3 flex flex-col gap-2 shadow-lg">
@@ -1658,7 +2261,7 @@ export const Characters: React.FC = () => {
                     value={attr.name}
                     onChange={(e) => {
                       const next = [...items];
-                      next[idx].name = e.target.value;
+                      next[actualIndex].name = e.target.value;
                       setItems(next);
                     }}
                     className="bg-transparent text-sm font-bold text-amber-300 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-24"
@@ -1668,14 +2271,44 @@ export const Characters: React.FC = () => {
                     value={attr.id}
                     onChange={(e) => {
                       const next = [...items];
-                      next[idx].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
+                      next[actualIndex].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
                       setItems(next);
                     }}
                     className="bg-transparent text-xs font-mono text-emerald-400 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-16"
                     placeholder="id"
                   />
                   <button
-                    onClick={() => setItems(items.filter((_, i) => i !== idx))}
+                    onClick={() => {
+                      const nextFavorite = !attr.favorite;
+                      const next = [...items];
+                      next[actualIndex] = { ...next[actualIndex], favorite: nextFavorite };
+                      setItems(next);
+                      syncDisplayStatFavorite(attr.id, nextFavorite);
+                    }}
+                    className={`p-1 rounded border cursor-pointer ${attr.favorite ? 'bg-amber-400/20 border-amber-300/50 text-amber-100 shadow-[0_0_12px_rgba(251,191,36,0.28)]' : 'border-stone-700 text-stone-500 hover:text-amber-300'}`}
+                    title={attr.favorite ? 'Remove from display favorites' : 'Add to display favorites'}
+                  >
+                    <Star size={14} fill={attr.favorite ? 'currentColor' : 'none'} />
+                  </button>
+                  <button
+                    onClick={() => setItems(moveListItem(items as any[], attr.id, 'up'))}
+                    disabled={idx === 0}
+                    className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowUp size={14} />
+                  </button>
+                  <button
+                    onClick={() => setItems(moveListItem(items as any[], attr.id, 'down'))}
+                    disabled={idx === filteredItems.length - 1}
+                    className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  >
+                    <ArrowDown size={14} />
+                  </button>
+                  <button
+                    onClick={() => {
+                      setItems(items.filter(item => item.id !== attr.id));
+                      syncDisplayStatFavorite(attr.id, false);
+                    }}
                     className="text-stone-600 hover:text-red-400 cursor-pointer"
                   >
                     <Trash2 size={14} />
@@ -1687,22 +2320,45 @@ export const Characters: React.FC = () => {
                     value={attr.value}
                     onChange={(e) => {
                       const next = [...items];
-                      next[idx].value = e.target.value;
+                      next[actualIndex].value = e.target.value;
                       setItems(next);
                     }}
                     className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 w-24 focus:outline-none mr-auto"
                   />
+                  {skillMode && (
+                    <button
+                      onClick={() => rollAttributeCheck(`${attr.name || 'Skill'} Check`, `1d20 + @${attr.id}`, `${attr.name || 'Skill'} skill check`)}
+                      className="mr-2 flex items-center gap-1 px-2.5 py-1.5 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer"
+                    >
+                      <Dices size={12} /> Roll
+                    </button>
+                  )}
+                  {skillMode && (
+                    <button
+                      onClick={() => {
+                        const next = [...items] as SkillAttribute[];
+                        next[actualIndex] = { ...next[actualIndex], proficiencyMode: cycleSkillProficiency(next[actualIndex].proficiencyMode) };
+                        setItems(next);
+                      }}
+                      className={`mr-3 inline-flex items-center gap-1 px-2.5 py-1.5 rounded border text-xs font-bold cursor-pointer transition-all ${proficiencyStyle.className}`}
+                      title={proficiencyStyle.label}
+                    >
+                      {proficiencyStyle.icon}
+                      <span className="hidden sm:inline">{proficiencyStyle.label}</span>
+                    </button>
+                  )}
                   <span className="text-lg font-bold font-mono text-amber-200">{evalVal}</span>
                 </div>
               </div>
             );
           })}
         </div>
+        )}
       </div>
     );
 
     return (
-      <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in" style={{ fontFamily: "'IM Fell English', serif" }}>
+      <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px]" style={{ fontFamily: "'IM Fell English', serif" }}>
         <input
           ref={attributeImportInputRef}
           type="file"
@@ -1742,7 +2398,7 @@ export const Characters: React.FC = () => {
             <div className="relative z-10">
               <div
                 onClick={() => isCharacterOwner && setShowPortraitPicker(prev => !prev)}
-                className={`w-28 h-28 rounded-full border-2 border-amber-500/50 bg-amber-950/40 mx-auto flex items-center justify-center text-5xl mb-4 shadow-xl overflow-hidden ${isCharacterOwner ? 'cursor-pointer hover:border-amber-300/80' : ''}`}
+                className={`w-28 h-28 rounded-2xl border-2 border-amber-500/50 bg-amber-950/40 mx-auto flex items-center justify-center text-5xl mb-4 shadow-xl overflow-hidden ${isCharacterOwner ? 'cursor-pointer hover:border-amber-300/80' : ''}`}
                 title={isCharacterOwner ? 'Click to choose portrait' : undefined}
               >
                 {portraitUrl && !portraitLoadError ? (
@@ -1834,80 +2490,148 @@ export const Characters: React.FC = () => {
               <div className="bg-amber-950/30 border border-amber-800/20 p-4 rounded-xl mb-6">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-500">Display Attributes</p>
-                  {isCharacterOwner && (
-                    <button
-                      onClick={addDisplayStat}
-                      className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
-                    >
-                      + Add Entry
-                    </button>
-                  )}
+                  <div className="flex items-center gap-2">
+                    <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
+                    <input
+                      type="number"
+                      min={1}
+                      max={6}
+                      value={attributeSectionColumns.display}
+                      onChange={(e) => updateAttributeSectionColumns('display', parseInt(e.target.value, 10) || 1)}
+                      className="w-14 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none"
+                    />
+                  </div>
                 </div>
-                {displayStats.length === 0 ? (
-                  <div className="text-xs text-stone-500 italic">No custom display attributes yet.</div>
+                {favoriteDisplayEntries.length === 0 ? (
+                  <div className="text-xs text-stone-500 italic">No favorite attributes or bars yet.</div>
                 ) : (
-                  <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-3">
-                    {displayStats.map((stat) => (
+                  <div
+                    className="grid gap-3"
+                    style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.display}, minmax(0, 1fr))` }}
+                  >
+                    {favoriteDisplayEntries.map((stat) => (
                       <div key={stat.id} className="rounded-xl border border-amber-700/20 bg-gradient-to-br from-amber-950/30 to-black/20 p-3 shadow-lg">
-                        <div className="flex items-center gap-2 mb-2">
-                          <input
-                            type="text"
-                            value={stat.referenceId}
-                            onChange={(e) => updateDisplayStat(stat.id, e.target.value.replace(/[^a-zA-Z0-9_-]/g, ''))}
-                            disabled={!isCharacterOwner}
-                            placeholder="str_mod"
-                            className="flex-1 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs font-mono text-emerald-400 focus:outline-none disabled:opacity-60"
-                          />
-                          {isCharacterOwner && (
+                        <div className="flex items-center justify-between gap-2 mb-2">
+                          <p className="text-[11px] uppercase tracking-[0.2em] text-amber-500 truncate">
+                            {stat.name}
+                          </p>
+                          <div className="flex items-center gap-1">
                             <button
-                              onClick={() => removeDisplayStat(stat.id)}
-                              className="text-stone-500 hover:text-red-400 cursor-pointer"
+                              onClick={() => moveDisplayStatReference(stat.id, 'up', favoriteDisplayEntries.map(entry => entry.id))}
+                              disabled={favoriteDisplayEntries[0]?.id === stat.id}
+                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                             >
-                              <Trash2 size={14} />
+                              <ArrowUp size={13} />
                             </button>
-                          )}
+                            <button
+                              onClick={() => moveDisplayStatReference(stat.id, 'down', favoriteDisplayEntries.map(entry => entry.id))}
+                              disabled={favoriteDisplayEntries[favoriteDisplayEntries.length - 1]?.id === stat.id}
+                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <ArrowDown size={13} />
+                            </button>
+                          </div>
                         </div>
-                        <p className="text-[11px] uppercase tracking-[0.2em] text-amber-500 mb-1 truncate">
-                          {getReferenceDisplayName(stat.referenceId)}
-                        </p>
-                        <p className="text-[10px] font-mono text-emerald-400/80 mb-2 break-all">
-                          @{stat.referenceId || 'unset'}
-                        </p>
                         <p className="text-3xl font-bold text-amber-200 font-mono break-all leading-none">
-                          {stat.referenceId ? (finalContext[stat.referenceId] ?? 0) : '--'}
+                          {stat.value}
                         </p>
                       </div>
                     ))}
                   </div>
                 )}
               </div>
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-500 mb-2">Ages</label>
+                  <div className="rounded-xl border border-amber-800/20 bg-black/20 p-2">
+                    <div className="grid grid-cols-4 gap-2 min-h-[118px]">
+                      <div className="flex flex-col">
+                        <label className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400 mb-2">Age</label>
+                        <input
+                          type="text"
+                          value={editAge}
+                          onChange={(e) => setEditAge(e.target.value)}
+                          placeholder="27"
+                          className="flex-1 min-h-[78px] bg-stone-900 border border-stone-800 rounded-lg px-3 py-3 text-xl text-amber-100 focus:outline-none focus:border-amber-500/40"
+                        />
+                      </div>
+                      <div className="flex flex-col">
+                        <label className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400 mb-2">Body</label>
+                        <input
+                          type="text"
+                          value={editBodyAge}
+                          onChange={(e) => setEditBodyAge(e.target.value)}
+                          placeholder="27"
+                          className="flex-1 min-h-[78px] bg-stone-900 border border-stone-800 rounded-lg px-3 py-3 text-xl text-amber-100 focus:outline-none focus:border-amber-500/40"
+                        />
+                      </div>
+                      <div className="flex flex-col">
+                        <label className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400 mb-2">Mental</label>
+                        <input
+                          type="text"
+                          value={editMentalAge}
+                          onChange={(e) => setEditMentalAge(e.target.value)}
+                          placeholder="27"
+                          className="flex-1 min-h-[78px] bg-stone-900 border border-stone-800 rounded-lg px-3 py-3 text-xl text-amber-100 focus:outline-none focus:border-amber-500/40"
+                        />
+                      </div>
+                      <div className="flex flex-col">
+                        <label className="text-[11px] font-bold uppercase tracking-[0.16em] text-amber-400 mb-2">Spiritual</label>
+                        <input
+                          type="text"
+                          value={editSpiritualAge}
+                          onChange={(e) => setEditSpiritualAge(e.target.value)}
+                          placeholder="27"
+                          className="flex-1 min-h-[78px] bg-stone-900 border border-stone-800 rounded-lg px-3 py-3 text-xl text-amber-100 focus:outline-none focus:border-amber-500/40"
+                        />
+                      </div>
+                    </div>
+                  </div>
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-500 mb-2">Alignment</label>
+                  <div className="rounded-xl border border-amber-800/20 bg-black/20 p-2">
+                    <div className="grid grid-cols-3 gap-2">
+                      {ALIGNMENT_OPTIONS.map((alignment) => (
+                        <button
+                          key={alignment}
+                          onClick={() => setEditAlignment(alignment)}
+                          className={`px-2 py-2 rounded text-xs font-bold transition-all cursor-pointer border ${editAlignment === alignment ? 'bg-amber-900/40 border-amber-400/50 text-amber-100 shadow-[0_0_12px_rgba(251,191,36,0.2)]' : 'bg-stone-900/50 border-stone-800 text-stone-400 hover:text-amber-200 hover:border-amber-700/40'}`}
+                        >
+                          {alignment}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                </div>
+              </div>
 
               <div className="grid grid-cols-1 lg:grid-cols-2 gap-4 mb-4">
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-500 mb-2">Backstory</label>
+                  <label className="block text-base font-bold uppercase tracking-wider text-amber-400 mb-2">Backstory</label>
                   <textarea
                     ref={backstoryRef}
                     value={backstory}
                     onChange={(e) => setBackstory(e.target.value)}
                     rows={expandedBackstory ? 8 : 4}
-                    className="w-full bg-stone-900 border border-stone-800 rounded-lg p-3 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 font-serif resize-none"
+                    className="w-full bg-stone-900 border border-stone-800 rounded-lg p-4 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 font-serif resize-none"
                     placeholder="The legend begins here..."
                   />
-                  <button onClick={() => setExpandedBackstory(prev => !prev)} className="mt-2 text-xs text-amber-300 hover:text-amber-200 cursor-pointer">
+                  <button onClick={() => setExpandedBackstory(prev => !prev)} className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer">
                     {expandedBackstory ? 'Hide' : 'Show More'}
                   </button>
                 </div>
                 <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-500 mb-2">Notes</label>
+                  <label className="block text-base font-bold uppercase tracking-wider text-amber-400 mb-2">Notes</label>
                   <textarea
                     ref={notesRef}
                     value={notes}
                     onChange={(e) => setNotes(e.target.value)}
                     rows={expandedNotes ? 8 : 4}
-                    className="w-full bg-stone-900 border border-stone-800 rounded-lg p-3 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 font-serif resize-none"
+                    className="w-full bg-stone-900 border border-stone-800 rounded-lg p-4 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 font-serif resize-none"
                     placeholder="Session notes, reminders, secrets..."
                   />
-                  <button onClick={() => setExpandedNotes(prev => !prev)} className="mt-2 text-xs text-amber-300 hover:text-amber-200 cursor-pointer">
+                  <button onClick={() => setExpandedNotes(prev => !prev)} className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer">
                     {expandedNotes ? 'Hide' : 'Show More'}
                   </button>
                 </div>
@@ -1986,6 +2710,32 @@ export const Characters: React.FC = () => {
                     ✦ Main Attributes
                   </h3>
                   <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2">
+                      <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
+                      <input
+                        type="number"
+                        min={1}
+                        max={6}
+                        value={attributeSectionColumns.main}
+                        onChange={(e) => updateAttributeSectionColumns('main', parseInt(e.target.value, 10) || 1)}
+                        className="w-14 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none"
+                      />
+                    </div>
+                    <div className="flex items-center rounded border border-amber-800/30 overflow-hidden">
+                      {[
+                        { key: 'all', label: 'Show All' },
+                        { key: 'favorites', label: 'Show only Favorites' },
+                        { key: 'hidden', label: 'Hide' },
+                      ].map((mode) => (
+                        <button
+                          key={mode.key}
+                          onClick={() => setAttributeSectionModes(prev => ({ ...prev, main: mode.key as 'all' | 'favorites' | 'hidden' }))}
+                          className={`px-2 py-1 text-[11px] cursor-pointer ${attributeSectionModes.main === mode.key ? 'bg-amber-900/40 text-amber-200' : 'bg-stone-900/40 text-stone-400 hover:text-amber-200'}`}
+                        >
+                          {mode.label}
+                        </button>
+                      ))}
+                    </div>
                     <button
                       onClick={() => setShowModOptions(!showModOptions)}
                       className="p-1.5 text-amber-500 hover:text-amber-300 cursor-pointer"
@@ -2014,8 +2764,13 @@ export const Characters: React.FC = () => {
                   </div>
                 )}
 
-                <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mb-4">
-                  {mainAttrs.map((attr, idx) => {
+                {attributeSectionModes.main !== 'hidden' && (
+                <div
+                  className="grid gap-3 mb-4"
+                  style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.main}, minmax(0, 1fr))` }}
+                >
+                  {mainAttrs.filter(attr => attributeSectionModes.main === 'all' || attr.favorite).map((attr, idx, filteredMainAttrs) => {
+                    const actualIndex = mainAttrs.findIndex(item => item.id === attr.id);
                     const evalVal = finalContext[attr.id] || 0;
                     const modVal = finalContext[`${attr.id}_mod`] || 0;
 
@@ -2027,7 +2782,7 @@ export const Characters: React.FC = () => {
                             value={attr.name}
                             onChange={(e) => {
                               const next = [...mainAttrs];
-                              next[idx].name = e.target.value;
+                              next[actualIndex].name = e.target.value;
                               setMainAttrs(next);
                             }}
                             className="bg-transparent text-sm font-bold text-amber-300 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-24"
@@ -2037,14 +2792,44 @@ export const Characters: React.FC = () => {
                             value={attr.id}
                             onChange={(e) => {
                               const next = [...mainAttrs];
-                              next[idx].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
+                              next[actualIndex].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
                               setMainAttrs(next);
                             }}
                             className="bg-transparent text-xs font-mono text-emerald-400 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-16"
                             placeholder="id"
                           />
                           <button
-                            onClick={() => setMainAttrs(mainAttrs.filter((_, i) => i !== idx))}
+                            onClick={() => {
+                              const nextFavorite = !attr.favorite;
+                              const next = [...mainAttrs];
+                              next[actualIndex] = { ...next[actualIndex], favorite: nextFavorite };
+                              setMainAttrs(next);
+                              syncDisplayStatFavorite(attr.id, nextFavorite);
+                            }}
+                            className={`p-1 rounded border cursor-pointer ${attr.favorite ? 'bg-amber-400/20 border-amber-300/50 text-amber-100 shadow-[0_0_12px_rgba(251,191,36,0.28)]' : 'border-stone-700 text-stone-500 hover:text-amber-300'}`}
+                            title={attr.favorite ? 'Remove from display favorites' : 'Add to display favorites'}
+                          >
+                            <Star size={14} fill={attr.favorite ? 'currentColor' : 'none'} />
+                          </button>
+                          <button
+                            onClick={() => setMainAttrs(moveListItem(mainAttrs, attr.id, 'up'))}
+                            disabled={idx === 0}
+                            className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowUp size={14} />
+                          </button>
+                          <button
+                            onClick={() => setMainAttrs(moveListItem(mainAttrs, attr.id, 'down'))}
+                            disabled={idx === filteredMainAttrs.length - 1}
+                            className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                          >
+                            <ArrowDown size={14} />
+                          </button>
+                          <button
+                            onClick={() => {
+                              setMainAttrs(mainAttrs.filter(item => item.id !== attr.id));
+                              syncDisplayStatFavorite(attr.id, false);
+                            }}
                             className="text-stone-600 hover:text-red-400 cursor-pointer"
                           >
                             <Trash2 size={14} />
@@ -2056,11 +2841,17 @@ export const Characters: React.FC = () => {
                             value={attr.value}
                             onChange={(e) => {
                               const next = [...mainAttrs];
-                              next[idx].value = e.target.value;
+                              next[actualIndex].value = e.target.value;
                               setMainAttrs(next);
                             }}
                             className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 w-24 focus:outline-none"
                           />
+                          <button
+                            onClick={() => rollAttributeCheck(`${attr.name || 'Attribute'} Check`, `1d20 + @${attr.id}_mod`, `${attr.name || 'Attribute'} ability check`)}
+                            className="mr-2 flex items-center gap-1 px-2.5 py-1.5 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer"
+                          >
+                            <Dices size={12} /> Roll
+                          </button>
                           <div className="flex flex-col items-end">
                             <span className="text-lg font-bold font-mono text-amber-200">{evalVal}</span>
                             <span className="text-xs font-mono font-bold bg-amber-900/40 px-2 py-0.5 rounded text-amber-400">
@@ -2072,26 +2863,61 @@ export const Characters: React.FC = () => {
                     );
                   })}
                 </div>
+                )}
               </div>
 
-                {renderAttributeSection('✦ Secondary Attributes', secondaryAttrs, setSecondaryAttrs, 'sec')}
-                {renderAttributeSection('✦ Other Attributes', otherAttrs, setOtherAttrs, 'other')}
+                {renderAttributeSection('✦ Secondary Attributes', secondaryAttrs, setSecondaryAttrs, 'sec', { sectionKey: 'secondary' })}
+                {renderAttributeSection('✦ Skills', skills, setSkills, 'skill', { skillMode: true, sectionKey: 'skills' })}
+                {renderAttributeSection('✦ Other Attributes', otherAttrs, setOtherAttrs, 'other', { sectionKey: 'other' })}
 
                 <div className="mb-4">
                   <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
                     <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
                       ✦ Bars
                     </h3>
-                    <button
-                    onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', color: '#f59e0b' }])}
-                      className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
-                    >
-                      + Add
-                    </button>
+                    <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2">
+                        <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
+                        <input
+                          type="number"
+                          min={1}
+                          max={6}
+                          value={attributeSectionColumns.bars}
+                          onChange={(e) => updateAttributeSectionColumns('bars', parseInt(e.target.value, 10) || 1)}
+                          className="w-14 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none"
+                        />
+                      </div>
+                      <div className="flex items-center rounded border border-amber-800/30 overflow-hidden">
+                        {[
+                          { key: 'all', label: 'Show All' },
+                          { key: 'favorites', label: 'Show only Favorites' },
+                          { key: 'hidden', label: 'Hide' },
+                        ].map((mode) => (
+                          <button
+                            key={mode.key}
+                            onClick={() => setAttributeSectionModes(prev => ({ ...prev, bars: mode.key as 'all' | 'favorites' | 'hidden' }))}
+                            className={`px-2 py-1 text-[11px] cursor-pointer ${attributeSectionModes.bars === mode.key ? 'bg-amber-900/40 text-amber-200' : 'bg-stone-900/40 text-stone-400 hover:text-amber-200'}`}
+                          >
+                            {mode.label}
+                          </button>
+                        ))}
+                      </div>
+                      <button
+                        onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', color: '#f59e0b' }])}
+                        className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                      >
+                        + Add
+                      </button>
+                    </div>
                   </div>
 
-                  <div className="space-y-4">
-                    {bars.map((bar, idx) => {
+                  {attributeSectionModes.bars !== 'hidden' && (
+                  <div
+                    className="grid gap-4"
+                    style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.bars}, minmax(0, 1fr))` }}
+                  >
+                    {bars.filter(bar => attributeSectionModes.bars === 'all' || bar.favorite).map((bar, idx, filteredBars) => {
+                      const actualIndex = bars.findIndex(item => item.id === bar.id);
                       const rawMax = finalContext[`${bar.id}_max`] || 0;
                       const rawCurrent = finalContext[`${bar.id}_current`] || 0;
                       const safeMax = rawMax > 0 ? rawMax : 0;
@@ -2106,7 +2932,7 @@ export const Characters: React.FC = () => {
                               value={bar.name}
                               onChange={(e) => {
                                 const next = [...bars];
-                                next[idx].name = e.target.value;
+                                next[actualIndex].name = e.target.value;
                                 setBars(next);
                               }}
                               className="bg-transparent text-sm font-bold text-amber-300 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-32"
@@ -2116,21 +2942,51 @@ export const Characters: React.FC = () => {
                               value={bar.id}
                               onChange={(e) => {
                                 const next = [...bars];
-                                next[idx].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
+                                next[actualIndex].id = e.target.value.replace(/[^a-zA-Z0-9_-]/g, '');
                                 setBars(next);
                               }}
                               className="bg-transparent text-xs font-mono text-emerald-400 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-24"
                               placeholder="id"
                             />
                             <button
-                              onClick={() => setBars(bars.filter((_, i) => i !== idx))}
+                              onClick={() => {
+                                const nextFavorite = !bar.favorite;
+                                const next = [...bars];
+                                next[actualIndex] = { ...next[actualIndex], favorite: nextFavorite };
+                                setBars(next);
+                                syncDisplayStatFavorite(bar.id, nextFavorite);
+                              }}
+                              className={`p-1 rounded border cursor-pointer ${bar.favorite ? 'bg-amber-400/20 border-amber-300/50 text-amber-100 shadow-[0_0_12px_rgba(251,191,36,0.28)]' : 'border-stone-700 text-stone-500 hover:text-amber-300'}`}
+                              title={bar.favorite ? 'Remove from display favorites' : 'Add to display favorites'}
+                            >
+                              <Star size={14} fill={bar.favorite ? 'currentColor' : 'none'} />
+                            </button>
+                            <button
+                              onClick={() => setBars(moveListItem(bars, bar.id, 'up'))}
+                              disabled={idx === 0}
+                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <ArrowUp size={14} />
+                            </button>
+                            <button
+                              onClick={() => setBars(moveListItem(bars, bar.id, 'down'))}
+                              disabled={idx === filteredBars.length - 1}
+                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                            >
+                              <ArrowDown size={14} />
+                            </button>
+                            <button
+                              onClick={() => {
+                                setBars(bars.filter(item => item.id !== bar.id));
+                                syncDisplayStatFavorite(bar.id, false);
+                              }}
                               className="text-stone-600 hover:text-red-400 cursor-pointer"
                             >
                               <Trash2 size={14} />
                             </button>
                           </div>
 
-                          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
                             <div>
                               <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">Current Value</label>
                               <input
@@ -2138,7 +2994,7 @@ export const Characters: React.FC = () => {
                                 value={bar.currentValue}
                                 onChange={(e) => {
                                   const next = [...bars];
-                                  next[idx].currentValue = e.target.value;
+                                  next[actualIndex].currentValue = e.target.value;
                                   setBars(next);
                                 }}
                                 className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 focus:outline-none"
@@ -2151,7 +3007,7 @@ export const Characters: React.FC = () => {
                                 value={bar.maxValue}
                                 onChange={(e) => {
                                   const next = [...bars];
-                                  next[idx].maxValue = e.target.value;
+                                  next[actualIndex].maxValue = e.target.value;
                                   setBars(next);
                                 }}
                                 className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 focus:outline-none"
@@ -2164,10 +3020,10 @@ export const Characters: React.FC = () => {
                                 value={bar.color || '#f59e0b'}
                                 onChange={(e) => {
                                   const next = [...bars];
-                                  next[idx].color = e.target.value;
+                                  next[actualIndex].color = e.target.value;
                                   setBars(next);
                                 }}
-                                className="w-full h-[34px] bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer"
+                                className="h-[34px] w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer"
                               />
                             </div>
                           </div>
@@ -2194,6 +3050,7 @@ export const Characters: React.FC = () => {
                       );
                     })}
                   </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -2206,7 +3063,7 @@ export const Characters: React.FC = () => {
                     ✦ Statuses & Effects
                   </h3>
                   <button
-                    onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [] }])}
+                    onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [], color: '#f59e0b', hidden: false }])}
                     className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
                   >
                     + Add Status
@@ -2215,7 +3072,7 @@ export const Characters: React.FC = () => {
 
                 <div className="space-y-4">
                   {charStatuses.map((status, idx) => (
-                    <div key={status.id} className="bg-amber-950/10 border border-amber-800/20 rounded-xl p-4 shadow-lg flex flex-col gap-3">
+                    <div key={status.id} className="rounded-xl p-4 shadow-lg flex flex-col gap-3 border" style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
                       <div className="flex items-center justify-between gap-3">
                         <input
                           type="text"
@@ -2238,6 +3095,26 @@ export const Characters: React.FC = () => {
                           className="bg-stone-900/40 border border-stone-800/40 rounded px-2 py-1 text-xs text-amber-500 w-24 focus:outline-none"
                           placeholder="Duration"
                         />
+                        <input
+                          type="color"
+                          value={status.color || '#f59e0b'}
+                          onChange={(e) => {
+                            const next = [...charStatuses];
+                            next[idx].color = e.target.value;
+                            setCharStatuses(next);
+                          }}
+                          className="h-9 w-12 rounded border border-stone-700 bg-stone-900/60 px-1 py-1 cursor-pointer"
+                        />
+                        <button
+                          onClick={() => {
+                            const next = [...charStatuses];
+                            next[idx].hidden = !next[idx].hidden;
+                            setCharStatuses(next);
+                          }}
+                          className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                        >
+                          {status.hidden ? 'Show' : 'Hide'}
+                        </button>
                         <button
                           onClick={() => setCharStatuses(charStatuses.filter((_, i) => i !== idx))}
                           className="text-stone-600 hover:text-red-400 cursor-pointer ml-auto"
@@ -2245,8 +3122,10 @@ export const Characters: React.FC = () => {
                           <Trash2 size={16} />
                         </button>
                       </div>
-                      
+                      {!status.hidden && (
+                      <>
                       <textarea
+                        ref={(el) => { statusDescriptionRefs.current[status.id] = el; }}
                         value={status.description}
                         onChange={(e) => {
                           const next = [...charStatuses];
@@ -2254,21 +3133,27 @@ export const Characters: React.FC = () => {
                           setCharStatuses(next);
                         }}
                         placeholder="Description of the status"
-                        rows={2}
-                        className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1.5 text-xs text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none"
+                        rows={expandedStatusDescriptions.includes(status.id) ? 6 : 2}
+                        className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none"
                       />
+                      <button
+                        onClick={() => toggleStatusDescription(status.id)}
+                        className="text-base text-amber-300 hover:text-amber-200 cursor-pointer self-start"
+                      >
+                        {expandedStatusDescriptions.includes(status.id) ? 'Hide' : 'Show More'}
+                      </button>
 
                       {/* Effects area */}
                       <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                         <div className="flex justify-between items-center mb-2">
-                          <label className="text-xs font-bold text-stone-400">Effects</label>
+                          <label className="text-base font-bold text-stone-300">Effects</label>
                           <button
                             onClick={() => {
                               const next = [...charStatuses];
-                              next[idx].effects = [...(next[idx].effects || []), { targetId: '', value: '0' }];
+                              next[idx].effects = [...(next[idx].effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }];
                               setCharStatuses(next);
                             }}
-                            className="text-[10px] bg-amber-900/20 hover:bg-amber-900/40 px-2 py-0.5 rounded text-amber-300"
+                            className="text-sm bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300"
                           >
                             + Add Effect
                           </button>
@@ -2276,6 +3161,16 @@ export const Characters: React.FC = () => {
                         <div className="space-y-2">
                           {(status.effects || []).map((effect, effIdx) => (
                             <div key={effIdx} className="flex items-center gap-2">
+                              <button
+                                onClick={() => {
+                                  const next = [...charStatuses];
+                                  next[idx].effects[effIdx].active = !(next[idx].effects[effIdx].active ?? true);
+                                  setCharStatuses(next);
+                                }}
+                                className={`px-2 py-1 rounded border text-sm cursor-pointer ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+                              >
+                                {(effect.active ?? true) ? 'On' : 'Off'}
+                              </button>
                               <input
                                 type="text"
                                 value={effect.targetId}
@@ -2285,7 +3180,7 @@ export const Characters: React.FC = () => {
                                   setCharStatuses(next);
                                 }}
                                 placeholder="Target ID (e.g. wis_mod)"
-                                className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-emerald-400 font-mono focus:outline-none w-1/2"
+                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none w-1/2"
                               />
                               <input
                                 type="text"
@@ -2296,7 +3191,7 @@ export const Characters: React.FC = () => {
                                   setCharStatuses(next);
                                 }}
                                 placeholder="Value (e.g. -2)"
-                                className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 font-mono focus:outline-none w-1/4"
+                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none w-1/4"
                               />
                               <button
                                 onClick={() => {
@@ -2313,6 +3208,8 @@ export const Characters: React.FC = () => {
                           {(status.effects || []).length === 0 && <span className="text-[10px] text-stone-600 italic">No effects added.</span>}
                         </div>
                       </div>
+                      </>
+                      )}
                     </div>
                   ))}
                 </div>
@@ -2340,13 +3237,108 @@ export const Characters: React.FC = () => {
                   </div>
 
                   {!canEditInventory && (
-                    <div className="mb-3 text-xs text-stone-500 italic">
+                    <div className="mb-3 text-sm text-stone-500 italic">
                       Inventory can be edited by the owner, or by anyone when the character is public.
                     </div>
                   )}
 
+                  <div className="mb-6 rounded-xl border border-amber-800/20 bg-black/20 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>General Items</h4>
+                        <p className="text-sm text-stone-500">Simple shared items like potions, rations, or keys.</p>
+                      </div>
+                      {canEditInventory && (
+                        <button
+                          onClick={addGeneralItem}
+                          className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-sm text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                        >
+                          + Add General Item
+                        </button>
+                      )}
+                    </div>
+                    {charGeneralItems.length === 0 ? (
+                      <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+                        No general items yet.
+                      </div>
+                    ) : (
+                      <div className="space-y-2">
+                        {charGeneralItems.map((item) => {
+                          const isExpanded = expandedGeneralItemDescriptions.includes(item.id);
+                          const rarityKey = item.rarity || 'common';
+                          const rarityStyle = INVENTORY_RARITY_STYLES[rarityKey];
+                          return (
+                            <div key={item.id} className={`rounded-lg border p-3 flex flex-col gap-2 ${rarityStyle.card}`}>
+                              <div className="flex flex-wrap items-center gap-2">
+                                <input
+                                  type="text"
+                                  value={item.name}
+                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, name: e.target.value }))}
+                                  disabled={!canEditInventory}
+                                  className="min-w-[180px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                  placeholder="Potion of Healing"
+                                />
+                                <input
+                                  type="number"
+                                  min={0}
+                                  value={item.quantity}
+                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, quantity: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                                  disabled={!canEditInventory}
+                                  className="w-24 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                />
+                                <select
+                                  value={rarityKey}
+                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterGeneralItem['rarity'] }))}
+                                  disabled={!canEditInventory}
+                                  className="min-w-[140px] bg-stone-900/60 border border-stone-800 rounded px-2 py-2 text-xs text-amber-100 focus:outline-none disabled:opacity-60"
+                                >
+                                  {INVENTORY_RARITIES.map((rarity) => (
+                                    <option key={rarity} value={rarity}>
+                                      {INVENTORY_RARITY_STYLES[rarity].label}
+                                    </option>
+                                  ))}
+                                </select>
+                                <button
+                                  onClick={() => toggleGeneralItemDescription(item.id)}
+                                  className="px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded cursor-pointer"
+                                >
+                                  {isExpanded ? 'Hide' : 'Show'}
+                                </button>
+                                <button
+                                  onClick={() => shareGeneralItem(item)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-900/30 border border-sky-800/40 rounded text-xs text-sky-200 hover:bg-sky-900/50 cursor-pointer"
+                                >
+                                  <Share2 size={13} /> Share
+                                </button>
+                                {canEditInventory && (
+                                  <button
+                                    onClick={() => removeGeneralItem(item.id)}
+                                    className="p-1.5 text-stone-500 hover:text-red-400 cursor-pointer"
+                                  >
+                                    <Trash2 size={14} />
+                                  </button>
+                                )}
+                              </div>
+                              {isExpanded && (
+                                <textarea
+                                  ref={(el) => { generalItemDescriptionRefs.current[item.id] = el; }}
+                                  value={item.description}
+                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, description: e.target.value }))}
+                                  disabled={!canEditInventory}
+                                  rows={4}
+                                  placeholder="Description"
+                                  className="w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none resize-none disabled:opacity-60"
+                                />
+                              )}
+                            </div>
+                          );
+                        })}
+                      </div>
+                    )}
+                  </div>
+
                   {charInventory.length === 0 ? (
-                    <div className="text-xs text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+                    <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
                       No inventory items yet.
                     </div>
                   ) : (
@@ -2355,6 +3347,7 @@ export const Characters: React.FC = () => {
                         const rarityKey = item.rarity || 'common';
                         const rarityStyle = INVENTORY_RARITY_STYLES[rarityKey];
                         const isDescriptionExpanded = expandedInventoryDescriptions.includes(item.id);
+                        const isCollapsed = collapsedInventoryItems.includes(item.id);
                         return (
                         <div key={item.id} className={`border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${item.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
                           <div className="flex items-start justify-between gap-3">
@@ -2368,30 +3361,38 @@ export const Characters: React.FC = () => {
                                 </span>
                               )}
                             </div>
-                            {canEditInventory ? (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => moveInventoryItem(item.id, 'up')}
-                                  disabled={itemIndex === 0}
-                                  className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  <ArrowUp size={15} />
-                                </button>
-                                <button
-                                  onClick={() => moveInventoryItem(item.id, 'down')}
-                                  disabled={itemIndex === charInventory.length - 1}
-                                  className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                                >
-                                  <ArrowDown size={15} />
-                                </button>
-                                <button
-                                  onClick={() => removeInventoryItem(item.id)}
-                                  className="p-1 text-stone-600 hover:text-red-400 cursor-pointer"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            ) : null}
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => toggleInventoryItemCollapsed(item.id)}
+                                className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                              >
+                                {isCollapsed ? 'Show' : 'Hide'}
+                              </button>
+                              {canEditInventory ? (
+                                <>
+                                  <button
+                                    onClick={() => moveInventoryItem(item.id, 'up')}
+                                    disabled={itemIndex === 0}
+                                    className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                  >
+                                    <ArrowUp size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => moveInventoryItem(item.id, 'down')}
+                                    disabled={itemIndex === charInventory.length - 1}
+                                    className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                  >
+                                    <ArrowDown size={15} />
+                                  </button>
+                                  <button
+                                    onClick={() => removeInventoryItem(item.id)}
+                                    className="p-1 text-stone-600 hover:text-red-400 cursor-pointer"
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </>
+                              ) : null}
+                            </div>
                           </div>
 
                           <div className="flex flex-wrap gap-3 items-start">
@@ -2444,6 +3445,8 @@ export const Characters: React.FC = () => {
                             </select>
                           </div>
 
+                          {!isCollapsed && (
+                          <>
                           <div className="space-y-2">
                             <textarea
                               ref={(el) => { inventoryDescriptionRefs.current[item.id] = el; }}
@@ -2452,12 +3455,12 @@ export const Characters: React.FC = () => {
                               disabled={!canEditInventory}
                               placeholder="Description, lore, notes..."
                               rows={isDescriptionExpanded ? 6 : 2}
-                              className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1.5 text-xs text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
+                              className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
                             />
                             <div className="flex items-center gap-3">
                               <button
                                 onClick={() => toggleInventoryDescription(item.id)}
-                                className="text-xs text-amber-300 hover:text-amber-200 cursor-pointer"
+                                className="text-base text-amber-300 hover:text-amber-200 cursor-pointer"
                               >
                                 {isDescriptionExpanded ? 'Hide' : 'Show More'}
                               </button>
@@ -2472,11 +3475,11 @@ export const Characters: React.FC = () => {
 
                           <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                             <div className="flex justify-between items-center mb-2">
-                              <label className="text-xs font-bold text-stone-400">Item Macros</label>
+                              <label className="text-sm font-bold text-stone-300">Item Macros</label>
                               {canEditInventory && (
                                 <button
                                   onClick={() => addInventoryMacro(item.id)}
-                                  className="text-[10px] bg-amber-900/20 hover:bg-amber-900/40 px-2 py-0.5 rounded text-amber-300 cursor-pointer"
+                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
                                 >
                                   + Add Macro
                                 </button>
@@ -2493,7 +3496,7 @@ export const Characters: React.FC = () => {
                                       value={macro.name}
                                       onChange={(e) => updateInventoryMacro(item.id, macro.id, current => ({ ...current, name: e.target.value }))}
                                       disabled={!canEditInventory}
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
                                       placeholder="Attack Roll"
                                     />
                                     <input
@@ -2501,7 +3504,7 @@ export const Characters: React.FC = () => {
                                       value={macro.formula}
                                       onChange={(e) => updateInventoryMacro(item.id, macro.id, current => ({ ...current, formula: e.target.value }))}
                                       disabled={!canEditInventory}
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
                                       placeholder="1d20 + @dex_mod"
                                     />
                                     <button
@@ -2527,13 +3530,145 @@ export const Characters: React.FC = () => {
                           </div>
                           <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                             <div className="flex justify-between items-center mb-2">
-                              <label className="text-xs font-bold text-stone-400">
+                              <label className="text-sm font-bold text-stone-300">Actions</label>
+                              {canEditInventory && (
+                                <button
+                                  onClick={() => addInventoryAction(item.id)}
+                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                >
+                                  + Add Action
+                                </button>
+                              )}
+                            </div>
+                            {(item.actions || []).length === 0 ? (
+                              <span className="text-xs text-stone-600 italic">No actions added.</span>
+                            ) : (
+                              <div className="space-y-3">
+                                {(item.actions || []).map((action) => {
+                                  const isExpanded = expandedInventoryActionDescriptions.includes(action.id);
+                                  return (
+                                    <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
+                                      <div className="flex flex-wrap gap-2 items-start mb-2">
+                                        <input
+                                          type="text"
+                                          value={action.name}
+                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, name: e.target.value }))}
+                                          disabled={!canEditInventory}
+                                          placeholder="Action name"
+                                          className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={action.cost}
+                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))}
+                                          disabled={!canEditInventory}
+                                          placeholder="Cost"
+                                          className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={action.usageRemaining}
+                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))}
+                                          disabled={!canEditInventory}
+                                          placeholder="Remaining usage"
+                                          className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <button
+                                          onClick={() => shareInventoryAction(item, action)}
+                                          className="inline-flex items-center gap-1 px-3 py-2 bg-sky-900/30 border border-sky-800/40 rounded text-sm text-sky-200 hover:bg-sky-900/50 cursor-pointer"
+                                        >
+                                          <Share2 size={14} /> Share
+                                        </button>
+                                        {canEditInventory && (
+                                          <button
+                                            onClick={() => removeInventoryAction(item.id, action.id)}
+                                            className="p-2 text-stone-500 hover:text-red-400 cursor-pointer"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <textarea
+                                        ref={(el) => { inventoryActionDescriptionRefs.current[action.id] = el; }}
+                                        value={action.description}
+                                        onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, description: e.target.value }))}
+                                        disabled={!canEditInventory}
+                                        rows={isExpanded ? 6 : 2}
+                                        placeholder="Action description"
+                                        className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
+                                      />
+                                      <button
+                                        onClick={() => toggleInventoryActionDescription(action.id)}
+                                        className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
+                                      >
+                                        {isExpanded ? 'Hide' : 'Show More'}
+                                      </button>
+                                      <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <label className="text-sm font-bold text-stone-300">Item Macros</label>
+                                          {canEditInventory && (
+                                            <button
+                                              onClick={() => addInventoryActionMacro(item.id, action.id)}
+                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                            >
+                                              + Add Macro
+                                            </button>
+                                          )}
+                                        </div>
+                                        {(action.macros || []).length === 0 ? (
+                                          <span className="text-xs text-stone-600 italic">No macros added.</span>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(action.macros || []).map((macro) => (
+                                              <div key={macro.id} className="grid grid-cols-1 md:grid-cols-[140px_1fr_auto_auto] gap-2 items-center">
+                                                <input
+                                                  type="text"
+                                                  value={macro.name}
+                                                  onChange={(e) => updateInventoryActionMacro(item.id, action.id, macro.id, current => ({ ...current, name: e.target.value }))}
+                                                  disabled={!canEditInventory}
+                                                  className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                                />
+                                                <input
+                                                  type="text"
+                                                  value={macro.formula}
+                                                  onChange={(e) => updateInventoryActionMacro(item.id, action.id, macro.id, current => ({ ...current, formula: e.target.value }))}
+                                                  disabled={!canEditInventory}
+                                                  className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                <button
+                                                  onClick={() => rollInventoryActionMacro(item, action, macro)}
+                                                  className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer"
+                                                >
+                                                  <Dices size={12} /> Roll
+                                                </button>
+                                                {canEditInventory && (
+                                                  <button
+                                                    onClick={() => removeInventoryActionMacro(item.id, action.id, macro.id)}
+                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                          <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+                            <div className="flex justify-between items-center mb-2">
+                              <label className="text-sm font-bold text-stone-300">
                                 Effects {item.equipped ? '(Active)' : '(Inactive until equipped)'}
                               </label>
                               {canEditInventory && (
                                 <button
                                   onClick={() => addInventoryEffect(item.id)}
-                                  className="text-[10px] bg-amber-900/20 hover:bg-amber-900/40 px-2 py-0.5 rounded text-amber-300 cursor-pointer"
+                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
                                 >
                                   + Add Effect
                                 </button>
@@ -2544,14 +3679,20 @@ export const Characters: React.FC = () => {
                             ) : (
                               <div className="space-y-2">
                                 {(item.effects || []).map((effect, effectIndex) => (
-                                  <div key={`${item.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[1fr_140px_auto] gap-2 items-center">
+                                  <div key={`${item.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
+                                    <button
+                                      onClick={() => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
+                                      className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+                                    >
+                                      {(effect.active ?? true) ? 'On' : 'Off'}
+                                    </button>
                                     <input
                                       type="text"
                                       value={effect.targetId}
                                       onChange={(e) => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
                                       disabled={!canEditInventory}
                                       placeholder="Target ID (e.g. str_mod)"
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
                                     />
                                     <input
                                       type="text"
@@ -2559,7 +3700,7 @@ export const Characters: React.FC = () => {
                                       onChange={(e) => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, value: e.target.value }))}
                                       disabled={!canEditInventory}
                                       placeholder="Value (e.g. +2)"
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
                                     />
                                     {canEditInventory ? (
                                       <button
@@ -2576,6 +3717,8 @@ export const Characters: React.FC = () => {
                               </div>
                             )}
                           </div>
+                          </>
+                          )}
                         </div>
                       )})}
                     </div>
@@ -2603,13 +3746,13 @@ export const Characters: React.FC = () => {
                   </div>
 
                   {!isCharacterOwner && (
-                    <div className="mb-3 text-xs text-stone-500 italic">
+                    <div className="mb-3 text-sm text-stone-500 italic">
                       Only the character owner can edit spells and abilities.
                     </div>
                   )}
 
                   {charSpells.length === 0 ? (
-                    <div className="text-xs text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+                    <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
                       No spells or abilities yet.
                     </div>
                   ) : (
@@ -2664,7 +3807,7 @@ export const Characters: React.FC = () => {
                               value={spell.name}
                               onChange={(e) => updateSpell(spell.id, current => ({ ...current, name: e.target.value }))}
                               disabled={!isCharacterOwner}
-                              className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                              className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                               placeholder="Spell or ability name"
                             />
                             <input
@@ -2690,24 +3833,31 @@ export const Characters: React.FC = () => {
                                 value={spell.color || '#7c3aed'}
                                 onChange={(e) => updateSpell(spell.id, current => ({ ...current, color: e.target.value }))}
                                 disabled={!isCharacterOwner}
-                                className="h-10 w-full bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
+                                className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
                               />
                             </div>
+                            <button
+                              onClick={() => updateSpell(spell.id, current => ({ ...current, hidden: !current.hidden }))}
+                              className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                            >
+                              {spell.hidden ? 'Show' : 'Hide'}
+                            </button>
                           </div>
-
+                          {!spell.hidden && (
+                          <>
                           <textarea
                             ref={(el) => { spellDescriptionRefs.current[spell.id] = el; }}
-                            value={spell.description}
-                            onChange={(e) => updateSpell(spell.id, current => ({ ...current, description: e.target.value }))}
-                            disabled={!isCharacterOwner}
-                            placeholder="Description"
-                            rows={expandedSpellDescriptions.includes(spell.id) ? 6 : 3}
-                            className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1.5 text-xs text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
-                          />
+                              value={spell.description}
+                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, description: e.target.value }))}
+                              disabled={!isCharacterOwner}
+                              placeholder="Description"
+                              rows={expandedSpellDescriptions.includes(spell.id) ? 6 : 3}
+                              className="w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
+                            />
                           <div className="flex items-center gap-3">
                             <button
                               onClick={() => toggleSpellDescription(spell.id)}
-                              className="text-xs text-amber-300 hover:text-amber-200 cursor-pointer"
+                              className="text-sm text-amber-300 hover:text-amber-200 cursor-pointer"
                             >
                               {expandedSpellDescriptions.includes(spell.id) ? 'Hide' : 'Show More'}
                             </button>
@@ -2748,11 +3898,11 @@ export const Characters: React.FC = () => {
 
                           <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                             <div className="flex justify-between items-center mb-2">
-                              <label className="text-xs font-bold text-stone-400">Spell Macros</label>
+                              <label className="text-sm font-bold text-stone-300">Spell Macros</label>
                               {isCharacterOwner && (
                                 <button
                                   onClick={() => addSpellMacro(spell.id)}
-                                  className="text-[10px] bg-amber-900/20 hover:bg-amber-900/40 px-2 py-0.5 rounded text-amber-300 cursor-pointer"
+                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
                                 >
                                   + Add Macro
                                 </button>
@@ -2769,7 +3919,7 @@ export const Characters: React.FC = () => {
                                       value={macro.name}
                                       onChange={(e) => updateSpellMacro(spell.id, macro.id, current => ({ ...current, name: e.target.value }))}
                                       disabled={!isCharacterOwner}
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
                                       placeholder="Spell macro name"
                                     />
                                     <input
@@ -2777,7 +3927,7 @@ export const Characters: React.FC = () => {
                                       value={macro.formula}
                                       onChange={(e) => updateSpellMacro(spell.id, macro.id, current => ({ ...current, formula: e.target.value }))}
                                       disabled={!isCharacterOwner}
-                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1 text-xs text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                                      className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
                                       placeholder="1d20 + @int_mod"
                                     />
                                     <button
@@ -2801,6 +3951,140 @@ export const Characters: React.FC = () => {
                               </div>
                             )}
                           </div>
+                          <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+                            <div className="flex justify-between items-center mb-2">
+                              <label className="text-sm font-bold text-stone-300">Actions</label>
+                              {isCharacterOwner && (
+                                <button
+                                  onClick={() => addSpellAction(spell.id)}
+                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                >
+                                  + Add Action
+                                </button>
+                              )}
+                            </div>
+                            {(spell.actions || []).length === 0 ? (
+                              <span className="text-xs text-stone-600 italic">No actions added.</span>
+                            ) : (
+                              <div className="space-y-3">
+                                {(spell.actions || []).map((action) => {
+                                  const isExpanded = expandedSpellActionDescriptions.includes(action.id);
+                                  return (
+                                    <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
+                                      <div className="flex flex-wrap gap-2 items-start mb-2">
+                                        <input
+                                          type="text"
+                                          value={action.name}
+                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, name: e.target.value }))}
+                                          disabled={!isCharacterOwner}
+                                          placeholder="Action name"
+                                          className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={action.cost}
+                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, cost: e.target.value }))}
+                                          disabled={!isCharacterOwner}
+                                          placeholder="Cost"
+                                          className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <input
+                                          type="text"
+                                          value={action.usageRemaining}
+                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))}
+                                          disabled={!isCharacterOwner}
+                                          placeholder="Remaining usage"
+                                          className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                        />
+                                        <button
+                                          onClick={() => shareSpellAction(spell, action)}
+                                          className="inline-flex items-center gap-1 px-3 py-2 bg-sky-900/30 border border-sky-800/40 rounded text-sm text-sky-200 hover:bg-sky-900/50 cursor-pointer"
+                                        >
+                                          <Share2 size={14} /> Share
+                                        </button>
+                                        {isCharacterOwner && (
+                                          <button
+                                            onClick={() => removeSpellAction(spell.id, action.id)}
+                                            className="p-2 text-stone-500 hover:text-red-400 cursor-pointer"
+                                          >
+                                            <Trash2 size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+                                      <textarea
+                                        ref={(el) => { spellActionDescriptionRefs.current[action.id] = el; }}
+                                        value={action.description}
+                                        onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, description: e.target.value }))}
+                                        disabled={!isCharacterOwner}
+                                        rows={isExpanded ? 6 : 2}
+                                        placeholder="Action description"
+                                        className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
+                                      />
+                                      <button
+                                        onClick={() => toggleSpellActionDescription(action.id)}
+                                        className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
+                                      >
+                                        {isExpanded ? 'Hide' : 'Show More'}
+                                      </button>
+                                      <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <label className="text-sm font-bold text-stone-300">Item Macros</label>
+                                          {isCharacterOwner && (
+                                            <button
+                                              onClick={() => addSpellActionMacro(spell.id, action.id)}
+                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                            >
+                                              + Add Macro
+                                            </button>
+                                          )}
+                                        </div>
+                                        {(action.macros || []).length === 0 ? (
+                                          <span className="text-xs text-stone-600 italic">No macros added.</span>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(action.macros || []).map((macro) => (
+                                              <div key={macro.id} className="grid grid-cols-1 md:grid-cols-[140px_1fr_auto_auto] gap-2 items-center">
+                                                <input
+                                                  type="text"
+                                                  value={macro.name}
+                                                  onChange={(e) => updateSpellActionMacro(spell.id, action.id, macro.id, current => ({ ...current, name: e.target.value }))}
+                                                  disabled={!isCharacterOwner}
+                                                  className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                                />
+                                                <input
+                                                  type="text"
+                                                  value={macro.formula}
+                                                  onChange={(e) => updateSpellActionMacro(spell.id, action.id, macro.id, current => ({ ...current, formula: e.target.value }))}
+                                                  disabled={!isCharacterOwner}
+                                                  className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                <button
+                                                  onClick={() => rollSpellActionMacro(spell, action, macro)}
+                                                  className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer"
+                                                >
+                                                  <Dices size={12} /> Roll
+                                                </button>
+                                                {isCharacterOwner && (
+                                                  <button
+                                                    onClick={() => removeSpellActionMacro(spell.id, action.id, macro.id)}
+                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                    </div>
+                                  );
+                                })}
+                              </div>
+                            )}
+                          </div>
+                          </>
+                          )}
                         </div>
                       ))}
                     </div>
@@ -2904,8 +4188,26 @@ export const Characters: React.FC = () => {
                       className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all select-none group min-h-[88px] ${isSelected ? 'bg-amber-900/30 border-amber-500/50 shadow-md ring-1 ring-inset ring-amber-500/30' : 'bg-black/20 border-stone-800/50 hover:bg-amber-950/10 hover:border-stone-700/60'}`}
                     >
                       <div className="flex items-center gap-4">
-                        <div className={`w-11 h-11 rounded-full border-2 flex items-center justify-center font-bold text-sm shrink-0 font-mono transition-all ${isSelected ? 'border-amber-400 bg-amber-900/50 text-amber-200' : 'border-amber-700/30 bg-stone-900/60 text-amber-300/80'}`}>
-                          {(char.name || '?').slice(0, 2).toUpperCase()}
+                        <div className={`w-11 h-11 rounded-lg border-2 flex items-center justify-center font-bold text-sm shrink-0 font-mono transition-all overflow-hidden ${isSelected ? 'border-amber-400 bg-amber-900/50 text-amber-200' : 'border-amber-700/30 bg-stone-900/60 text-amber-300/80'}`}>
+                          {char.portraitUrl ? (
+                            <img
+                              src={char.portraitUrl}
+                              alt={char.name}
+                              className="w-full h-full object-cover"
+                              onError={(e) => {
+                                const target = e.currentTarget;
+                                target.style.display = 'none';
+                                const fallback = target.nextElementSibling as HTMLElement | null;
+                                if (fallback) fallback.style.display = 'flex';
+                              }}
+                            />
+                          ) : null}
+                          <span
+                            style={{ display: char.portraitUrl ? 'none' : 'flex' }}
+                            className="w-full h-full items-center justify-center"
+                          >
+                            {(char.name || '?').slice(0, 2).toUpperCase()}
+                          </span>
                         </div>
                         <div className="min-w-0">
                           <h4 className={`text-base font-bold truncate ${isSelected ? 'text-amber-100' : 'text-amber-200/80 group-hover:text-amber-200'}`} style={{ fontFamily: "'Cinzel', serif" }}>
@@ -2982,6 +4284,35 @@ export const Characters: React.FC = () => {
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Vocation / Class</label>
                   <input value={editClass} onChange={(e) => setEditClass(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="Vanguard, Arcanist..." />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Age</label>
+                  <input value={editAge} onChange={(e) => setEditAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Body Age</label>
+                  <input value={editBodyAge} onChange={(e) => setEditBodyAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Mental Age</label>
+                  <input value={editMentalAge} onChange={(e) => setEditMentalAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Spiritual Age</label>
+                  <input value={editSpiritualAge} onChange={(e) => setEditSpiritualAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
+                </div>
+                <div>
+                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Alignment</label>
+                  <select
+                    value={editAlignment}
+                    onChange={(e) => setEditAlignment(e.target.value)}
+                    className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 cursor-pointer"
+                  >
+                    <option value="">Select alignment...</option>
+                    {ALIGNMENT_OPTIONS.map((alignment) => (
+                      <option key={alignment} value={alignment}>{alignment}</option>
+                    ))}
+                  </select>
                 </div>
 
                 {/* Visibility Dropdown */}

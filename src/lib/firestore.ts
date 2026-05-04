@@ -1,4 +1,4 @@
-import { CharacterData, CharacterInventoryItem } from '../types/character';
+import { CharacterData, CharacterGeneralItem, CharacterInventoryItem } from '../types/character';
 
 // ─── Firebase Firestore Abstraction ──────────────────────────────────────────
 
@@ -123,6 +123,7 @@ export const saveCharacter = async (character: CharacterData): Promise<void> => 
 export const saveCharacterInventory = async (
   characterId: string,
   inventory: CharacterInventoryItem[],
+  generalItems: CharacterGeneralItem[],
   userId: string | null
 ): Promise<void> => {
   const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
@@ -131,6 +132,7 @@ export const saveCharacterInventory = async (
   if (existIdx >= 0) {
     localData[existIdx] = {
       ...localData[existIdx],
+      generalItems,
       inventory,
     };
     localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(localData));
@@ -142,7 +144,7 @@ export const saveCharacterInventory = async (
   if (!fs) return;
 
   try {
-    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), { inventory }, { merge: true });
+    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), { inventory, generalItems }, { merge: true });
   } catch (err) {
     console.error('Failed to save inventory to Firestore:', err);
   }
