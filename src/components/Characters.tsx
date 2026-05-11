@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2 } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
 
 function evalCharFormula(formula: string, context: Record<string, number>): number {
   if (!formula) return 0;
@@ -384,10 +384,15 @@ export const Characters: React.FC = () => {
   const [charGeneralItems, setCharGeneralItems] = useState<CharacterGeneralItem[]>([]);
   const [expandedGeneralItemDescriptions, setExpandedGeneralItemDescriptions] = useState<string[]>([]);
   const [charInventory, setCharInventory] = useState<CharacterInventoryItem[]>([]);
+  const [inventoryFolders, setInventoryFolders] = useState<CharacterEntryFolder[]>([]);
+  const [collapsedInventoryFolders, setCollapsedInventoryFolders] = useState<string[]>([]);
   const [collapsedInventoryItems, setCollapsedInventoryItems] = useState<string[]>([]);
   const [expandedInventoryDescriptions, setExpandedInventoryDescriptions] = useState<string[]>([]);
   const [expandedInventoryActionDescriptions, setExpandedInventoryActionDescriptions] = useState<string[]>([]);
+  const [collapsedSheetQuickRoll, setCollapsedSheetQuickRoll] = useState(false);
   const [charSpells, setCharSpells] = useState<CharacterSpell[]>([]);
+  const [spellFolders, setSpellFolders] = useState<CharacterEntryFolder[]>([]);
+  const [collapsedSpellFolders, setCollapsedSpellFolders] = useState<string[]>([]);
   const [expandedSpellDescriptions, setExpandedSpellDescriptions] = useState<string[]>([]);
   const [expandedSpellActionDescriptions, setExpandedSpellActionDescriptions] = useState<string[]>([]);
   const [expandedBackstory, setExpandedBackstory] = useState(false);
@@ -477,7 +482,12 @@ export const Characters: React.FC = () => {
       setCharStatuses(selectedCharacter.statuses || []);
       setCharGeneralItems(selectedCharacter.generalItems || []);
       setCharInventory(selectedCharacter.inventory || []);
+      setInventoryFolders(selectedCharacter.inventoryFolders || []);
+      setCollapsedInventoryFolders(selectedCharacter.collapsedInventoryFolderIds || []);
+      setCollapsedSheetQuickRoll(selectedCharacter.collapsedSheetQuickRoll ?? false);
       setCharSpells(selectedCharacter.spells || []);
+      setSpellFolders(selectedCharacter.spellFolders || []);
+      setCollapsedSpellFolders(selectedCharacter.collapsedSpellFolderIds || []);
       setCollapsedInventoryItems((selectedCharacter.inventory || []).filter(item => item.hidden).map(item => item.id));
       setModFormula(selectedCharacter.modifierFormula || 'Math.floor((@value - 10) / 2)');
     }
@@ -696,6 +706,26 @@ export const Characters: React.FC = () => {
             nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
           }
         });
+
+        (item.actions || []).forEach(action => {
+          (action.effects || []).forEach(effect => {
+            if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
+              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+            }
+          });
+        });
+      });
+
+      (charSpells || []).forEach(spell => {
+        (spell.actions || []).forEach(action => {
+          (action.effects || []).forEach(effect => {
+            if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
+              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+            }
+          });
+        });
       });
 
       return nextValues;
@@ -842,6 +872,204 @@ export const Characters: React.FC = () => {
   const isCharacterOwner = !!selectedCharacter && (selectedCharacter.userId === userId || !selectedCharacter.userId);
   const canEditInventory = !!selectedCharacter && (isCharacterOwner || selectedCharacter.visibility === 'public');
 
+  const createFolder = (name: string, parentId?: string | null): CharacterEntryFolder => ({
+    id: `folder_${uid()}`,
+    name,
+    color: '#b45309',
+    parentId: parentId ?? null,
+    hidden: false,
+  });
+
+  const isFolderDescendant = (folders: CharacterEntryFolder[], folderId: string, possibleParentId: string | null | undefined): boolean => {
+    let current = possibleParentId ?? null;
+    while (current) {
+      if (current === folderId) return true;
+      current = folders.find(folder => folder.id === current)?.parentId ?? null;
+    }
+    return false;
+  };
+
+  const getFolderOptions = (folders: CharacterEntryFolder[], parentId: string | null = null, depth = 0): Array<{ id: string; label: string }> => {
+    const children = folders.filter(folder => (folder.parentId ?? null) === parentId);
+    return children.flatMap(folder => [
+      { id: folder.id, label: `${'— '.repeat(depth)}${folder.name || 'Untitled Folder'}` },
+      ...getFolderOptions(folders, folder.id, depth + 1),
+    ]);
+  };
+
+  const getFolderDepth = (folders: CharacterEntryFolder[], folderId: string | null | undefined): number => {
+    let depth = 0;
+    let current = folderId ?? null;
+    while (current) {
+      current = folders.find(folder => folder.id === current)?.parentId ?? null;
+      depth += 1;
+    }
+    return depth;
+  };
+
+  const getFolderPathLabel = (folders: CharacterEntryFolder[], folderId: string | null | undefined): string => {
+    const names: string[] = [];
+    let current = folderId ?? null;
+    while (current) {
+      const folder = folders.find(entry => entry.id === current);
+      if (!folder) break;
+      names.unshift(folder.name || 'Untitled Folder');
+      current = folder.parentId ?? null;
+    }
+    return names.join(' / ');
+  };
+
+  const getOrderedFolders = (folders: CharacterEntryFolder[], parentId: string | null = null): CharacterEntryFolder[] => {
+    const directChildren = folders.filter(folder => (folder.parentId ?? null) === parentId);
+    return directChildren.flatMap(folder => [folder, ...getOrderedFolders(folders, folder.id)]);
+  };
+
+  const getFolderOrderIndex = (folders: CharacterEntryFolder[], folderId: string | null | undefined): number => {
+    if (!folderId) return -1;
+    return getOrderedFolders(folders).findIndex(folder => folder.id === folderId);
+  };
+
+  const isFolderVisible = (folders: CharacterEntryFolder[], folderId: string | null | undefined): boolean => {
+    let current = folderId ?? null;
+    while (current) {
+      const folder = folders.find(entry => entry.id === current);
+      if (!folder) break;
+      if (folder.hidden) return false;
+      current = folder.parentId ?? null;
+    }
+    return true;
+  };
+
+  const getCollapsedFolderAncestor = (
+    folders: CharacterEntryFolder[],
+    collapsedFolderIds: string[],
+    folderId: string | null | undefined
+  ): string | null => {
+    let current = folderId ?? null;
+    let collapsedAncestor: string | null = null;
+    while (current) {
+      if (collapsedFolderIds.includes(current)) {
+        collapsedAncestor = current;
+      }
+      current = folders.find(entry => entry.id === current)?.parentId ?? null;
+    }
+    return collapsedAncestor;
+  };
+
+  const updateInventoryFolder = (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => {
+    setInventoryFolders(prev => prev.map(folder => folder.id === folderId ? updater(folder) : folder));
+  };
+
+  const moveInventoryFolder = (folderId: string, direction: 'up' | 'down') => {
+    setInventoryFolders(prev => {
+      const index = prev.findIndex(folder => folder.id === folderId);
+      if (index < 0) return prev;
+      const parentId = prev[index].parentId ?? null;
+      const siblingIndexes = prev
+        .map((folder, idx) => ({ folder, idx }))
+        .filter(entry => (entry.folder.parentId ?? null) === parentId)
+        .map(entry => entry.idx);
+      const siblingPosition = siblingIndexes.indexOf(index);
+      const targetSiblingPosition = direction === 'up' ? siblingPosition - 1 : siblingPosition + 1;
+      if (siblingPosition < 0 || targetSiblingPosition < 0 || targetSiblingPosition >= siblingIndexes.length) return prev;
+
+      const targetIndex = siblingIndexes[targetSiblingPosition];
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      const insertIndex = index < targetIndex ? targetIndex : targetIndex;
+      next.splice(insertIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addInventoryFolder = (parentId: string | null = null) => {
+    setInventoryFolders(prev => [...prev, createFolder('New Inventory Folder', parentId)]);
+  };
+
+  const removeInventoryFolder = (folderId: string) => {
+    setInventoryFolders(prev => {
+      const folder = prev.find(entry => entry.id === folderId);
+      const nextParentId = folder?.parentId ?? null;
+      const descendants = new Set<string>();
+      const collectDescendants = (parent: string) => {
+        prev.forEach(entry => {
+          if ((entry.parentId ?? null) === parent) {
+            descendants.add(entry.id);
+            collectDescendants(entry.id);
+          }
+        });
+      };
+      collectDescendants(folderId);
+
+      setCharInventory(items => items.map(item => {
+        if (item.folderId === folderId) return { ...item, folderId: nextParentId };
+        if (item.folderId && descendants.has(item.folderId)) return { ...item, folderId: nextParentId };
+        return item;
+      }));
+
+      return prev
+        .filter(entry => entry.id !== folderId)
+        .map(entry => descendants.has(entry.id) ? { ...entry, parentId: nextParentId } : entry);
+    });
+  };
+
+  const updateSpellFolder = (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => {
+    setSpellFolders(prev => prev.map(folder => folder.id === folderId ? updater(folder) : folder));
+  };
+
+  const moveSpellFolder = (folderId: string, direction: 'up' | 'down') => {
+    setSpellFolders(prev => {
+      const index = prev.findIndex(folder => folder.id === folderId);
+      if (index < 0) return prev;
+      const parentId = prev[index].parentId ?? null;
+      const siblingIndexes = prev
+        .map((folder, idx) => ({ folder, idx }))
+        .filter(entry => (entry.folder.parentId ?? null) === parentId)
+        .map(entry => entry.idx);
+      const siblingPosition = siblingIndexes.indexOf(index);
+      const targetSiblingPosition = direction === 'up' ? siblingPosition - 1 : siblingPosition + 1;
+      if (siblingPosition < 0 || targetSiblingPosition < 0 || targetSiblingPosition >= siblingIndexes.length) return prev;
+
+      const targetIndex = siblingIndexes[targetSiblingPosition];
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      const insertIndex = index < targetIndex ? targetIndex : targetIndex;
+      next.splice(insertIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addSpellFolder = (parentId: string | null = null) => {
+    setSpellFolders(prev => [...prev, createFolder('New Spell Folder', parentId)]);
+  };
+
+  const removeSpellFolder = (folderId: string) => {
+    setSpellFolders(prev => {
+      const folder = prev.find(entry => entry.id === folderId);
+      const nextParentId = folder?.parentId ?? null;
+      const descendants = new Set<string>();
+      const collectDescendants = (parent: string) => {
+        prev.forEach(entry => {
+          if ((entry.parentId ?? null) === parent) {
+            descendants.add(entry.id);
+            collectDescendants(entry.id);
+          }
+        });
+      };
+      collectDescendants(folderId);
+
+      setCharSpells(items => items.map(item => {
+        if (item.folderId === folderId) return { ...item, folderId: nextParentId };
+        if (item.folderId && descendants.has(item.folderId)) return { ...item, folderId: nextParentId };
+        return item;
+      }));
+
+      return prev
+        .filter(entry => entry.id !== folderId)
+        .map(entry => descendants.has(entry.id) ? { ...entry, parentId: nextParentId } : entry);
+    });
+  };
+
   const addInventoryItem = () => {
     setCharInventory(prev => [
       ...prev,
@@ -857,6 +1085,7 @@ export const Characters: React.FC = () => {
         effects: [],
         actions: [],
         hidden: false,
+        folderId: null,
       },
     ]);
   };
@@ -1152,7 +1381,7 @@ export const Characters: React.FC = () => {
   const addInventoryAction = (itemId: string) => {
     updateInventoryItem(itemId, item => ({
       ...item,
-      actions: [...(item.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [] }],
+      actions: [...(item.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] }],
     }));
   };
 
@@ -1195,6 +1424,27 @@ export const Characters: React.FC = () => {
       actions: (item.actions || []).map(action => action.id === actionId
         ? { ...action, macros: (action.macros || []).filter(macro => macro.id !== macroId) }
         : action),
+    }));
+  };
+
+  const addInventoryActionEffect = (itemId: string, actionId: string) => {
+    updateInventoryAction(itemId, actionId, current => ({
+      ...current,
+      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+    }));
+  };
+
+  const updateInventoryActionEffect = (itemId: string, actionId: string, effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => {
+    updateInventoryAction(itemId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).map((effect, index) => index === effectIndex ? updater(effect) : effect),
+    }));
+  };
+
+  const removeInventoryActionEffect = (itemId: string, actionId: string, effectIndex: number) => {
+    updateInventoryAction(itemId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).filter((_, index) => index !== effectIndex),
     }));
   };
 
@@ -1254,6 +1504,7 @@ export const Characters: React.FC = () => {
         color: '#7c3aed',
         macros: [],
         hidden: false,
+        folderId: null,
       },
     ]);
   };
@@ -1320,7 +1571,7 @@ export const Characters: React.FC = () => {
   const addSpellAction = (spellId: string) => {
     updateSpell(spellId, spell => ({
       ...spell,
-      actions: [...(spell.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [] }],
+      actions: [...(spell.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] }],
     }));
   };
 
@@ -1363,6 +1614,27 @@ export const Characters: React.FC = () => {
       actions: (spell.actions || []).map(action => action.id === actionId
         ? { ...action, macros: (action.macros || []).filter(macro => macro.id !== macroId) }
         : action),
+    }));
+  };
+
+  const addSpellActionEffect = (spellId: string, actionId: string) => {
+    updateSpellAction(spellId, actionId, current => ({
+      ...current,
+      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+    }));
+  };
+
+  const updateSpellActionEffect = (spellId: string, actionId: string, effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => {
+    updateSpellAction(spellId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).map((effect, index) => index === effectIndex ? updater(effect) : effect),
+    }));
+  };
+
+  const removeSpellActionEffect = (spellId: string, actionId: string, effectIndex: number) => {
+    updateSpellAction(spellId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).filter((_, index) => index !== effectIndex),
     }));
   };
 
@@ -2056,6 +2328,8 @@ export const Characters: React.FC = () => {
       attributeSectionColumns: DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
       skills: [],
       generalItems: [],
+      inventoryFolders: [],
+      spellFolders: [],
       createdAt: Date.now(),
     };
     await saveCharacter(newChar);
@@ -2068,9 +2342,9 @@ export const Characters: React.FC = () => {
 
     if (!isCharacterOwner) {
       if (!canEditInventory) return;
-      await saveCharacterInventory(selectedCharacter.id, charInventory, charGeneralItems, userId);
-      const updated = { ...selectedCharacter, generalItems: charGeneralItems, inventory: charInventory };
-      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: charGeneralItems, inventory: charInventory } : c)));
+      await saveCharacterInventory(selectedCharacter.id, charInventory, inventoryFolders, collapsedInventoryFolders, charGeneralItems, userId);
+      const updated = { ...selectedCharacter, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders };
+      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders } : c)));
       setSelectedCharacter(updated);
       return;
     }
@@ -2103,7 +2377,12 @@ export const Characters: React.FC = () => {
       statuses: charStatuses,
       generalItems: charGeneralItems,
       inventory: charInventory,
+      inventoryFolders,
+      collapsedInventoryFolderIds: collapsedInventoryFolders,
+      collapsedSheetQuickRoll,
       spells: charSpells,
+      spellFolders,
+      collapsedSpellFolderIds: collapsedSpellFolders,
       modifierFormula: modFormula,
     };
     await saveCharacter(updated);
@@ -2128,9 +2407,142 @@ export const Characters: React.FC = () => {
     if (selectedCharacter?.id === id) setSelectedCharacter(next[0] || null);
   };
 
-  const handleAddToBattleTracker = (e: React.MouseEvent, characterName: string) => {
-    e.stopPropagation();
+  const handleAddToBattleTracker = (characterName: string) => {
     addCombatantToBattleTracker(characterName);
+  };
+
+  const renderFolderTree = (
+    folders: CharacterEntryFolder[],
+    options: {
+      editable: boolean;
+      emptyLabel: string;
+      onAddRoot: () => void;
+      onAddChild: (parentId: string) => void;
+      onMove: (folderId: string, direction: 'up' | 'down') => void;
+      onUpdate: (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => void;
+      onRemove: (folderId: string) => void;
+    }
+  ) => {
+    const renderNodes = (parentId: string | null = null, depth = 0): React.ReactNode => {
+      const nodes = folders.filter(folder => (folder.parentId ?? null) === parentId);
+      if (nodes.length === 0) return null;
+
+      return (
+        <div className="space-y-2">
+          {nodes.map((folder) => (
+            <div
+              key={folder.id}
+              className="rounded-lg border p-3"
+              style={{
+                marginLeft: `${depth * 20}px`,
+                borderColor: `${folder.color || '#b45309'}55`,
+                background: `linear-gradient(135deg, ${folder.color || '#b45309'}18, rgba(12, 10, 9, 0.42))`,
+              }}
+            >
+              <div className="flex flex-wrap items-center gap-2">
+                <input
+                  type="text"
+                  value={folder.name}
+                  onChange={(e) => options.onUpdate(folder.id, current => ({ ...current, name: e.target.value }))}
+                  disabled={!options.editable}
+                  className="min-w-[160px] flex-1 bg-stone-900/70 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                  placeholder="Folder name"
+                />
+                <input
+                  type="color"
+                  value={folder.color || '#b45309'}
+                  onChange={(e) => options.onUpdate(folder.id, current => ({ ...current, color: e.target.value }))}
+                  disabled={!options.editable}
+                  className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
+                />
+                <select
+                  value={folder.parentId ?? ''}
+                  onChange={(e) => options.onUpdate(folder.id, current => {
+                    const nextParentId = e.target.value || null;
+                    if (nextParentId === folder.id || isFolderDescendant(folders, folder.id, nextParentId)) {
+                      return current;
+                    }
+                    return { ...current, parentId: nextParentId };
+                  })}
+                  disabled={!options.editable}
+                  className="min-w-[180px] bg-stone-900/70 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                >
+                  <option value="">Root</option>
+                  {getFolderOptions(folders)
+                    .filter(option => option.id !== folder.id)
+                    .map(option => (
+                      <option key={option.id} value={option.id}>
+                        {option.label}
+                      </option>
+                    ))}
+                </select>
+                <button
+                  onClick={() => options.onUpdate(folder.id, current => ({ ...current, hidden: !current.hidden }))}
+                  className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                >
+                  {folder.hidden ? 'Show' : 'Hide'}
+                </button>
+                {options.editable && (
+                  <>
+                    <button
+                      onClick={() => options.onAddChild(folder.id)}
+                      className="px-2 py-1 text-xs bg-amber-900/20 hover:bg-amber-900/40 rounded text-amber-300 cursor-pointer"
+                    >
+                      + Subfolder
+                    </button>
+                    <button
+                      onClick={() => options.onMove(folder.id, 'up')}
+                      disabled={nodes[0]?.id === folder.id}
+                      className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowUp size={14} />
+                    </button>
+                    <button
+                      onClick={() => options.onMove(folder.id, 'down')}
+                      disabled={nodes[nodes.length - 1]?.id === folder.id}
+                      className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                    >
+                      <ArrowDown size={14} />
+                    </button>
+                    <button
+                      onClick={() => options.onRemove(folder.id)}
+                      className="p-1.5 text-stone-500 hover:text-red-400 cursor-pointer"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </>
+                )}
+              </div>
+              {renderNodes(folder.id, depth + 1)}
+            </div>
+          ))}
+        </div>
+      );
+    };
+
+    return (
+      <div className="mb-6 rounded-xl border border-amber-800/20 bg-black/20 p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h4 className="text-lg font-bold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>Folders</h4>
+            <p className="text-sm text-stone-500">Nested categories with color and show/hide controls.</p>
+          </div>
+          {options.editable && (
+            <button
+              onClick={options.onAddRoot}
+              className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-sm text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+            >
+              + Add Folder
+            </button>
+          )}
+        </div>
+        {folders.length === 0 ? (
+          <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+            {options.emptyLabel}
+          </div>
+        ) : renderNodes()}
+      </div>
+    );
   };
 
   // ── Full Character Sheet ─────────────────────────────────────────────────────
@@ -2366,7 +2778,8 @@ export const Characters: React.FC = () => {
           onChange={handleImportAttributePresetFile}
           className="hidden"
         />
-        <div className="flex justify-between items-center mb-6 pb-4 border-b border-amber-800/40">
+        <div className="sticky top-3 z-30 mb-6 border border-amber-700/40 bg-stone-950/88 backdrop-blur-md rounded-2xl px-4 py-3 shadow-[0_12px_30px_rgba(0,0,0,0.32)]">
+          <div className="flex flex-wrap justify-between items-center gap-3">
           <button onClick={() => setIsViewingSheet(false)} className="flex items-center gap-2 text-amber-500 hover:text-amber-300 font-bold tracking-wider cursor-pointer" style={{ fontFamily: "'Cinzel', serif" }}>
             <ArrowLeft size={20} /> Back to List
           </button>
@@ -2389,6 +2802,7 @@ export const Characters: React.FC = () => {
             <button onClick={handleSaveAll} disabled={!canEditInventory && !isCharacterOwner} className="flex items-center gap-2 px-4 py-2 bg-amber-900/40 border border-amber-800/40 rounded hover:bg-amber-900/60 hover:border-amber-500/80 text-amber-200 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
               <Save size={16} /> Save
             </button>
+          </div>
           </div>
         </div>
 
@@ -2672,6 +3086,30 @@ export const Characters: React.FC = () => {
                   {charTags.length === 0 && <span className="text-[10px] text-stone-600 italic">No tags added yet.</span>}
                 </div>
               </div>
+            </div>
+          </div>
+
+          <div className="rounded-2xl border border-emerald-800/30 bg-gradient-to-br from-emerald-950/26 via-black/20 to-teal-950/16 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(6,78,59,0.16)]">
+            <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-emerald-400/80 via-teal-400/45 to-transparent"></div>
+            <div className="relative z-10">
+              <div className="flex items-center justify-between border-b border-emerald-800/30 pb-3 mb-4">
+                <div>
+                  <div className="inline-flex items-center rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-emerald-200 mb-2">
+                    Tactics
+                  </div>
+                  <h3 className="text-xl font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                    ✦ Quick Roll & Dice
+                  </h3>
+                  <p className="text-xs text-emerald-100/55 mt-1">Fast rolls, macros, and Discord sending for this character sheet.</p>
+                </div>
+                <button
+                  onClick={() => setCollapsedSheetQuickRoll(prev => !prev)}
+                  className="px-3 py-1.5 text-xs text-emerald-100 border border-emerald-700/40 rounded hover:bg-emerald-900/20 cursor-pointer"
+                >
+                  {collapsedSheetQuickRoll ? 'Show' : 'Collapse'}
+                </button>
+              </div>
+              {!collapsedSheetQuickRoll && renderDicePanel('sheet')}
             </div>
           </div>
 
@@ -3055,13 +3493,20 @@ export const Characters: React.FC = () => {
               </div>
             </div>
 
-            <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
+            <div className="border border-orange-700/35 bg-gradient-to-br from-orange-950/30 via-black/25 to-amber-950/20 p-6 rounded-2xl relative overflow-hidden shadow-[0_18px_50px_rgba(120,53,15,0.18)]">
               <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/parchment.png')] pointer-events-none"></div>
+              <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-orange-400/80 via-amber-500/50 to-transparent"></div>
               <div className="relative z-10">
-                <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
-                  <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-                    ✦ Statuses & Effects
-                  </h3>
+                <div className="flex items-center justify-between border-b border-orange-700/30 pb-3 mb-4">
+                  <div>
+                    <div className="inline-flex items-center rounded-full border border-orange-500/30 bg-orange-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-orange-200 mb-2">
+                      Conditions
+                    </div>
+                    <h3 className="text-xl font-bold text-orange-200" style={{ fontFamily: "'Cinzel', serif" }}>
+                      ✦ Statuses & Effects
+                    </h3>
+                    <p className="text-xs text-orange-100/55 mt-1">Temporary conditions, active modifiers, and encounter-state effects.</p>
+                  </div>
                   <button
                     onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [], color: '#f59e0b', hidden: false }])}
                     className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
@@ -3213,15 +3658,21 @@ export const Characters: React.FC = () => {
                     </div>
                   ))}
                 </div>
+              </div>
+            </div>
 
-                <div className="mt-8 pt-6 border-t border-amber-800/20">
-                  <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
+                <div className="rounded-2xl border border-sky-800/30 bg-gradient-to-br from-sky-950/28 via-black/20 to-cyan-950/18 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(8,47,73,0.16)]">
+                  <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-sky-400/80 via-cyan-500/45 to-transparent"></div>
+                  <div className="flex items-center justify-between border-b border-sky-800/30 pb-3 mb-4 relative z-10">
                     <div>
-                      <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+                      <div className="inline-flex items-center rounded-full border border-sky-500/30 bg-sky-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-sky-200 mb-2">
+                        Gear
+                      </div>
+                      <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>
                         ✦ Inventory
                       </h3>
-                      <p className="text-xs text-stone-500 mt-1">
-                        Use item macros with character attribute IDs like <code className="font-mono text-emerald-400">@str_mod</code> or <code className="font-mono text-emerald-400">@hp_current</code>.
+                      <p className="text-xs text-sky-100/55 mt-1">
+                        Weapons, armor, trinkets, and item actions. Folder groups show loadout structure at a glance.
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
@@ -3241,6 +3692,16 @@ export const Characters: React.FC = () => {
                       Inventory can be edited by the owner, or by anyone when the character is public.
                     </div>
                   )}
+
+                  {renderFolderTree(inventoryFolders, {
+                    editable: canEditInventory,
+                    emptyLabel: 'No inventory folders yet.',
+                    onAddRoot: () => addInventoryFolder(),
+                    onAddChild: (parentId) => addInventoryFolder(parentId),
+                    onMove: moveInventoryFolder,
+                    onUpdate: updateInventoryFolder,
+                    onRemove: removeInventoryFolder,
+                  })}
 
                   <div className="mb-6 rounded-xl border border-amber-800/20 bg-black/20 p-4">
                     <div className="flex items-center justify-between mb-3">
@@ -3343,13 +3804,67 @@ export const Characters: React.FC = () => {
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {charInventory.map((item, itemIndex) => {
+                      {charInventory
+                        .filter(item => isFolderVisible(inventoryFolders, item.folderId))
+                        .sort((a, b) => {
+                          const orderA = getFolderOrderIndex(inventoryFolders, a.folderId);
+                          const orderB = getFolderOrderIndex(inventoryFolders, b.folderId);
+                          if (orderA !== orderB) return orderA - orderB;
+                          return charInventory.findIndex(item => item.id === a.id) - charInventory.findIndex(item => item.id === b.id);
+                        })
+                        .map((item, itemIndex, visibleInventory) => {
+                        const collapsedAncestorId = getCollapsedFolderAncestor(inventoryFolders, collapsedInventoryFolders, item.folderId);
+                        const effectiveFolderId = collapsedAncestorId ?? item.folderId ?? null;
+                        const previousCollapsedAncestorId = itemIndex > 0 ? getCollapsedFolderAncestor(inventoryFolders, collapsedInventoryFolders, visibleInventory[itemIndex - 1].folderId) : null;
+                        const previousFolderId = itemIndex > 0 ? (previousCollapsedAncestorId ?? visibleInventory[itemIndex - 1].folderId ?? null) : null;
                         const rarityKey = item.rarity || 'common';
                         const rarityStyle = INVENTORY_RARITY_STYLES[rarityKey];
                         const isDescriptionExpanded = expandedInventoryDescriptions.includes(item.id);
                         const isCollapsed = collapsedInventoryItems.includes(item.id);
+                        const folderLabel = getFolderPathLabel(inventoryFolders, effectiveFolderId);
+                        const folderDepth = getFolderDepth(inventoryFolders, effectiveFolderId);
+                        const isFolderSectionCollapsed = !!collapsedAncestorId;
                         return (
-                        <div key={item.id} className={`border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${item.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
+                        <React.Fragment key={item.id}>
+                        {folderLabel && previousFolderId !== effectiveFolderId && (
+                          <div
+                            className="relative rounded-lg border px-4 py-2 text-sm font-bold tracking-wide text-amber-100 flex items-center justify-between gap-3"
+                            style={{
+                              marginLeft: `${Math.max(0, folderDepth - 1) * 20}px`,
+                              borderColor: `${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}55`,
+                              background: `${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}18`,
+                            }}
+                          >
+                            {folderDepth > 0 && (
+                              <div
+                                className="absolute -left-4 top-1/2 h-px w-4"
+                                style={{ backgroundColor: `${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}88` }}
+                              />
+                            )}
+                            <span>{folderLabel}</span>
+                            <button
+                              onClick={() => effectiveFolderId && setCollapsedInventoryFolders(prev => prev.includes(effectiveFolderId) ? prev.filter(id => id !== effectiveFolderId) : [...prev, effectiveFolderId])}
+                              className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer shrink-0"
+                            >
+                              {isFolderSectionCollapsed ? 'Show' : 'Collapse'}
+                            </button>
+                          </div>
+                        )}
+                        {!isFolderSectionCollapsed && (
+                        <div className="relative" style={{ marginLeft: `${folderDepth * 20}px` }}>
+                        {effectiveFolderId && (
+                          <div
+                            className="absolute -left-4 top-0 bottom-0 w-px"
+                            style={{ background: `linear-gradient(to bottom, ${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}aa, ${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}22)` }}
+                          />
+                        )}
+                        <div className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${item.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
+                          {effectiveFolderId && (
+                            <div
+                              className="absolute -left-4 top-7 h-px w-4"
+                              style={{ backgroundColor: `${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}88` }}
+                            />
+                          )}
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex flex-wrap items-center gap-2">
                               <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] border rounded-full ${rarityStyle.badge}`}>
@@ -3379,7 +3894,7 @@ export const Characters: React.FC = () => {
                                   </button>
                                   <button
                                     onClick={() => moveInventoryItem(item.id, 'down')}
-                                    disabled={itemIndex === charInventory.length - 1}
+                                    disabled={itemIndex === visibleInventory.length - 1}
                                     className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                                   >
                                     <ArrowDown size={15} />
@@ -3440,6 +3955,19 @@ export const Characters: React.FC = () => {
                               {INVENTORY_RARITIES.map((rarity) => (
                                 <option key={rarity} value={rarity}>
                                   {INVENTORY_RARITY_STYLES[rarity].label}
+                                </option>
+                              ))}
+                            </select>
+                            <select
+                              value={item.folderId ?? ''}
+                              onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, folderId: e.target.value || null }))}
+                              disabled={!canEditInventory}
+                              className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            >
+                              <option value="">No folder</option>
+                              {getFolderOptions(inventoryFolders).map(option => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
                                 </option>
                               ))}
                             </select>
@@ -3605,7 +4133,7 @@ export const Characters: React.FC = () => {
                                       </button>
                                       <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
                                         <div className="flex justify-between items-center mb-2">
-                                          <label className="text-sm font-bold text-stone-300">Item Macros</label>
+                                          <label className="text-sm font-bold text-stone-300">Action Macros</label>
                                           {canEditInventory && (
                                             <button
                                               onClick={() => addInventoryActionMacro(item.id, action.id)}
@@ -3648,6 +4176,61 @@ export const Characters: React.FC = () => {
                                                   >
                                                     <Trash2 size={14} />
                                                   </button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
+                                      <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <label className="text-sm font-bold text-stone-300">Effects</label>
+                                          {canEditInventory && (
+                                            <button
+                                              onClick={() => addInventoryActionEffect(item.id, action.id)}
+                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                            >
+                                              + Add Effect
+                                            </button>
+                                          )}
+                                        </div>
+                                        {(action.effects || []).length === 0 ? (
+                                          <span className="text-[10px] text-stone-600 italic">No effects added.</span>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(action.effects || []).map((effect, effectIndex) => (
+                                              <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
+                                                <button
+                                                  onClick={() => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
+                                                  className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+                                                >
+                                                  {(effect.active ?? true) ? 'On' : 'Off'}
+                                                </button>
+                                                <input
+                                                  type="text"
+                                                  value={effect.targetId}
+                                                  onChange={(e) => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
+                                                  disabled={!canEditInventory}
+                                                  placeholder="Target ID (e.g. str_mod)"
+                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                <input
+                                                  type="text"
+                                                  value={effect.value}
+                                                  onChange={(e) => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))}
+                                                  disabled={!canEditInventory}
+                                                  placeholder="Value (e.g. +2)"
+                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                {canEditInventory ? (
+                                                  <button
+                                                    onClick={() => removeInventoryActionEffect(item.id, action.id, effectIndex)}
+                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                ) : (
+                                                  <div />
                                                 )}
                                               </div>
                                             ))}
@@ -3720,19 +4303,26 @@ export const Characters: React.FC = () => {
                           </>
                           )}
                         </div>
+                        </div>
+                        )}
+                        </React.Fragment>
                       )})}
                     </div>
                   )}
                 </div>
 
-                <div className="mt-8 pt-6 border-t border-amber-800/20">
-                  <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
+                <div className="rounded-2xl border border-violet-800/30 bg-gradient-to-br from-violet-950/30 via-black/22 to-fuchsia-950/16 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(76,29,149,0.18)]">
+                  <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-violet-400/85 via-fuchsia-500/45 to-transparent"></div>
+                  <div className="flex items-center justify-between border-b border-violet-800/30 pb-3 mb-4 relative z-10">
                     <div>
-                      <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+                      <div className="inline-flex items-center rounded-full border border-violet-500/30 bg-violet-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-violet-200 mb-2">
+                        Arcana
+                      </div>
+                      <h3 className="text-xl font-bold text-violet-100" style={{ fontFamily: "'Cinzel', serif" }}>
                         ✦ Spells & Abilities
                       </h3>
-                      <p className="text-xs text-stone-500 mt-1">
-                        Add spell details, choose a card color, and attach macros that can reference character attribute IDs.
+                      <p className="text-xs text-violet-100/55 mt-1">
+                        Magic, techniques, and powers. Folder groups help separate schools, loadouts, or situational kits.
                       </p>
                     </div>
                     {isCharacterOwner && (
@@ -3751,22 +4341,84 @@ export const Characters: React.FC = () => {
                     </div>
                   )}
 
+                  {renderFolderTree(spellFolders, {
+                    editable: isCharacterOwner,
+                    emptyLabel: 'No spell folders yet.',
+                    onAddRoot: () => addSpellFolder(),
+                    onAddChild: (parentId) => addSpellFolder(parentId),
+                    onMove: moveSpellFolder,
+                    onUpdate: updateSpellFolder,
+                    onRemove: removeSpellFolder,
+                  })}
+
                   {charSpells.length === 0 ? (
                     <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
                       No spells or abilities yet.
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {charSpells.map((spell) => (
+                      {charSpells
+                        .filter(spell => isFolderVisible(spellFolders, spell.folderId))
+                        .sort((a, b) => {
+                          const orderA = getFolderOrderIndex(spellFolders, a.folderId);
+                          const orderB = getFolderOrderIndex(spellFolders, b.folderId);
+                          if (orderA !== orderB) return orderA - orderB;
+                          return charSpells.findIndex(spell => spell.id === a.id) - charSpells.findIndex(spell => spell.id === b.id);
+                        })
+                        .map((spell, spellIndex, visibleSpells) => {
+                        const collapsedAncestorId = getCollapsedFolderAncestor(spellFolders, collapsedSpellFolders, spell.folderId);
+                        const effectiveFolderId = collapsedAncestorId ?? spell.folderId ?? null;
+                        const previousCollapsedAncestorId = spellIndex > 0 ? getCollapsedFolderAncestor(spellFolders, collapsedSpellFolders, visibleSpells[spellIndex - 1].folderId) : null;
+                        const previousFolderId = spellIndex > 0 ? (previousCollapsedAncestorId ?? visibleSpells[spellIndex - 1].folderId ?? null) : null;
+                        const isFolderSectionCollapsed = !!collapsedAncestorId;
+                        return (
+                        <React.Fragment key={spell.id}>
+                        {getFolderPathLabel(spellFolders, effectiveFolderId) && previousFolderId !== effectiveFolderId && (
+                          <div
+                            className="relative rounded-lg border px-4 py-2 text-sm font-bold tracking-wide text-amber-100 flex items-center justify-between gap-3"
+                            style={{
+                              marginLeft: `${Math.max(0, getFolderDepth(spellFolders, effectiveFolderId) - 1) * 20}px`,
+                              borderColor: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}55`,
+                              background: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}18`,
+                            }}
+                          >
+                            {getFolderDepth(spellFolders, effectiveFolderId) > 0 && (
+                              <div
+                                className="absolute -left-4 top-1/2 h-px w-4"
+                                style={{ backgroundColor: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}88` }}
+                              />
+                            )}
+                            <span>{getFolderPathLabel(spellFolders, effectiveFolderId)}</span>
+                            <button
+                              onClick={() => effectiveFolderId && setCollapsedSpellFolders(prev => prev.includes(effectiveFolderId) ? prev.filter(id => id !== effectiveFolderId) : [...prev, effectiveFolderId])}
+                              className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer shrink-0"
+                            >
+                              {isFolderSectionCollapsed ? 'Show' : 'Collapse'}
+                            </button>
+                          </div>
+                        )}
+                        {!isFolderSectionCollapsed && (
+                        <div className="relative" style={{ marginLeft: `${getFolderDepth(spellFolders, effectiveFolderId) * 20}px` }}>
+                        {effectiveFolderId && (
+                          <div
+                            className="absolute -left-4 top-0 bottom-0 w-px"
+                            style={{ background: `linear-gradient(to bottom, ${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}aa, ${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}22)` }}
+                          />
+                        )}
                         <div
-                          key={spell.id}
-                          className="rounded-xl border p-4 shadow-lg flex flex-col gap-3"
+                          className="relative rounded-xl border p-4 shadow-lg flex flex-col gap-3"
                           style={{
                             borderColor: `${spell.color || '#7c3aed'}88`,
                             background: `linear-gradient(135deg, ${spell.color || '#7c3aed'}22, rgba(12, 10, 9, 0.72))`,
                             boxShadow: `0 8px 24px ${spell.color || '#7c3aed'}22`,
                           }}
                         >
+                          {effectiveFolderId && (
+                            <div
+                              className="absolute -left-4 top-7 h-px w-4"
+                              style={{ backgroundColor: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}88` }}
+                            />
+                          )}
                           <div className="flex items-start justify-between gap-3">
                             <div className="flex items-center gap-2">
                               <span
@@ -3779,14 +4431,14 @@ export const Characters: React.FC = () => {
                               <div className="flex items-center gap-1">
                                 <button
                                   onClick={() => moveSpell(spell.id, 'up')}
-                                  disabled={charSpells[0]?.id === spell.id}
+                                  disabled={spellIndex === 0}
                                   className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <ArrowUp size={15} />
                                 </button>
                                 <button
                                   onClick={() => moveSpell(spell.id, 'down')}
-                                  disabled={charSpells[charSpells.length - 1]?.id === spell.id}
+                                  disabled={spellIndex === visibleSpells.length - 1}
                                   className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <ArrowDown size={15} />
@@ -3842,6 +4494,19 @@ export const Characters: React.FC = () => {
                             >
                               {spell.hidden ? 'Show' : 'Hide'}
                             </button>
+                            <select
+                              value={spell.folderId ?? ''}
+                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, folderId: e.target.value || null }))}
+                              disabled={!isCharacterOwner}
+                              className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            >
+                              <option value="">No folder</option>
+                              {getFolderOptions(spellFolders).map(option => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
                           </div>
                           {!spell.hidden && (
                           <>
@@ -4028,7 +4693,7 @@ export const Characters: React.FC = () => {
                                       </button>
                                       <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
                                         <div className="flex justify-between items-center mb-2">
-                                          <label className="text-sm font-bold text-stone-300">Item Macros</label>
+                                          <label className="text-sm font-bold text-stone-300">Action Macros</label>
                                           {isCharacterOwner && (
                                             <button
                                               onClick={() => addSpellActionMacro(spell.id, action.id)}
@@ -4077,6 +4742,61 @@ export const Characters: React.FC = () => {
                                           </div>
                                         )}
                                       </div>
+                                      <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                        <div className="flex justify-between items-center mb-2">
+                                          <label className="text-sm font-bold text-stone-300">Effects</label>
+                                          {isCharacterOwner && (
+                                            <button
+                                              onClick={() => addSpellActionEffect(spell.id, action.id)}
+                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                            >
+                                              + Add Effect
+                                            </button>
+                                          )}
+                                        </div>
+                                        {(action.effects || []).length === 0 ? (
+                                          <span className="text-[10px] text-stone-600 italic">No effects added.</span>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(action.effects || []).map((effect, effectIndex) => (
+                                              <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
+                                                <button
+                                                  onClick={() => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
+                                                  className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+                                                >
+                                                  {(effect.active ?? true) ? 'On' : 'Off'}
+                                                </button>
+                                                <input
+                                                  type="text"
+                                                  value={effect.targetId}
+                                                  onChange={(e) => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
+                                                  disabled={!isCharacterOwner}
+                                                  placeholder="Target ID (e.g. str_mod)"
+                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                <input
+                                                  type="text"
+                                                  value={effect.value}
+                                                  onChange={(e) => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))}
+                                                  disabled={!isCharacterOwner}
+                                                  placeholder="Value (e.g. +2)"
+                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                                />
+                                                {isCharacterOwner ? (
+                                                  <button
+                                                    onClick={() => removeSpellActionEffect(spell.id, action.id, effectIndex)}
+                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                ) : (
+                                                  <div />
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
+                                      </div>
                                     </div>
                                   );
                                 })}
@@ -4086,14 +4806,13 @@ export const Characters: React.FC = () => {
                           </>
                           )}
                         </div>
-                      ))}
+                        </div>
+                        )}
+                        </React.Fragment>
+                      )})}
                     </div>
                   )}
                 </div>
-              </div>
-            </div>
-
-            {renderDicePanel('sheet')}
           </div>
         </div>
       </div>
@@ -4168,9 +4887,19 @@ export const Characters: React.FC = () => {
           <div className="rounded-xl border border-amber-800/40 bg-stone-950/40 p-5 h-[720px] flex flex-col overflow-hidden">
             <h3 className="text-lg text-amber-300 font-bold mb-4 flex items-center justify-between" style={{ fontFamily: "'Cinzel', serif" }}>
               <span>📜 Character List</span>
-              <span className="text-xs bg-amber-900/30 border border-amber-800/30 text-amber-400 px-2 py-0.5 rounded font-mono">
-                {filteredCharacters.length} / {characters.length}
-              </span>
+              <div className="flex items-center gap-2">
+                <button
+                  onClick={() => selectedCharacter && handleAddToBattleTracker(selectedCharacter.name)}
+                  disabled={!selectedCharacter}
+                  className="px-2.5 py-1 text-[10px] rounded border border-blue-800/40 bg-blue-950/30 text-blue-200 hover:bg-blue-900/40 hover:border-blue-500/60 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  title={selectedCharacter ? `Add ${selectedCharacter.name} to Battle Tracker` : 'Select a character first'}
+                >
+                  Add Selected to Battle Tracker
+                </button>
+                <span className="text-xs bg-amber-900/30 border border-amber-800/30 text-amber-400 px-2 py-0.5 rounded font-mono">
+                  {filteredCharacters.length} / {characters.length}
+                </span>
+              </div>
             </h3>
             {filteredCharacters.length === 0 ? (
               <div className="text-stone-500 text-center py-16 border border-dashed border-stone-700 rounded-lg flex-1 flex items-center justify-center">
@@ -4222,13 +4951,6 @@ export const Characters: React.FC = () => {
                         </div>
                       </div>
                       <div className="flex items-center gap-1.5 shrink-0">
-                        <button
-                          onClick={(e) => handleAddToBattleTracker(e, char.name)}
-                          className="px-2 py-1 text-[10px] rounded border border-blue-800/40 bg-blue-950/30 text-blue-200 hover:bg-blue-900/40 hover:border-blue-500/60 transition-colors cursor-pointer"
-                          title="Add to Battle Tracker"
-                        >
-                          Add to Battle Tracker
-                        </button>
                         <button
                           onClick={(e) => handleToggleFav(e, char.id)}
                           className={`p-1.5 rounded-full hover:bg-amber-800/20 transition-colors cursor-pointer ${isFav ? 'text-amber-400' : 'text-stone-600 hover:text-stone-400'}`}
@@ -4285,36 +5007,6 @@ export const Characters: React.FC = () => {
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Vocation / Class</label>
                   <input value={editClass} onChange={(e) => setEditClass(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="Vanguard, Arcanist..." />
                 </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Age</label>
-                  <input value={editAge} onChange={(e) => setEditAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Body Age</label>
-                  <input value={editBodyAge} onChange={(e) => setEditBodyAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Mental Age</label>
-                  <input value={editMentalAge} onChange={(e) => setEditMentalAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Spiritual Age</label>
-                  <input value={editSpiritualAge} onChange={(e) => setEditSpiritualAge(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="27" />
-                </div>
-                <div>
-                  <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Alignment</label>
-                  <select
-                    value={editAlignment}
-                    onChange={(e) => setEditAlignment(e.target.value)}
-                    className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 cursor-pointer"
-                  >
-                    <option value="">Select alignment...</option>
-                    {ALIGNMENT_OPTIONS.map((alignment) => (
-                      <option key={alignment} value={alignment}>{alignment}</option>
-                    ))}
-                  </select>
-                </div>
-
                 {/* Visibility Dropdown */}
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Visibility</label>

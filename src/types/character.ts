@@ -24,6 +24,14 @@ export interface CharacterDiceMacro {
   formula: string;
 }
 
+export interface CharacterEntryFolder {
+  id: string;
+  name: string;
+  color: string;
+  parentId?: string | null;
+  hidden?: boolean;
+}
+
 export interface CharacterAction {
   id: string;
   name: string;
@@ -31,6 +39,7 @@ export interface CharacterAction {
   cost: string;
   usageRemaining: string;
   macros?: CharacterDiceMacro[];
+  effects?: StatusEffect[];
 }
 
 export interface CharacterDisplayStat {
@@ -68,6 +77,7 @@ export interface CharacterSpell {
   macros: CharacterDiceMacro[];
   actions?: CharacterAction[];
   hidden?: boolean;
+  folderId?: string | null;
 }
 
 export interface CharacterGeneralItem {
@@ -90,6 +100,7 @@ export interface CharacterInventoryItem {
   effects?: StatusEffect[];
   actions?: CharacterAction[];
   hidden?: boolean;
+  folderId?: string | null;
 }
 
 export interface StatusEffect {
@@ -139,7 +150,12 @@ export interface CharacterData {
   statuses?: CharacterStatus[];
   generalItems?: CharacterGeneralItem[];
   inventory?: CharacterInventoryItem[];
+  inventoryFolders?: CharacterEntryFolder[];
+  collapsedInventoryFolderIds?: string[];
+  collapsedSheetQuickRoll?: boolean;
   spells?: CharacterSpell[];
+  spellFolders?: CharacterEntryFolder[];
+  collapsedSpellFolderIds?: string[];
   modifierFormula?: string;
 }
 
