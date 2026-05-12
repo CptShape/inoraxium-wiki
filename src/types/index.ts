@@ -51,3 +51,5 @@ export interface ParsedMarkdownContent {
 }
 
 export type ViewMode = 'chapters' | 'markdown';
+
+export type GameSystemId = 'inoraxium' | 'horaghfus';

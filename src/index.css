@@ -1,4 +1,5 @@
 @import "tailwindcss";
+@import "./theme.css";
 
 .leather-bg {
   background-color: #1a1610;

@@ -6,6 +6,7 @@ import type { Components } from 'react-markdown';
 import { Chapter } from '../types';
 import { getTimelineConfig, parseMarkdownContent } from '../utils/markdownContent';
 import { TimelinePage } from './TimelinePage';
+import Infobox, { parseInfoboxMarkup, renderInfoboxRichText } from './Infobox';
 
 export interface PartInfo {
   id: string;
@@ -29,6 +30,8 @@ interface MarkdownRendererProps {
   allChapters?: Chapter[];
   /** Standard chapter selection callback */
   onChapterSelect?: (chapterId: string, path?: string[] | null) => void;
+  /** Optional asset preview map used by the page editor */
+  assetMap?: Record<string, string>;
 }
 
 type LoadState =
@@ -57,6 +60,53 @@ const looksLikeMarkdownFilePath = (value: string) => {
   return trimmed.endsWith('.md') && !trimmed.includes('\n');
 };
 
+const devMarkdownUrl = (value: string) => {
+  const trimmed = value.trim();
+  if (!trimmed.startsWith('src/')) {
+    return null;
+  }
+
+  const basePath = `/${trimmed}`;
+  const separator = basePath.includes('?') ? '&' : '?';
+  return `${basePath}${separator}raw`;
+};
+
+type MarkdownSegment =
+  | { type: 'markdown'; content: string }
+  | { type: 'infobox'; markup: string };
+
+const TableStyleContext = React.createContext(false);
+
+const splitMarkdownWithInfoboxes = (source: string): MarkdownSegment[] => {
+  const segments: MarkdownSegment[] = [];
+  const pattern = /<infobox\b[\s\S]*?<\/infobox>/gi;
+  let lastIndex = 0;
+  let match: RegExpExecArray | null;
+
+  while ((match = pattern.exec(source)) !== null) {
+    if (match.index > lastIndex) {
+      segments.push({
+        type: 'markdown',
+        content: source.slice(lastIndex, match.index),
+      });
+    }
+    segments.push({
+      type: 'infobox',
+      markup: match[0],
+    });
+    lastIndex = pattern.lastIndex;
+  }
+
+  if (lastIndex < source.length) {
+    segments.push({
+      type: 'markdown',
+      content: source.slice(lastIndex),
+    });
+  }
+
+  return segments.length > 0 ? segments : [{ type: 'markdown', content: source }];
+};
+
 // ── Helper: check if an element has a custom class from raw HTML ──────────────
 const hasCustomClass = (className?: string): boolean => {
   return !!className && className.trim().length > 0;
@@ -64,7 +114,10 @@ const hasCustomClass = (className?: string): boolean => {
 
 // ── Component overrides factory ─────────────────────────────────────────────
 // Creates component overrides with access to the cross-chapter link callback.
-const createComponents = (onCrossChapterLink?: (chapterId: string, partId?: string) => void): Components => ({
+const createComponents = (
+  onCrossChapterLink?: (chapterId: string, partId?: string) => void,
+  assetMap?: Record<string, string>
+): Components & Record<string, React.ElementType> => ({
   h1: ({ children, className, ...props }) => (
     <h1
       className={hasCustomClass(className) ? className! : "text-4xl font-bold text-amber-300 mt-8 mb-4 leading-tight"}
@@ -216,37 +269,78 @@ const createComponents = (onCrossChapterLink?: (chapterId: string, partId?: stri
     if (hasCustomClass(className)) {
       return (
         <div className="overflow-x-auto my-4">
-          <table className={className!} {...props}>{children}</table>
+          <TableStyleContext.Provider value={true}>
+            <table className={className!} {...props}>{children}</table>
+          </TableStyleContext.Provider>
         </div>
       );
     }
     return (
       <div className="overflow-x-auto my-4">
-        <table className="w-full border-collapse text-sm" {...props}>{children}</table>
+        <TableStyleContext.Provider value={false}>
+          <table className="w-full border-collapse text-sm" {...props}>{children}</table>
+        </TableStyleContext.Provider>
       </div>
     );
   },
-  thead: ({ children, className, ...props }) => (
-    <thead className={hasCustomClass(className) ? className! : "bg-amber-900/40"} {...props}>{children}</thead>
-  ),
-  tbody: ({ children, className, ...props }) => (
-    <tbody className={hasCustomClass(className) ? className! : "divide-y divide-amber-900/30"} {...props}>{children}</tbody>
-  ),
-  tr: ({ children, className, ...props }) => (
-    <tr className={hasCustomClass(className) ? className! : "hover:bg-amber-900/10 transition-colors"} {...props}>{children}</tr>
-  ),
-  th: ({ children, className, ...props }) => (
-    <th
-      className={hasCustomClass(className) ? className! : "text-left text-amber-300 font-bold px-3 py-2 border-b-2 border-amber-700/50"}
-      style={hasCustomClass(className) ? undefined : { fontFamily: "'Cinzel', serif" }}
-      {...props}
-    >
-      {children}
-    </th>
-  ),
-  td: ({ children, className, ...props }) => (
-    <td className={hasCustomClass(className) ? className! : "text-amber-100 px-3 py-2"} {...props}>{children}</td>
-  ),
+  thead: ({ children, className, ...props }) => {
+    const isCustomTable = React.useContext(TableStyleContext);
+    const resolvedClassName = hasCustomClass(className)
+      ? className!
+      : isCustomTable
+        ? undefined
+        : "bg-amber-900/40";
+
+    return <thead className={resolvedClassName} {...props}>{children}</thead>;
+  },
+  tbody: ({ children, className, ...props }) => {
+    const isCustomTable = React.useContext(TableStyleContext);
+    const resolvedClassName = hasCustomClass(className)
+      ? className!
+      : isCustomTable
+        ? undefined
+        : "divide-y divide-amber-900/30";
+
+    return <tbody className={resolvedClassName} {...props}>{children}</tbody>;
+  },
+  tr: ({ children, className, ...props }) => {
+    const isCustomTable = React.useContext(TableStyleContext);
+    const resolvedClassName = hasCustomClass(className)
+      ? className!
+      : isCustomTable
+        ? undefined
+        : "hover:bg-amber-900/10 transition-colors";
+
+    return <tr className={resolvedClassName} {...props}>{children}</tr>;
+  },
+  th: ({ children, className, ...props }) => {
+    const isCustomTable = React.useContext(TableStyleContext);
+    const resolvedClassName = hasCustomClass(className)
+      ? className!
+      : isCustomTable
+        ? undefined
+        : "text-left text-amber-300 font-bold px-3 py-2 border-b-2 border-amber-700/50";
+
+    return (
+      <th
+        className={resolvedClassName}
+        style={hasCustomClass(className) || isCustomTable ? undefined : { fontFamily: "'Cinzel', serif" }}
+        {...props}
+      >
+        {children}
+      </th>
+    );
+  },
+  td: ({ children, className, ...props }) => {
+    const isCustomTable = React.useContext(TableStyleContext);
+    const resolvedClassName = hasCustomClass(className)
+      ? className!
+      : isCustomTable
+        ? undefined
+        : "text-amber-100 px-3 py-2";
+
+    return <td className={resolvedClassName} {...props}>{children}</td>;
+  },
 
   // ── Generic elements ─────────────────────────────────────────────────────
   div: ({ className, children, ...props }) => (
@@ -266,6 +360,83 @@ const createComponents = (onCrossChapterLink?: (chapterId: string, partId?: stri
   ),
 });
 
+const createInfoboxComponents = (
+  onCrossChapterLink?: (chapterId: string, partId?: string) => void,
+  assetMap?: Record<string, string>
+): Components => ({
+  p: ({ children, className, ...props }) => (
+    <p className={className ?? 'mb-0 text-inherit leading-relaxed'} {...props}>
+      {children}
+    </p>
+  ),
+  strong: ({ children, className, ...props }) => (
+    <strong className={className ?? 'font-bold text-inherit'} {...props}>
+      {children}
+    </strong>
+  ),
+  em: ({ children, className, ...props }) => (
+    <em className={className ?? 'italic text-inherit'} {...props}>
+      {children}
+    </em>
+  ),
+  ul: ({ children, className, ...props }) => (
+    <ul className={className ?? 'mb-0 list-disc pl-4 text-inherit'} {...props}>
+      {children}
+    </ul>
+  ),
+  ol: ({ children, className, ...props }) => (
+    <ol className={className ?? 'mb-0 list-decimal pl-4 text-inherit'} {...props}>
+      {children}
+    </ol>
+  ),
+  li: ({ children, className, ...props }) => (
+    <li className={className ?? 'text-inherit'} {...props}>
+      {children}
+    </li>
+  ),
+  a: ({ href, children, className, ...props }: any) => {
+    const goChapter = props['data-go-chapter'];
+    const goChapterPart = props['data-go-chapter-part'];
+
+    if (goChapter && onCrossChapterLink) {
+      return (
+        <a
+          href="#"
+          onClick={(e) => {
+            e.preventDefault();
+            e.stopPropagation();
+            onCrossChapterLink(goChapter, goChapterPart || undefined);
+          }}
+          className={className ?? 'underline transition-colors cursor-pointer text-inherit'}
+          {...props}
+        >
+          {children}
+        </a>
+      );
+    }
+
+    return (
+      <a
+        href={href}
+        className={className ?? 'underline transition-colors text-inherit'}
+        target="_blank"
+        rel="noopener noreferrer"
+        {...props}
+      >
+        {children}
+      </a>
+    );
+  },
+  img: ({ src, alt, className, ...props }) => (
+    <img
+      src={(src && assetMap?.[src]) || src || ''}
+      alt={alt ?? ''}
+      className={className ?? 'my-2 rounded-lg max-w-full'}
+      {...props}
+    />
+  ),
+});
+
 const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   path,
   onPartsFound,
@@ -273,6 +444,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
   onCrossChapterLink,
   allChapters = [],
   onChapterSelect,
+  assetMap,
 }) => {
   const [state, setState] = useState<LoadState>({ status: 'loading' });
   const normalizedPath = useMemo(() => normalizeMarkdownPath(path), [path]);
@@ -281,8 +453,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   // Memoize components so they only recreate when the callback changes
   const components = useMemo(
-    () => createComponents(onCrossChapterLink),
-    [onCrossChapterLink]
+    () => createComponents(onCrossChapterLink, assetMap),
+    [assetMap, onCrossChapterLink]
+  );
+  const infoboxComponents = useMemo(
+    () => createInfoboxComponents(onCrossChapterLink, assetMap),
+    [assetMap, onCrossChapterLink]
   );
 
   // Load the markdown file or use inline text
@@ -309,6 +485,26 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
     setState({ status: 'loading' });
 
+    if (import.meta.env.DEV) {
+      const sourceUrl = devMarkdownUrl(path);
+
+      if (sourceUrl) {
+        fetch(sourceUrl, { cache: 'no-store' })
+          .then(async (response) => {
+            if (!response.ok) {
+              throw new Error(`Failed to fetch ${path}: ${response.status}`);
+            }
+
+            return response.text();
+          })
+          .then((text) => setState({ status: 'success', text }))
+          .catch((error: Error) => {
+            setState({ status: 'error', message: error.message || `Failed to load ${path}` });
+          });
+        return;
+      }
+    }
+
     loader()
       .then((text) => setState({ status: 'success', text }))
       .catch((error: Error) => {
@@ -325,6 +521,11 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
     if (!parsedContent) return null;
     return getTimelineConfig(parsedContent.frontmatter);
   }, [parsedContent]);
+
+  const contentSegments = useMemo(() => {
+    if (state.status !== 'success') return [];
+    return splitMarkdownWithInfoboxes(parsedContent?.body ?? state.text);
+  }, [parsedContent, state]);
 
   // After the markdown has rendered into the DOM, find [data-part] anchors.
   // Timeline pages do not use the in-page part navigator for now.
@@ -387,9 +588,38 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   return (
     <div ref={divRef}>
-      <ReactMarkdown remarkPlugins={[remarkGfm]} rehypePlugins={[rehypeRaw]} components={components}>
-        {parsedContent?.body ?? state.text}
-      </ReactMarkdown>
+      {contentSegments.map((segment, index) => {
+        if (segment.type === 'infobox') {
+          const infoboxData = parseInfoboxMarkup(segment.markup);
+          if (!infoboxData) {
+            return null;
+          }
+
+          return (
+            <Infobox
+              key={`infobox-${index}`}
+              data={infoboxData}
+              assetMap={assetMap}
+              renderRichText={(content, className) => renderInfoboxRichText(content, infoboxComponents, className)}
+            />
+          );
+        }
+
+        if (!segment.content.trim()) {
+          return null;
+        }
+
+        return (
+          <ReactMarkdown
+            key={`markdown-${index}`}
+            remarkPlugins={[remarkGfm]}
+            rehypePlugins={[rehypeRaw]}
+            components={components}
+          >
+            {segment.content}
+          </ReactMarkdown>
+        );
+      })}
     </div>
   );
 };

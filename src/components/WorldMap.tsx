@@ -1,4 +1,4 @@
-import { defaultWorldMapAtlas } from '../data/worldbuilding-handbook/chapters/map/worldMapAtlas.ts';
+import { defaultWorldMapAtlas } from '../data/inoraxium/worldbuilding-handbook/chapters/map/worldMapAtlas.ts';
 
 import React, { useMemo, useState } from 'react';
 import {

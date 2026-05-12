@@ -1,0 +1,71 @@
+.editor-canvas-shell {
+  background-color: rgba(12, 17, 26, 0.55);
+}
+
+.editor-canvas {
+  color: #f4e7c2;
+  font-family: 'IM Fell English', serif;
+  line-height: 1.8;
+}
+
+.editor-canvas h1,
+.editor-canvas h2,
+.editor-canvas h3,
+.editor-canvas h4,
+.editor-canvas h5,
+.editor-canvas h6 {
+  font-family: 'Cinzel', serif;
+  color: #f6cf72;
+  margin-top: 1.4rem;
+  margin-bottom: 0.7rem;
+  font-weight: 700;
+}
+
+.editor-canvas h2 {
+  font-size: 2rem;
+}
+
+.editor-canvas h3 {
+  font-size: 1.55rem;
+}
+
+.editor-canvas p {
+  margin: 0 0 1rem;
+  color: #f2e8cf;
+}
+
+.editor-canvas a {
+  color: #8fc8ff;
+  text-decoration: underline;
+}
+
+.editor-canvas ul,
+.editor-canvas ol {
+  margin: 0 0 1rem 1.5rem;
+}
+
+.editor-canvas blockquote {
+  margin: 1rem 0;
+  padding: 0.8rem 1rem;
+  border-left: 4px solid rgba(251, 191, 36, 0.6);
+  background: rgba(120, 53, 15, 0.12);
+  border-radius: 0 0.6rem 0.6rem 0;
+  color: #f3d997;
+}
+
+.editor-canvas img {
+  max-width: 100%;
+  border-radius: 1rem;
+  margin: 1rem 0;
+}
+
+.editor-canvas table {
+  width: 100%;
+  margin: 1rem 0;
+}
+
+.editor-canvas:empty::before {
+  content: 'Start writing...';
+  color: rgba(245, 222, 179, 0.35);
+}
+

@@ -3,7 +3,7 @@ import { ChevronLeft, ChevronRight } from 'lucide-react';
 import { Chapter } from '../types';
 import MarkdownRenderer, { PartInfo } from './MarkdownRenderer';
 import MythologyHub from './mythology/MythologyHub';
-import { allGods } from '../data/worldbuilding-handbook/mythology/gods';
+import { allGods } from '../data/inoraxium/worldbuilding-handbook/mythology/gods';
 import { BattleTracker } from './BattleTracker';
 import { DiceMacros } from './DiceMacros';
 import { MessageSender } from './MessageSender';

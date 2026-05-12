@@ -1,8 +1,9 @@
 import React from 'react';
 import { BookOpen } from 'lucide-react';
-import { Chapter } from '../types';
+import { Chapter, GameSystemId } from '../types';
 import { ChapterTree } from './ChapterTree';
 import { LoginButton } from './LoginButton';
+import { EditorAccessButton } from './EditorAccessButton';
 
 interface SidebarProps {
   chapters: Chapter[];
@@ -10,9 +11,13 @@ interface SidebarProps {
   expandedChapters: Set<string>;
   onChapterSelect: (chapterId: string, path?: string[] | null) => void;
   onToggleExpand: (chapterId: string) => void;
-  onGetMarkdown: () => void;
+  currentSystem: GameSystemId;
+  currentSystemName: string;
+  onToggleSystem: () => void;
   onClearSelection?: () => void;
   breadcrumb: string[];
+  onOpenEditor: () => void;
+  isEditorOpen: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -21,10 +26,16 @@ export const Sidebar: React.FC<SidebarProps> = ({
   expandedChapters,
   onChapterSelect,
   onToggleExpand,
-  onGetMarkdown,
+  currentSystem,
+  currentSystemName,
+  onToggleSystem,
   onClearSelection,
   breadcrumb,
+  onOpenEditor,
+  isEditorOpen,
 }) => {
+  const nextSystemName = currentSystem === 'inoraxium' ? 'Horaghfus' : 'Inoraxium';
+
   return (
     <div className="w-80 bg-stone-900/70 border-r-2 border-amber-800 p-6 shadow-xl shadow-black/30 backdrop-blur-sm overflow-y-auto flex flex-col">
       {/* Header */}
@@ -39,7 +50,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           </h1>
         </button>
         <p className="text-amber-600 italic text-sm" style={{ fontFamily: "'IM Fell English', serif" }}>
-          Fantasy Rulebook System
+          {currentSystemName} Rulebook System
         </p>
       </div>
 
@@ -70,15 +81,17 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Action Buttons */}
       <div className="mt-6 pt-4 border-t border-amber-800/50 space-y-3">
+        <EditorAccessButton currentSystem={currentSystem} onOpenEditor={onOpenEditor} isActive={isEditorOpen} />
         <button
-          onClick={onGetMarkdown}
+          onClick={onToggleSystem}
           className="w-full p-3 bg-gradient-to-r from-amber-800/40 to-amber-700/40 border-2 border-amber-700 rounded-lg text-amber-200 hover:from-amber-800/60 hover:to-amber-700/60 transition-all duration-300 shadow-lg hover:shadow-amber-900/30 flex items-center justify-center gap-2"
           style={{ fontFamily: "'Cinzel', serif" }}
         >
-          📜 Get Markdown
+          🔄 Switch to {nextSystemName}
         </button>
         
         <div className="text-center text-amber-600 text-xs" style={{ fontFamily: "'IM Fell English', serif" }}>
+          <p>Current system: {currentSystemName}</p>
           <p>🔮 Click chapters to expand</p>
           <p>✨ Navigate through the lore</p>
         </div>

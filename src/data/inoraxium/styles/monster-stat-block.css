@@ -1,0 +1,206 @@
+/*
+  Monster Stat Block - D&D style monster stat block
+  Usage: <div class="monster-stat-block">...</div>
+*/
+
+.monster-stat-block {
+  width: 100%;
+  border-collapse: separate;
+  border-spacing: 0;
+  background: linear-gradient(145deg, rgba(30, 25, 20, 0.95) 0%, rgba(40, 30, 25, 0.95) 100%);
+  border: 3px double #8b4513;
+  border-radius: 12px;
+  padding: 0;
+  margin: 2rem 0;
+  position: relative;
+  box-shadow: 
+    0 8px 16px rgba(0, 0, 0, 0.6),
+    inset 0 1px 0 rgba(255, 215, 0, 0.1);
+  font-family: 'IM Fell English', serif;
+  color: #e0d3b8;
+}
+
+.monster-stat-block caption {
+  margin-top: 10px;
+}
+
+.monster-stat-block::before {
+  content: '';
+  position: absolute;
+  top: 5px;
+  left: 5px;
+  right: 5px;
+  bottom: 5px;
+  border: 1px solid rgba(139, 69, 19, 0.4);
+  border-radius: 8px;
+  pointer-events: none;
+}
+
+.monster-stat-block thead {
+  background: linear-gradient(180deg, rgba(92, 54, 24, 0.95) 0%, rgba(58, 34, 16, 0.98) 100%);
+  box-shadow: inset 0 -1px 0 rgba(255, 204, 102, 0.18);
+}
+
+.monster-stat-block thead tr {
+  border-bottom: 2px solid rgba(184, 134, 11, 0.9);
+}
+
+.monster-stat-block tbody {
+  background: linear-gradient(180deg, rgba(24, 18, 14, 0.88) 0%, rgba(20, 15, 12, 0.95) 100%);
+}
+
+.monster-stat-block th {
+  padding: 1rem 1.2rem;
+  text-align: left;
+  color: #ffcc66;
+  font-family: 'Cinzel', serif;
+  font-size: 0.84rem;
+  font-weight: 700;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  border-bottom: 1px solid rgba(184, 134, 11, 0.75);
+  text-shadow: 1px 1px 3px rgba(0, 0, 0, 0.8);
+}
+
+.monster-stat-block td {
+  padding: 0.95rem 1.2rem;
+  vertical-align: top;
+  color: #f3e5ab;
+  border-top: 1px solid rgba(255, 204, 102, 0.08);
+  border-bottom: 1px solid rgba(139, 69, 19, 0.28);
+}
+
+.monster-stat-block tbody tr:not(:last-child) td {
+  box-shadow: inset 0 -1px 0 rgba(184, 134, 11, 0.12);
+}
+
+.monster-stat-block tbody tr:nth-child(even) td {
+  background: rgba(255, 255, 255, 0.025);
+}
+
+.monster-stat-block tbody tr:hover td {
+  background: rgba(184, 134, 11, 0.08);
+}
+
+.monster-stat-block h3 {
+  color: #ffcc66;
+  font-family: 'Cinzel', serif;
+  font-size: 1.8rem;
+  margin: 0 0 0.5rem 0;
+  text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.8);
+  border-bottom: 2px solid #b8860b;
+  padding-bottom: 0.5rem;
+}
+
+.monster-stat-block .monster-type {
+  color: #daa520;
+  font-style: italic;
+  font-size: 1.1rem;
+  margin-bottom: 1.5rem;
+  display: block;
+}
+
+.monster-stat-block .stat-line {
+  display: flex;
+  justify-content: space-between;
+  margin: 0.75rem 0;
+  padding: 0.5rem;
+  background: rgba(0, 0, 0, 0.3);
+  border-radius: 4px;
+  border-left: 3px solid #8b4513;
+}
+
+.monster-stat-block .stat-label {
+  font-weight: bold;
+  color: #ffcc66;
+  min-width: 140px;
+}
+
+.monster-stat-block .stat-value {
+  color: #f3e5ab;
+  font-family: 'MedievalSharp', cursive;
+}
+
+.monster-stat-block .ability-scores {
+  display: grid;
+  grid-template-columns: repeat(6, 1fr);
+  gap: 0.75rem;
+  margin: 1.5rem 0;
+}
+
+.monster-stat-block .ability-score {
+  background: rgba(139, 69, 19, 0.3);
+  border: 1px solid #b8860b;
+  border-radius: 6px;
+  padding: 0.75rem;
+  text-align: center;
+}
+
+.monster-stat-block .ability-name {
+  font-size: 0.9rem;
+  color: #daa520;
+  text-transform: uppercase;
+  letter-spacing: 1px;
+  margin-bottom: 0.25rem;
+}
+
+.monster-stat-block .ability-value {
+  font-size: 1.5rem;
+  font-weight: bold;
+  color: #ffdd99;
+  font-family: 'MedievalSharp', cursive;
+}
+
+.monster-stat-block .actions {
+  margin-top: 1.5rem;
+  padding-top: 1rem;
+  border-top: 1px dashed #8b4513;
+}
+
+.monster-stat-block .action {
+  margin-bottom: 1rem;
+  padding-left: 1rem;
+  border-left: 2px solid #daa520;
+}
+
+.monster-stat-block .action-name {
+  color: #ffcc66;
+  font-weight: bold;
+  margin-bottom: 0.25rem;
+}
+
+.monster-stat-block .action-description {
+  color: #d4c4a8;
+  font-size: 0.95rem;
+  line-height: 1.5;
+}
+
+/* Special trait styling */
+.monster-stat-block .trait {
+  background: rgba(184, 134, 11, 0.1);
+  padding: 0.75rem;
+  border-radius: 4px;
+  margin: 0.5rem 0;
+  border: 1px solid rgba(184, 134, 11, 0.3);
+}
+
+.monster-stat-block .trait-name {
+  color: #ffcc66;
+  font-weight: bold;
+  display: inline;
+}
+
+/* Challenge rating badge */
+.monster-stat-block .challenge-rating {
+  position: absolute;
+  top: 1rem;
+  right: 1rem;
+  background: linear-gradient(to bottom, #b8860b, #8b4513);
+  color: #ffd700;
+  padding: 0.5rem 1rem;
+  border-radius: 20px;
+  font-family: 'Cinzel', serif;
+  font-weight: bold;
+  font-size: 1.1rem;
+  box-shadow: 0 3px 6px rgba(0, 0, 0, 0.4);
+}

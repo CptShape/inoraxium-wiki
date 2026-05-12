@@ -1,27 +1,28 @@
 import React, { useEffect, useState, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ContentView } from './components/ContentView';
-import { MarkdownView } from './components/MarkdownView';
-import { allChapters, chapters } from './data/chapters';
-import { Chapter, ViewMode } from './types';
+import { VisualPageEditor } from './components/VisualPageEditor';
+import { gameSystems } from './data/gameSystems';
+import { Chapter, GameSystemId } from './types';
 
 // styles
-import './data/styles/tableRow.css';
-import './data/styles/runic-table.css';
-import './data/styles/dwarven-table.css';
-import './data/styles/elven-table.css';
-import './data/styles/dragon-table.css';
-import './data/styles/necromancer-table.css';
-import './data/styles/monster-stat-block.css';
-import './data/styles/scroll-table.css';
-import './data/styles/spell-card.css';
-import './data/styles/header.css';
-import './data/styles/draconic-table.css';
-import './data/styles/burglar-table.css';
-import './data/styles/hobbit-hoard-table.css';
-import './data/styles/hobbit-thief-table.css';
-import './data/styles/titanborn-table.css';
-import './data/styles/orc-table.css';
+import './data/inoraxium/styles/tableRow.css';
+import './data/inoraxium/styles/runic-table.css';
+import './data/inoraxium/styles/dwarven-table.css';
+import './data/inoraxium/styles/elven-table.css';
+import './data/inoraxium/styles/dragon-table.css';
+import './data/inoraxium/styles/necromancer-table.css';
+import './data/inoraxium/styles/monster-stat-block.css';
+import './data/inoraxium/styles/scroll-table.css';
+import './data/inoraxium/styles/spell-card.css';
+import './data/inoraxium/styles/header.css';
+import './data/inoraxium/styles/draconic-table.css';
+import './data/inoraxium/styles/burglar-table.css';
+import './data/inoraxium/styles/hobbit-hoard-table.css';
+import './data/inoraxium/styles/hobbit-thief-table.css';
+import './data/inoraxium/styles/titanborn-table.css';
+import './data/inoraxium/styles/orc-table.css';
+import './styles/visual-editor.css';
 
 // ─── URL Hash Utilities ──────────────────────────────────────────────
 // Hash format: #chapter-id/sub-chapter-id/deep-chapter-id
@@ -49,11 +50,18 @@ function clearHash() {
 // ─────────────────────────────────────────────────────────────────────
 
 function App() {
+  const [currentSystem, setCurrentSystem] = useState<GameSystemId>('inoraxium');
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
-  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(new Set(['kinships', 'elves', 'high-elves']));
-  const [viewMode, setViewMode] = useState<ViewMode>('chapters');
+  const [expandedChapters, setExpandedChapters] = useState<Set<string>>(
+    new Set(gameSystems.inoraxium.defaultExpandedChapters)
+  );
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [breadcrumbPath, setBreadcrumbPath] = useState<string[]>([]);
+  const [isEditorOpen, setIsEditorOpen] = useState(false);
+
+  const systemDefinition = gameSystems[currentSystem];
+  const chapters = systemDefinition.chapters;
+  const allChapters = systemDefinition.allChapters;
 
   // Helper function to find a chapter by ID recursively
   const findChapterById = useCallback((chapters: Chapter[], id: string): Chapter | null => {
@@ -81,17 +89,18 @@ function App() {
   }, []);
 
   // Get active chapter content
-  const activeChapter = activeChapterId ? findChapterById(chapters, activeChapterId) : null;
+  const activeChapter = activeChapterId ? findChapterById(allChapters, activeChapterId) : null;
 
   // Resolve prevChapter and nextChapter IDs into actual Chapter objects
   const prevChapter = activeChapter?.prevChapter
-    ? findChapterById(chapters, activeChapter.prevChapter)
+    ? findChapterById(allChapters, activeChapter.prevChapter)
     : null;
   const nextChapter = activeChapter?.nextChapter
-    ? findChapterById(chapters, activeChapter.nextChapter)
+    ? findChapterById(allChapters, activeChapter.nextChapter)
     : null;
 
   const handleChapterSelect = useCallback((chapterId: string, path: string[] | null = null) => {
+    setIsEditorOpen(false);
     setActiveChapterId(chapterId);
 
     // If a full path is provided (from ContentView card click or timeline event), use it
@@ -99,20 +108,20 @@ function App() {
 
     // If only the ID is provided (from Sidebar), compute the full path
     if (!fullPath) {
-      fullPath = findChapterPath(chapters, chapterId) || [chapterId];
+      fullPath = findChapterPath(chapters, chapterId) || findChapterPath(allChapters, chapterId) || [chapterId];
     }
     
     setBreadcrumbPath(fullPath);
     // Update breadcrumb with titles
     const titles = fullPath.map(id => {
-      const ch = findChapterById(chapters, id);
+      const ch = findChapterById(allChapters, id);
       return ch?.title || id;
     });
     setBreadcrumb(titles);
 
     // Update URL hash
     setHashPath(fullPath);
-  }, [findChapterById, findChapterPath]);
+  }, [allChapters, chapters, findChapterById, findChapterPath]);
 
   const handleToggleExpand = (chapterId: string) => {
     setExpandedChapters(prev => {
@@ -126,13 +135,22 @@ function App() {
     });
   };
 
-  const handleGetMarkdown = () => {
-    setViewMode('markdown');
-  };
+  const resetSystemState = useCallback((systemId: GameSystemId) => {
+    setIsEditorOpen(false);
+    setActiveChapterId(null);
+    setBreadcrumb([]);
+    setBreadcrumbPath([]);
+    setExpandedChapters(new Set(gameSystems[systemId].defaultExpandedChapters));
+    clearHash();
+  }, []);
 
-  const handleBackToChapters = () => {
-    setViewMode('chapters');
-  };
+  const handleToggleSystem = useCallback(() => {
+    setCurrentSystem(prev => {
+      const nextSystem = prev === 'inoraxium' ? 'horaghfus' : 'inoraxium';
+      resetSystemState(nextSystem);
+      return nextSystem;
+    });
+  }, [resetSystemState]);
 
   // Navigate from a hash path (array of IDs)
   const navigateFromHashPath = useCallback((path: string[]) => {
@@ -144,25 +162,26 @@ function App() {
     }
 
     const targetId = path[path.length - 1];
-    const chapter = findChapterById(chapters, targetId);
+    const chapter = findChapterById(allChapters, targetId);
 
     if (chapter) {
       // Standard chapter navigation
       setActiveChapterId(targetId);
       setBreadcrumbPath(path);
       const titles = path.map(id => {
-        const ch = findChapterById(chapters, id);
+        const ch = findChapterById(allChapters, id);
         return ch?.title || id;
       });
       setBreadcrumb(titles);
       // Expand all parent chapters in sidebar
-      path.slice(0, -1).forEach(parentId => {
+      const visiblePath = findChapterPath(chapters, targetId);
+      visiblePath?.slice(0, -1).forEach(parentId => {
         setExpandedChapters(prev => new Set([...prev, parentId]));
       });
     } else {
       // Chapter not found — check if this is a special sub-route
       // e.g. #mythology/zeus where "zeus" is a god, not a chapter
-      const rootChapter = findChapterById(chapters, path[0]);
+      const rootChapter = findChapterById(allChapters, path[0]);
       if (rootChapter) {
         // The root chapter exists — treat the extra segments as sub-content
         // (mythology god profiles, etc.)
@@ -174,8 +193,11 @@ function App() {
           titles.push(path[i]);
         }
         setBreadcrumb(titles);
-        // Expand the root chapter
-        setExpandedChapters(prev => new Set([...prev, path[0]]));
+        // Expand the visible root chapter when this chapter also exists in the sidebar tree.
+        const visiblePath = findChapterPath(chapters, path[0]);
+        visiblePath?.forEach(id => {
+          setExpandedChapters(prev => new Set([...prev, id]));
+        });
       } else {
         // Nothing found — clear to main menu
         setActiveChapterId(null);
@@ -184,7 +206,7 @@ function App() {
         clearHash();
       }
     }
-  }, [findChapterById]);
+  }, [allChapters, chapters, findChapterById, findChapterPath]);
 
   // Initialize from URL hash on mount
   useEffect(() => {
@@ -192,7 +214,7 @@ function App() {
     if (hashPath) {
       navigateFromHashPath(hashPath);
     }
-  }, [navigateFromHashPath]);
+  }, [navigateFromHashPath, currentSystem]);
 
   // Listen for browser back/forward (hashchange)
   useEffect(() => {
@@ -214,8 +236,8 @@ function App() {
   // Expand all parents of active chapter
   React.useEffect(() => {
     if (activeChapterId) {
-      const expandParents = (chapters: Chapter[], targetId: string, parents: string[] = []): boolean => {
-        for (const chapter of chapters) {
+      const expandParents = (tree: Chapter[], targetId: string, parents: string[] = []): boolean => {
+        for (const chapter of tree) {
           if (chapter.id === targetId) {
             parents.forEach(p => setExpandedChapters(prev => new Set([...prev, p])));
             return true;
@@ -230,41 +252,44 @@ function App() {
       };
       expandParents(chapters, activeChapterId);
     }
-  }, [activeChapterId]);
+  }, [activeChapterId, chapters]);
 
   return (
-    <div className="flex h-screen bg-stone-900 text-amber-100 leather-bg">
-      {viewMode === 'chapters' ? (
-        <>
-          <Sidebar
-            chapters={chapters}
-            activeChapterId={activeChapterId}
-            expandedChapters={expandedChapters}
-            onChapterSelect={handleChapterSelect}
-            onToggleExpand={handleToggleExpand}
-            onGetMarkdown={handleGetMarkdown}
-            onClearSelection={() => {
-              setActiveChapterId(null);
-              setBreadcrumb([]);
-              setBreadcrumbPath([]);
-              clearHash();
-            }}
-            breadcrumb={breadcrumb}
-          />
-          <ContentView
-            activeChapter={activeChapter}
-            breadcrumb={breadcrumb}
-            onChapterSelect={handleChapterSelect}
-            parentPath={breadcrumbPath}
-            prevChapter={prevChapter}
-            nextChapter={nextChapter}
-            allChapters={chapters}
-          />
-        </>
+    <div className={`theme-${currentSystem} flex h-screen bg-stone-900 text-amber-100 leather-bg`}>
+      <Sidebar
+        chapters={chapters}
+        activeChapterId={activeChapterId}
+        expandedChapters={expandedChapters}
+        onChapterSelect={handleChapterSelect}
+        onToggleExpand={handleToggleExpand}
+        currentSystem={currentSystem}
+        currentSystemName={systemDefinition.name}
+        onToggleSystem={handleToggleSystem}
+        onClearSelection={() => {
+          setIsEditorOpen(false);
+          setActiveChapterId(null);
+          setBreadcrumb([]);
+          setBreadcrumbPath([]);
+          clearHash();
+        }}
+        breadcrumb={breadcrumb}
+        onOpenEditor={() => {
+          setIsEditorOpen(true);
+          clearHash();
+        }}
+        isEditorOpen={isEditorOpen}
+      />
+      {isEditorOpen ? (
+        <VisualPageEditor currentSystem={currentSystem} onExit={() => setIsEditorOpen(false)} />
       ) : (
-        <MarkdownView
-          chapters={chapters}
-          onBack={handleBackToChapters}
+        <ContentView
+          activeChapter={activeChapter}
+          breadcrumb={breadcrumb}
+          onChapterSelect={handleChapterSelect}
+          parentPath={breadcrumbPath}
+          prevChapter={prevChapter}
+          nextChapter={nextChapter}
+          allChapters={allChapters}
         />
       )}
     </div>
