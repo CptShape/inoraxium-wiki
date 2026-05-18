@@ -4,6 +4,7 @@ export interface UserPageRegistryEntry {
   workspaceId: string;
   workspaceTitle: string;
   id: string;
+  aliases?: string[];
   title: string;
   subtitle?: string;
   icon?: string;
@@ -13,6 +14,10 @@ export interface UserPageRegistryEntry {
   sidebarVisible: boolean;
   order?: string;
   width?: number | string;
+  folderPath?: string;
+  sourceFile?: string;
+  tags?: string[];
+  isFolder?: boolean;
 }
 
 export interface UserPageRegistry {
@@ -24,6 +29,8 @@ interface RegistryMeta {
   order: string;
   parentId?: string;
 }
+
+const USER_PAGES_ROOT_ID = 'user-pages';
 
 const cloneChapter = (chapter: Chapter): Chapter => ({
   ...chapter,
@@ -43,13 +50,62 @@ const parseWidth = (value?: number | string) => {
   return undefined;
 };
 
+const slugifyAlias = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const getAliasesForEntry = (entry: UserPageRegistryEntry) => {
+  const values = new Set<string>();
+  values.add(entry.id);
+
+  if (entry.title) {
+    values.add(slugifyAlias(entry.title));
+  }
+
+  if (entry.sourceFile) {
+    const parts = entry.sourceFile.split(/[\\/]/);
+    const filename = parts[parts.length - 1] || '';
+    const basename = filename.replace(/\.[^.]+$/, '');
+    if (basename) {
+      values.add(slugifyAlias(basename));
+    }
+  }
+
+  entry.aliases?.forEach((alias) => values.add(slugifyAlias(alias)));
+
+  return Array.from(values).filter(Boolean);
+};
+
+const isWorkspaceMainEntry = (entry: UserPageRegistryEntry) => {
+  const sourceFile = entry.sourceFile ?? '';
+  const filename = sourceFile.split(/[\\/]/).pop() ?? '';
+  const basename = filename.replace(/\.[^.]+$/, '');
+  return slugifyAlias(basename) === 'main';
+};
+
 const createChapterFromRegistryEntry = (entry: UserPageRegistryEntry): Chapter => ({
   id: entry.id,
-  title: entry.title,
-  subtitle: entry.subtitle || undefined,
+  aliases: getAliasesForEntry(entry),
+  title: entry.sidebarVisible && isWorkspaceMainEntry(entry) ? entry.workspaceTitle : entry.title,
+  subtitle:
+    entry.sidebarVisible && isWorkspaceMainEntry(entry) && entry.title !== entry.workspaceTitle
+      ? entry.title
+      : (entry.subtitle || undefined),
   icon: entry.icon || undefined,
-  content: entry.content,
+  content: entry.isFolder ? `# ${entry.title}\n\nFolder index.` : entry.content,
   width: parseWidth(entry.width),
+  userPageMeta: {
+    workspaceId: entry.workspaceId,
+    workspaceTitle: entry.workspaceTitle,
+    sourceFile: entry.sourceFile,
+    folderPath: entry.folderPath,
+    tags: entry.tags,
+    isFolder: entry.isFolder,
+    isWorkspaceMain: isWorkspaceMainEntry(entry),
+  },
   subChapters: [],
 });
 
@@ -156,10 +212,28 @@ export const mergeUserPageRegistry = (
   system: GameSystemId
 ) => {
   const entries = registry.pages.filter((entry) => entry.system === system);
+  const visibleUserPages = mergeEntriesIntoTree([], entries, (entry) => entry.sidebarVisible);
+  const allUserPages = mergeEntriesIntoTree([], entries, () => true);
+
+  const userPagesRoot: Chapter | null = visibleUserPages.length > 0
+    ? {
+        id: USER_PAGES_ROOT_ID,
+        title: 'User Pages',
+        icon: '📚',
+        content: '# User Pages\n\nImported workspace entry pages.',
+        subChapters: visibleUserPages,
+      }
+    : null;
 
   return {
-    chapters: mergeEntriesIntoTree(baseVisibleChapters, entries, (entry) => entry.sidebarVisible),
-    allChapters: mergeEntriesIntoTree(baseAllChapters, entries, () => true),
+    chapters: [
+      ...mergeEntriesIntoTree(baseVisibleChapters, entries, () => false),
+      ...(userPagesRoot ? [userPagesRoot] : []),
+    ],
+    allChapters: [
+      ...mergeEntriesIntoTree(baseAllChapters, entries, () => false),
+      ...allUserPages,
+      ...(userPagesRoot ? [{ ...userPagesRoot, subChapters: userPagesRoot.subChapters?.map(cloneChapter) }] : []),
+    ],
   };
 };
-

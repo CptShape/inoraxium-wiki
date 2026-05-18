@@ -66,7 +66,7 @@ function App() {
   // Helper function to find a chapter by ID recursively
   const findChapterById = useCallback((chapters: Chapter[], id: string): Chapter | null => {
     for (const chapter of chapters) {
-      if (chapter.id === id) return chapter;
+      if (chapter.id === id || chapter.aliases?.includes(id)) return chapter;
       if (chapter.subChapters) {
         const found = findChapterById(chapter.subChapters, id);
         if (found) return found;

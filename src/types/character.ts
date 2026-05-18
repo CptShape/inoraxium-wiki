@@ -3,6 +3,11 @@ export interface CustomAttribute {
   name: string;
   value: string;
   favorite?: boolean;
+  calculationType?: 'sum' | 'override-highest' | 'override-lowest';
+  valueOptions?: Array<{
+    value: string;
+    label: string;
+  }>;
 }
 
 export interface CharacterBar {
@@ -45,6 +50,13 @@ export interface CharacterAction {
 export interface CharacterDisplayStat {
   id: string;
   referenceId: string;
+  row?: number;
+  column?: number;
+  colors?: {
+    background?: string;
+    value?: string;
+    label?: string;
+  };
 }
 
 export interface CharacterAttributeSectionModes {
@@ -131,6 +143,7 @@ export interface CharacterData {
   spiritualAge?: string;
   alignment?: string;
   visibility?: 'private' | 'public';
+  sendToSpreadsheet?: boolean;
   userId?: string | null;
   bio?: string;
   backstory?: string;
@@ -139,6 +152,7 @@ export interface CharacterData {
   createdAt?: number;
   tags?: string[];
   displayStats?: CharacterDisplayStat[];
+  displaySlotStates?: Record<string, 'unlocked' | 'locked' | 'blocked'>;
   attributeSectionModes?: CharacterAttributeSectionModes;
   attributeSectionColumns?: CharacterAttributeSectionColumns;
   mainAttributes?: CustomAttribute[];

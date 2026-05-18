@@ -16,13 +16,13 @@ export const gameSystems: Record<GameSystemId, GameSystemDefinition> = {
     name: 'Inoraxium',
     chapters: inoraxiumChapters,
     allChapters: allInoraxiumChapters,
-    defaultExpandedChapters: ['kinships', 'elves', 'high-elves'],
+    defaultExpandedChapters: ['kinships', 'elves', 'high-elves', 'user-pages'],
   },
   horaghfus: {
     id: 'horaghfus',
     name: 'Horaghfus',
     chapters: horaghfusChapters,
     allChapters: allHoraghfusChapters,
-    defaultExpandedChapters: ['horaghfus-peoples'],
+    defaultExpandedChapters: ['horaghfus-peoples', 'user-pages'],
   },
 };

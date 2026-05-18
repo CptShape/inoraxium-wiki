@@ -2,11 +2,15 @@ import React, { useEffect, useMemo, useState } from 'react';
 import ReactMarkdown from 'react-markdown';
 import remarkGfm from 'remark-gfm';
 import rehypeRaw from 'rehype-raw';
-import { ChevronDown, ChevronUp } from 'lucide-react';
+import { ChevronDown, ChevronLeft, ChevronRight, ChevronUp } from 'lucide-react';
 
 export interface InfoboxEntryData {
   label: string;
   value: string;
+  columns?: Array<{
+    label: string;
+    value: string;
+  }>;
 }
 
 export interface InfoboxSectionData {
@@ -22,7 +26,7 @@ export interface InfoboxSectionData {
 
 export interface InfoboxData {
   title: string;
-  image?: string;
+  image?: string | Array<string | { src: string; caption?: string }>;
   imageAlt?: string;
   titleBackgroundColor?: string;
   titleTextColor?: string;
@@ -33,6 +37,7 @@ interface InfoboxProps {
   data: InfoboxData;
   renderRichText: (content: string, className?: string) => React.ReactNode;
   assetMap?: Record<string, string>;
+  pagePath?: string;
 }
 
 const imageModules = (import.meta as any).glob(
@@ -53,12 +58,58 @@ const normalizeAssetPath = (value?: string) => {
   return trimmed;
 };
 
-const resolveImagePath = (value?: string, assetMap?: Record<string, string>) => {
+const resolveImagePath = (value?: string, assetMap?: Record<string, string>, pagePath?: string) => {
   const normalized = normalizeAssetPath(value);
   if (!normalized) return null;
   if (assetMap?.[normalized]) return assetMap[normalized];
   if (assetMap?.[value ?? '']) return assetMap[value ?? ''];
+  if (pagePath && normalized.startsWith('assets/')) {
+    const pageDirectory = pagePath.slice(0, pagePath.lastIndexOf('/'));
+    const siblingAssetPath = `${pageDirectory}/${normalized}`;
+    if (imageModules[siblingAssetPath]) {
+      return imageModules[siblingAssetPath];
+    }
+    const workspaceDirectory = pageDirectory.slice(0, pageDirectory.lastIndexOf('/'));
+    const workspaceAssetPath = `${workspaceDirectory}/${normalized}`;
+    if (imageModules[workspaceAssetPath]) {
+      return imageModules[workspaceAssetPath];
+    }
+  }
+  const basename = normalized.slice(normalized.lastIndexOf('/') + 1);
+  const basenameMatches = Object.entries(imageModules).filter(([modulePath]) => modulePath.endsWith(`/${basename}`));
+  if (basenameMatches.length === 1) {
+    return basenameMatches[0][1];
+  }
   return imageModules[normalized] ?? normalized;
+};
+
+const normalizeInfoboxImages = (
+  value?: string | Array<string | { src: string; caption?: string }>,
+  assetMap?: Record<string, string>,
+  pagePath?: string
+) => {
+  if (!value) {
+    return [];
+  }
+
+  const values = Array.isArray(value) ? value : [value];
+  const resolvedValues = values
+    .map((item) => {
+      if (typeof item === 'string') {
+        const resolved = resolveImagePath(item, assetMap, pagePath);
+        if (!resolved) return null;
+        return { src: resolved, caption: undefined };
+      }
+
+      const resolved = resolveImagePath(item.src, assetMap, pagePath);
+      if (!resolved) return null;
+      return {
+        src: resolved,
+        caption: item.caption,
+      };
+    });
+
+  return resolvedValues.filter((item) => item !== null) as Array<{ src: string; caption?: string }>;
 };
 
 const toRgba = (value: string, alpha: number) => {
@@ -139,10 +190,11 @@ export const parseInfoboxMarkup = (markup: string): InfoboxData | null => {
   };
 };
 
-const Infobox: React.FC<InfoboxProps> = ({ data, renderRichText, assetMap }) => {
+const Infobox: React.FC<InfoboxProps> = ({ data, renderRichText, assetMap, pagePath }) => {
   const [openSections, setOpenSections] = useState<Record<number, boolean>>(() =>
     Object.fromEntries(data.sections.map((section, index) => [index, section.defaultOpen]))
   );
+  const [activeImageIndex, setActiveImageIndex] = useState(0);
 
   useEffect(() => {
     setOpenSections(
@@ -150,19 +202,91 @@ const Infobox: React.FC<InfoboxProps> = ({ data, renderRichText, assetMap }) => 
     );
   }, [data]);
 
-  const resolvedImage = useMemo(() => resolveImagePath(data.image, assetMap), [assetMap, data.image]);
+  useEffect(() => {
+    setActiveImageIndex(0);
+  }, [data.image]);
+
+  const resolvedImages = useMemo(
+    () => normalizeInfoboxImages(data.image, assetMap, pagePath),
+    [assetMap, data.image, pagePath]
+  );
   const titleBackgroundColor = data.titleBackgroundColor || 'rgb(var(--theme-700-rgb) / 0.92)';
   const titleTextColor = data.titleTextColor || '#ffffff';
+  const carouselIsTabbed = resolvedImages.length > 1 && resolvedImages.every((image) => !!image.caption?.trim());
+  const activeImage = resolvedImages[activeImageIndex] ?? null;
 
   return (
     <aside className="w-full md:float-right md:clear-right md:ml-6 mb-6 md:max-w-[21rem] rounded-2xl overflow-hidden border border-amber-800/40 bg-stone-950/90 shadow-2xl shadow-black/35">
-      {resolvedImage && (
+      {activeImage && (
         <div className="border-b border-amber-900/30 bg-black/30">
-          <img
-            src={resolvedImage}
-            alt={data.imageAlt || data.title}
-            className="block h-auto w-full object-cover"
-          />
+          <div className="relative">
+            <img
+              src={activeImage.src}
+              alt={data.imageAlt || activeImage.caption || data.title}
+              className="block h-auto w-full object-cover"
+            />
+            {resolvedImages.length > 1 && (
+              <>
+                <button
+                  type="button"
+                  onClick={() => setActiveImageIndex((value) => (value - 1 + resolvedImages.length) % resolvedImages.length)}
+                  className="absolute left-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white transition-colors hover:bg-black/75"
+                  aria-label="Previous image"
+                >
+                  <ChevronLeft size={16} />
+                </button>
+                <button
+                  type="button"
+                  onClick={() => setActiveImageIndex((value) => (value + 1) % resolvedImages.length)}
+                  className="absolute right-2 top-1/2 -translate-y-1/2 rounded-full bg-black/55 p-1.5 text-white transition-colors hover:bg-black/75"
+                  aria-label="Next image"
+                >
+                  <ChevronRight size={16} />
+                </button>
+              </>
+            )}
+          </div>
+          {activeImage.caption && (
+            <div className="border-t border-amber-900/20 px-3 py-2 text-center text-xs text-amber-100/90">
+              {renderRichText(activeImage.caption, 'text-inherit [&_p]:mb-0 [&_a]:text-inherit [&_a]:underline')}
+            </div>
+          )}
+          {resolvedImages.length > 1 && (
+            <div className="border-t border-amber-900/20 px-3 py-2">
+              {carouselIsTabbed ? (
+                <div className="flex flex-wrap gap-2">
+                  {resolvedImages.map((image, imageIndex) => (
+                    <button
+                      key={`${image.src}-${imageIndex}`}
+                      type="button"
+                      onClick={() => setActiveImageIndex(imageIndex)}
+                      className={`rounded px-2 py-1 text-[11px] transition-colors ${
+                        imageIndex === activeImageIndex
+                          ? 'bg-amber-700 text-white'
+                          : 'bg-stone-800 text-amber-200 hover:bg-stone-700'
+                      }`}
+                    >
+                      {image.caption}
+                    </button>
+                  ))}
+                </div>
+              ) : (
+                <div className="flex items-center justify-center gap-1.5">
+                  {resolvedImages.map((image, imageIndex) => (
+                    <button
+                      key={`${image.src}-${imageIndex}`}
+                      type="button"
+                      onClick={() => setActiveImageIndex(imageIndex)}
+                      className={`h-2.5 w-2.5 rounded-full transition-colors ${
+                        imageIndex === activeImageIndex ? 'bg-amber-300' : 'bg-amber-100/30 hover:bg-amber-100/50'
+                      }`}
+                      aria-label={`Go to image ${imageIndex + 1}`}
+                    />
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
         </div>
       )}
 
@@ -209,21 +333,44 @@ const Infobox: React.FC<InfoboxProps> = ({ data, renderRichText, assetMap }) => 
                   {section.entries.map((entry, entryIndex) => (
                     <div
                       key={`${sectionIndex}-${entryIndex}`}
-                      className="grid grid-cols-[6.5rem_minmax(0,1fr)] items-start gap-3 px-3 py-2 text-sm"
+                      className={`items-start gap-3 px-3 py-2 text-sm ${entry.columns && entry.columns.length > 0 ? 'grid grid-cols-1' : 'grid grid-cols-[6.5rem_minmax(0,1fr)]'}`}
                       style={{ backgroundColor: section.entryBackgroundColor }}
                     >
-                      <div className="font-semibold" style={{ fontFamily: "'Cinzel', serif", color: section.labelColor }}>
-                        {renderRichText(
-                          entry.label,
-                          'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500'
-                        )}
-                      </div>
-                      <div className="min-w-0" style={{ color: section.valueColor }}>
-                        {renderRichText(
-                          entry.value,
-                          'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500 [&_ul]:mb-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-0 [&_ol]:list-decimal [&_ol]:pl-4'
-                        )}
-                      </div>
+                      {entry.columns && entry.columns.length > 0 ? (
+                        <div className={`grid gap-3 ${entry.columns.length === 2 ? 'md:grid-cols-2' : 'md:grid-cols-3'}`}>
+                          {entry.columns.map((column, columnIndex) => (
+                            <div key={`${sectionIndex}-${entryIndex}-${columnIndex}`} className="rounded-md bg-black/5 px-2 py-2">
+                              <div className="font-semibold" style={{ fontFamily: "'Cinzel', serif", color: section.labelColor }}>
+                                {renderRichText(
+                                  column.label,
+                                  'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500'
+                                )}
+                              </div>
+                              <div className="mt-1 min-w-0" style={{ color: section.valueColor }}>
+                                {renderRichText(
+                                  column.value,
+                                  'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500 [&_ul]:mb-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-0 [&_ol]:list-decimal [&_ol]:pl-4'
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ) : (
+                        <>
+                          <div className="font-semibold" style={{ fontFamily: "'Cinzel', serif", color: section.labelColor }}>
+                            {renderRichText(
+                              entry.label,
+                              'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500'
+                            )}
+                          </div>
+                          <div className="min-w-0" style={{ color: section.valueColor }}>
+                            {renderRichText(
+                              entry.value,
+                              'text-inherit [&_p]:mb-0 [&_a]:text-blue-700 [&_a]:underline [&_a:hover]:text-blue-500 [&_ul]:mb-0 [&_ul]:list-disc [&_ul]:pl-4 [&_ol]:mb-0 [&_ol]:list-decimal [&_ol]:pl-4'
+                            )}
+                          </div>
+                        </>
+                      )}
                     </div>
                   ))}
                 </div>

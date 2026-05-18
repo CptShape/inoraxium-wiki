@@ -3,7 +3,6 @@ import { BookOpen } from 'lucide-react';
 import { Chapter, GameSystemId } from '../types';
 import { ChapterTree } from './ChapterTree';
 import { LoginButton } from './LoginButton';
-import { EditorAccessButton } from './EditorAccessButton';
 
 interface SidebarProps {
   chapters: Chapter[];
@@ -81,7 +80,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
 
       {/* Action Buttons */}
       <div className="mt-6 pt-4 border-t border-amber-800/50 space-y-3">
-        <EditorAccessButton currentSystem={currentSystem} onOpenEditor={onOpenEditor} isActive={isEditorOpen} />
         <button
           onClick={onToggleSystem}
           className="w-full p-3 bg-gradient-to-r from-amber-800/40 to-amber-700/40 border-2 border-amber-700 rounded-lg text-amber-200 hover:from-amber-800/60 hover:to-amber-700/60 transition-all duration-300 shadow-lg hover:shadow-amber-900/30 flex items-center justify-center gap-2"

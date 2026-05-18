@@ -7,7 +7,10 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "import:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/import-user-pages.ps1"
+    "import:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/import-user-pages.ps1",
+    "list:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/list-user-workspaces.ps1",
+    "delete:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/delete-user-workspace.ps1",
+    "import:chronicler": "powershell -ExecutionPolicy Bypass -File scripts/import-chronicler-world.ps1"
   },
   "dependencies": {
     "clsx": "2.1.1",

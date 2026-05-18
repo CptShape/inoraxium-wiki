@@ -9,7 +9,7 @@ async function getFirestore() {
 
   try {
     const { initializeApp, getApps, getApp } = await import('firebase/app');
-    const { getFirestore: fbGetFirestore, collection, doc, setDoc, getDocs, deleteDoc, query, where, or } = await import('firebase/firestore');
+    const { getFirestore: fbGetFirestore, collection, doc, setDoc, getDocs, getDoc, deleteDoc, query, where, or } = await import('firebase/firestore');
 
     const app = getApps().length > 0 ? getApp() : initializeApp({
       apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -28,6 +28,7 @@ async function getFirestore() {
       doc,
       setDoc,
       getDocs,
+      getDoc,
       deleteDoc,
       query,
       where,
@@ -46,12 +47,18 @@ async function getFirestore() {
 const STORAGE_KEY_LOCAL = 'battleTrackerLocalCharacters';
 const USER_DICE_SETTINGS_LOCAL = 'battleTrackerUserDiceSettings';
 
+const getLocalCharacters = (): CharacterData[] => JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+
+const setLocalCharacters = (characters: CharacterData[]) => {
+  localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(characters));
+};
+
 /** Load characters visible to `userId`:
  *  - Own characters (all visibilities)
  *  - Public characters from other users
  */
 export const loadCharacters = async (userId: string | null): Promise<CharacterData[]> => {
-  const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+  const localData: CharacterData[] = getLocalCharacters();
 
   const fs = await getFirestore();
   if (!fs || !userId) {
@@ -98,7 +105,7 @@ export const loadCharacters = async (userId: string | null): Promise<CharacterDa
 };
 
 export const saveCharacter = async (character: CharacterData): Promise<void> => {
-  const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+  const localData: CharacterData[] = getLocalCharacters();
   const existIdx = localData.findIndex(c => c.id === character.id);
   const normalized = { ...character, visibility: character.visibility ?? 'private' };
   if (existIdx >= 0) {
@@ -106,7 +113,7 @@ export const saveCharacter = async (character: CharacterData): Promise<void> => 
   } else {
     localData.push(normalized);
   }
-  localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(localData));
+  setLocalCharacters(localData);
 
   if (!character.userId || character.userId === 'guest') return;
 
@@ -128,7 +135,7 @@ export const saveCharacterInventory = async (
   generalItems: CharacterGeneralItem[],
   userId: string | null
 ): Promise<void> => {
-  const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+  const localData: CharacterData[] = getLocalCharacters();
   const existIdx = localData.findIndex(c => c.id === characterId);
 
   if (existIdx >= 0) {
@@ -139,7 +146,7 @@ export const saveCharacterInventory = async (
       inventoryFolders,
       collapsedInventoryFolderIds,
     };
-    localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(localData));
+    setLocalCharacters(localData);
   }
 
   if (!userId || userId === 'guest') return;
@@ -155,9 +162,9 @@ export const saveCharacterInventory = async (
 };
 
 export const deleteCharacterFromDB = async (characterId: string): Promise<void> => {
-  const localData: CharacterData[] = JSON.parse(localStorage.getItem(STORAGE_KEY_LOCAL) || '[]');
+  const localData: CharacterData[] = getLocalCharacters();
   const nextLocal = localData.filter(c => c.id !== characterId);
-  localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(nextLocal));
+  setLocalCharacters(nextLocal);
 
   const fs = await getFirestore();
   if (!fs) return;
@@ -166,6 +173,37 @@ export const deleteCharacterFromDB = async (characterId: string): Promise<void> 
     await fs.deleteDoc(fs.doc(fs.db, 'characters', characterId));
   } catch (err) {
     console.error('Failed to delete from Firestore:', err);
+  }
+};
+
+export const reloadCharacterFromFirestore = async (
+  characterId: string,
+  userId: string | null,
+): Promise<CharacterData | null> => {
+  const localData = getLocalCharacters().filter((character) => character.id !== characterId);
+  setLocalCharacters(localData);
+
+  if (!userId || userId === 'guest') {
+    return null;
+  }
+
+  const fs = await getFirestore();
+  if (!fs) return null;
+
+  try {
+    const snapshot = await fs.getDoc(fs.doc(fs.db, 'characters', characterId));
+    if (!snapshot.exists()) return null;
+
+    const data = { id: snapshot.id, ...snapshot.data() } as CharacterData;
+    if (data.userId !== userId && data.visibility !== 'public') {
+      return null;
+    }
+
+    setLocalCharacters([...localData, data]);
+    return data;
+  } catch (err) {
+    console.error('Failed to reload character from Firestore:', err);
+    return null;
   }
 };
 

@@ -1,6 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2 } from 'lucide-react';
 import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
+import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 
 function evalCharFormula(formula: string, context: Record<string, number>): number {
   if (!formula) return 0;
@@ -23,7 +24,7 @@ function evalCharFormula(formula: string, context: Record<string, number>): numb
     return 0;
   }
 }
-import { loadCharacters, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings } from '../lib/firestore';
+import { loadCharacters, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { addCombatantToBattleTracker } from '../lib/battleTracker';
 
@@ -66,6 +67,13 @@ interface CharacterAttributePreset {
   attributeSectionColumns: Required<CharacterAttributeSectionColumns>;
 }
 
+type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
+
+interface AttributeResolvedOption {
+  value: number;
+  label: string;
+}
+
 function uid(): string {
   return Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
 }
@@ -95,6 +103,17 @@ const DEFAULT_ATTRIBUTE_SECTION_COLUMNS: Required<CharacterAttributeSectionColum
   other: 2,
   bars: 2,
 };
+
+const DEFAULT_ATTRIBUTE_CALCULATION_TYPE: AttributeCalculationType = 'sum';
+
+const normalizeAttributeOptions = (options?: CustomAttribute['valueOptions']): AttributeResolvedOption[] => (
+  (options || [])
+    .map((option) => ({
+      value: Number(option.value),
+      label: option.label || '',
+    }))
+    .filter((option) => Number.isFinite(option.value))
+);
 
 const ALIGNMENT_OPTIONS = [
   'Lawful Good',
@@ -363,14 +382,23 @@ export const Characters: React.FC = () => {
   const [editSpiritualAge, setEditSpiritualAge] = useState('');
   const [editAlignment, setEditAlignment] = useState('');
   const [editVisibility, setEditVisibility] = useState<'private' | 'public'>('private');
+  const [sendToSpreadsheet, setSendToSpreadsheet] = useState(true);
   const [backstory, setBackstory] = useState('');
   const [notes, setNotes] = useState('');
   const [portraitUrl, setPortraitUrl] = useState('');
   const [portraitImportUrl, setPortraitImportUrl] = useState('');
   const [portraitLoadError, setPortraitLoadError] = useState(false);
   const [displayStats, setDisplayStats] = useState<CharacterDisplayStat[]>([]);
+  const [displaySlotStates, setDisplaySlotStates] = useState<Record<string, 'unlocked' | 'locked' | 'blocked'>>({});
   const [attributeSectionModes, setAttributeSectionModes] = useState<Required<CharacterAttributeSectionModes>>(DEFAULT_ATTRIBUTE_SECTION_MODES);
   const [attributeSectionColumns, setAttributeSectionColumns] = useState<Required<CharacterAttributeSectionColumns>>(DEFAULT_ATTRIBUTE_SECTION_COLUMNS);
+  const [openAttributeHistoryId, setOpenAttributeHistoryId] = useState<string | null>(null);
+  const [openDisplayColorStatId, setOpenDisplayColorStatId] = useState<string | null>(null);
+  const [openAttributeOptionsId, setOpenAttributeOptionsId] = useState<string | null>(null);
+  const [displayLayoutMode, setDisplayLayoutMode] = useState(false);
+  const [draggingDisplayStatId, setDraggingDisplayStatId] = useState<string | null>(null);
+  const [sheetSyncStatus, setSheetSyncStatus] = useState<{ tone: 'idle' | 'success' | 'error'; message: string } | null>(null);
+  const [isSheetSyncing, setIsSheetSyncing] = useState(false);
   const [charTags, setCharTags] = useState<string[]>([]);
   const [charTagInput, setCharTagInput] = useState('');
   
@@ -423,6 +451,7 @@ export const Characters: React.FC = () => {
   const backstoryRef = useRef<HTMLTextAreaElement | null>(null);
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const attributeImportInputRef = useRef<HTMLInputElement | null>(null);
+  const historyCloseTimeoutRef = useRef<number | null>(null);
 
   // ── Auth & Data ──────────────────────────────────────────────────────────────
 
@@ -464,12 +493,14 @@ export const Characters: React.FC = () => {
       setEditSpiritualAge(selectedCharacter.spiritualAge || '');
       setEditAlignment(selectedCharacter.alignment || '');
       setEditVisibility(selectedCharacter.visibility ?? 'private');
+      setSendToSpreadsheet(selectedCharacter.sendToSpreadsheet ?? true);
       setBackstory(selectedCharacter.backstory ?? selectedCharacter.bio ?? '');
       setNotes(selectedCharacter.notes || '');
       setPortraitUrl(selectedCharacter.portraitUrl || '');
       setPortraitImportUrl(selectedCharacter.portraitUrl || '');
       setPortraitLoadError(false);
       setDisplayStats(selectedCharacter.displayStats || []);
+      setDisplaySlotStates(selectedCharacter.displaySlotStates || {});
       setAttributeSectionModes({ ...DEFAULT_ATTRIBUTE_SECTION_MODES, ...(selectedCharacter.attributeSectionModes || {}) });
       setAttributeSectionColumns({ ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS, ...(selectedCharacter.attributeSectionColumns || {}) });
       setCharTags(selectedCharacter.tags || []);
@@ -677,14 +708,20 @@ export const Characters: React.FC = () => {
       sourceContext: Record<string, number>
     ) => {
       const nextValues = { ...baseValues };
+      const effectBuckets: Record<string, number[]> = {};
 
       (charStatuses || []).forEach(status => {
         (status.effects || []).forEach(effect => {
           if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
             const effVal = evalCharFormula(effect.value || '0', sourceContext);
-            nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+            if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+            effectBuckets[effect.targetId].push(effVal);
           }
         });
+      });
+
+      Object.entries(effectBuckets).forEach(([targetId, values]) => {
+        nextValues[targetId] = applyAttributeEffectValue(targetId, nextValues[targetId] || 0, values);
       });
 
       return nextValues;
@@ -696,6 +733,7 @@ export const Characters: React.FC = () => {
       sourceContext: Record<string, number>
     ) => {
       const nextValues = { ...baseValues };
+      const effectBuckets: Record<string, number[]> = {};
 
       (charInventory || []).forEach(item => {
         if (!item.equipped) return;
@@ -703,7 +741,8 @@ export const Characters: React.FC = () => {
         (item.effects || []).forEach(effect => {
           if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
             const effVal = evalCharFormula(effect.value || '0', sourceContext);
-            nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+            if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+            effectBuckets[effect.targetId].push(effVal);
           }
         });
 
@@ -711,7 +750,8 @@ export const Characters: React.FC = () => {
           (action.effects || []).forEach(effect => {
             if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
               const effVal = evalCharFormula(effect.value || '0', sourceContext);
-              nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+              if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+              effectBuckets[effect.targetId].push(effVal);
             }
           });
         });
@@ -722,10 +762,15 @@ export const Characters: React.FC = () => {
           (action.effects || []).forEach(effect => {
             if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
               const effVal = evalCharFormula(effect.value || '0', sourceContext);
-              nextValues[effect.targetId] = (nextValues[effect.targetId] || 0) + effVal;
+              if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+              effectBuckets[effect.targetId].push(effVal);
             }
           });
         });
+      });
+
+      Object.entries(effectBuckets).forEach(([targetId, values]) => {
+        nextValues[targetId] = applyAttributeEffectValue(targetId, nextValues[targetId] || 0, values);
       });
 
       return nextValues;
@@ -804,7 +849,11 @@ export const Characters: React.FC = () => {
             : mode === 'expertise'
               ? proficiencyValue * 2
               : 0;
-        withModItemEffects[skill.id] = baseValue + proficiencyBonus;
+        withModItemEffects[skill.id] = applyAttributeEffectValue(
+          skill.id,
+          baseValue,
+          proficiencyBonus !== 0 ? [proficiencyBonus] : [],
+        );
       });
 
       const skillValuesWithStatuses = applyStatusEffects(
@@ -1249,32 +1298,150 @@ export const Characters: React.FC = () => {
     return 'none';
   };
 
-  const syncDisplayStatFavorite = (referenceId: string, nextFavorite: boolean) => {
-    setDisplayStats(prev => {
-      const existing = prev.find(stat => stat.referenceId === referenceId);
-      if (nextFavorite) {
-        return existing ? prev : [...prev, { id: `display_${uid()}`, referenceId }];
+  const getDisplaySlotKey = (row: number, column: number) => `${row}:${column}`;
+
+  const getNextAvailableDisplaySlot = (
+    stats: CharacterDisplayStat[],
+    slotStatesMap: Record<string, 'unlocked' | 'locked' | 'blocked'>,
+    columnCount: number,
+  ) => {
+    const cols = Math.max(1, columnCount);
+    let index = 0;
+    while (index < 500) {
+      const row = Math.floor(index / cols);
+      const column = index % cols;
+      const slotKey = getDisplaySlotKey(row, column);
+      const slotState = slotStatesMap[slotKey] || 'unlocked';
+      const occupied = stats.some((stat) => (stat.row ?? 0) === row && (stat.column ?? 0) === column);
+      if (!occupied && slotState !== 'blocked') {
+        return { row, column };
       }
-      return prev.filter(stat => stat.referenceId !== referenceId);
+      index += 1;
+    }
+    return { row: 0, column: 0 };
+  };
+
+  const normalizeDisplayStatsLayout = (
+    stats: CharacterDisplayStat[],
+    columnCount: number,
+  ) => {
+    const cols = Math.max(1, columnCount);
+    const occupiedKeys = new Set<string>();
+
+    return stats.map((stat, index) => {
+      const currentRow = stat.row;
+      const currentColumn = stat.column;
+
+      if (typeof currentRow === 'number' && typeof currentColumn === 'number') {
+        occupiedKeys.add(getDisplaySlotKey(currentRow, currentColumn));
+        return stat;
+      }
+
+      let slotIndex = index;
+      let row = Math.floor(slotIndex / cols);
+      let column = slotIndex % cols;
+      while (occupiedKeys.has(getDisplaySlotKey(row, column))) {
+        slotIndex += 1;
+        row = Math.floor(slotIndex / cols);
+        column = slotIndex % cols;
+      }
+      occupiedKeys.add(getDisplaySlotKey(row, column));
+
+      return {
+        ...stat,
+        row,
+        column,
+      };
     });
   };
 
-  const moveDisplayStatReference = (referenceId: string, direction: 'up' | 'down', visibleReferenceIds: string[]) => {
+  const syncDisplayStatFavorite = (referenceId: string, nextFavorite: boolean) => {
     setDisplayStats(prev => {
-      const existingByRef = new Map(prev.map(stat => [stat.referenceId, stat]));
-      const visibleStats = visibleReferenceIds
-        .map(ref => existingByRef.get(ref) || { id: `display_${uid()}`, referenceId: ref })
-        .filter(Boolean) as CharacterDisplayStat[];
-      const hiddenStats = prev.filter(stat => !visibleReferenceIds.includes(stat.referenceId));
+      const normalizedPrev = normalizeDisplayStatsLayout(prev, attributeSectionColumns.display);
+      const existing = prev.find(stat => stat.referenceId === referenceId);
+      if (nextFavorite) {
+          if (existing) return prev;
+          const { row, column } = getNextAvailableDisplaySlot(normalizedPrev, displaySlotStates, attributeSectionColumns.display);
+          return [...normalizedPrev, {
+            id: `display_${uid()}`,
+            referenceId,
+            row,
+            column,
+          }];
+      }
+      return normalizedPrev.filter(stat => stat.referenceId !== referenceId);
+    });
+  };
 
-      const index = visibleStats.findIndex(stat => stat.referenceId === referenceId);
-      if (index < 0) return [...visibleStats, ...hiddenStats];
-      const targetIndex = direction === 'up' ? index - 1 : index + 1;
-      if (targetIndex < 0 || targetIndex >= visibleStats.length) return [...visibleStats, ...hiddenStats];
-      const next = [...visibleStats];
-      const [item] = next.splice(index, 1);
-      next.splice(targetIndex, 0, item);
-      return [...next, ...hiddenStats];
+  useEffect(() => {
+    const favoriteReferenceIds = [
+      ...mainAttrs.filter(attr => attr.favorite).map(attr => attr.id).filter(Boolean),
+      ...secondaryAttrs.filter(attr => attr.favorite).map(attr => attr.id).filter(Boolean),
+      ...skills.filter(attr => attr.favorite).map(attr => attr.id).filter(Boolean),
+      ...otherAttrs.filter(attr => attr.favorite).map(attr => attr.id).filter(Boolean),
+      ...bars.filter(bar => bar.favorite).map(bar => bar.id).filter(Boolean),
+    ];
+
+    setDisplayStats((prev) => {
+      const normalizedPrev = normalizeDisplayStatsLayout(prev, attributeSectionColumns.display);
+      const favoriteSet = new Set(favoriteReferenceIds);
+      const preserved = normalizedPrev
+        .filter((stat) => favoriteSet.has(stat.referenceId))
+        .map((stat) => ({
+          ...stat,
+          row: stat.row ?? 0,
+          column: stat.column ?? 0,
+        }));
+
+      const usedReferenceIds = new Set(preserved.map((stat) => stat.referenceId));
+      const next = [...preserved];
+
+      favoriteReferenceIds.forEach((referenceId) => {
+        if (usedReferenceIds.has(referenceId)) return;
+        const slot = getNextAvailableDisplaySlot(next, displaySlotStates, attributeSectionColumns.display);
+        next.push({
+          id: `display_${uid()}`,
+          referenceId,
+          row: slot.row,
+          column: slot.column,
+        });
+      });
+
+      const same =
+        normalizedPrev.length === next.length &&
+        normalizedPrev.every((stat, index) => {
+          const candidate = next[index];
+          return candidate
+            && stat.id === candidate.id
+            && stat.referenceId === candidate.referenceId
+            && (stat.row ?? 0) === (candidate.row ?? 0)
+            && (stat.column ?? 0) === (candidate.column ?? 0)
+            && JSON.stringify(stat.colors || {}) === JSON.stringify(candidate.colors || {});
+        });
+
+      return same ? normalizedPrev : next;
+    });
+  }, [mainAttrs, secondaryAttrs, skills, otherAttrs, bars, displaySlotStates, attributeSectionColumns.display]);
+
+  const moveDisplayStatReference = (statId: string, direction: 'up' | 'down' | 'left' | 'right') => {
+    setDisplayStats(prev => {
+      const cols = Math.max(1, attributeSectionColumns.display);
+      const current = prev.find(stat => stat.id === statId);
+      if (!current) return prev;
+
+      const currentRow = current.row ?? 0;
+      const currentColumn = current.column ?? 0;
+      const nextRow = direction === 'up' ? Math.max(0, currentRow - 1) : direction === 'down' ? currentRow + 1 : currentRow;
+      const nextColumn = direction === 'left' ? Math.max(0, currentColumn - 1) : direction === 'right' ? Math.min(cols - 1, currentColumn + 1) : currentColumn;
+
+      if (nextRow === currentRow && nextColumn === currentColumn) return prev;
+
+      const occupant = prev.find(stat => stat.id !== statId && (stat.row ?? 0) === nextRow && (stat.column ?? 0) === nextColumn);
+      return prev.map(stat => {
+        if (stat.id === statId) return { ...stat, row: nextRow, column: nextColumn };
+        if (occupant && stat.id === occupant.id) return { ...stat, row: currentRow, column: currentColumn };
+        return stat;
+      });
     });
   };
 
@@ -1283,16 +1450,141 @@ export const Characters: React.FC = () => {
     setAttributeSectionColumns(prev => ({ ...prev, [section]: clamped }));
   };
 
-  const addDisplayStat = () => {
-    setDisplayStats(prev => [...prev, { id: `display_${uid()}`, referenceId: '' }]);
+  const cycleDisplaySlotState = (row: number, column: number) => {
+    const slotKey = getDisplaySlotKey(row, column);
+    setDisplaySlotStates(prev => {
+      const currentState = prev[slotKey] || 'unlocked';
+      const nextState = currentState === 'unlocked' ? 'locked' : currentState === 'locked' ? 'blocked' : 'unlocked';
+      return { ...prev, [slotKey]: nextState };
+    });
+
+    setDisplayStats(prev => {
+      const occupant = prev.find(stat => (stat.row ?? 0) === row && (stat.column ?? 0) === column);
+      const currentState = displaySlotStates[slotKey] || 'unlocked';
+      const nextState = currentState === 'unlocked' ? 'locked' : currentState === 'locked' ? 'blocked' : 'unlocked';
+      if (!occupant || nextState !== 'blocked') return prev;
+      const fallbackSlot = getNextAvailableDisplaySlot(
+        prev.filter(stat => stat.id !== occupant.id),
+        { ...displaySlotStates, [slotKey]: nextState },
+        attributeSectionColumns.display,
+      );
+      return prev.map(stat => stat.id === occupant.id ? { ...stat, row: fallbackSlot.row, column: fallbackSlot.column } : stat);
+    });
   };
 
-  const updateDisplayStat = (statId: string, referenceId: string) => {
-    setDisplayStats(prev => prev.map(stat => stat.id === statId ? { ...stat, referenceId } : stat));
+  const moveDisplayStatToSlot = (statId: string, targetRow: number, targetColumn: number) => {
+    const slotKey = getDisplaySlotKey(targetRow, targetColumn);
+    const slotState = displaySlotStates[slotKey] || 'unlocked';
+    if (slotState !== 'unlocked') return;
+
+    setDisplayStats(prev => {
+      const current = prev.find(stat => stat.id === statId);
+      if (!current) return prev;
+      const currentRow = current.row ?? 0;
+      const currentColumn = current.column ?? 0;
+      const targetOccupant = prev.find(stat => stat.id !== statId && (stat.row ?? 0) === targetRow && (stat.column ?? 0) === targetColumn);
+      const targetOccupantState = targetOccupant ? (displaySlotStates[getDisplaySlotKey(targetRow, targetColumn)] || 'unlocked') : 'unlocked';
+      if (targetOccupant && targetOccupantState !== 'unlocked') return prev;
+      return prev.map(stat => {
+        if (stat.id === statId) return { ...stat, row: targetRow, column: targetColumn };
+        if (targetOccupant && stat.id === targetOccupant.id) return { ...stat, row: currentRow, column: currentColumn };
+        return stat;
+      });
+    });
   };
 
-  const removeDisplayStat = (statId: string) => {
-    setDisplayStats(prev => prev.filter(stat => stat.id !== statId));
+  const updateDisplayStatColors = (
+    statId: string,
+    key: keyof NonNullable<CharacterDisplayStat['colors']>,
+    value: string,
+  ) => {
+    setDisplayStats(prev => prev.map(stat => (
+      stat.id === statId
+        ? { ...stat, colors: { ...(stat.colors || {}), [key]: value } }
+        : stat
+    )));
+  };
+
+  const getAllSheetAttributes = () => [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs];
+
+  const getAttributeDefinitionById = (attributeId: string) => (
+    getAllSheetAttributes().find((attr) => attr.id === attributeId)
+  );
+
+  const getAttributeCalculationType = (attributeId: string): AttributeCalculationType => (
+    getAttributeDefinitionById(attributeId)?.calculationType || DEFAULT_ATTRIBUTE_CALCULATION_TYPE
+  );
+
+  const resolveAttributeValueLabel = (attributeId: string, rawValue: number) => {
+    const definition = getAttributeDefinitionById(attributeId);
+    if (!definition) return `${rawValue}`;
+    const match = normalizeAttributeOptions(definition.valueOptions).find((option) => option.value === rawValue);
+    return match?.label || `${rawValue}`;
+  };
+
+  const formatAttributeOutput = (attributeId: string, rawValue: number) => resolveAttributeValueLabel(attributeId, rawValue);
+
+  const getSheetReferenceAnchorId = (referenceId: string) => {
+    if (!referenceId) return '';
+    const normalizedId = referenceId.replace(/_mod$/, '');
+    if (mainAttrs.some((attr) => attr.id === normalizedId)) return `sheet-attr-main-${normalizedId}`;
+    if (secondaryAttrs.some((attr) => attr.id === normalizedId)) return `sheet-attr-secondary-${normalizedId}`;
+    if (skills.some((attr) => attr.id === normalizedId)) return `sheet-attr-skill-${normalizedId}`;
+    if (otherAttrs.some((attr) => attr.id === normalizedId)) return `sheet-attr-other-${normalizedId}`;
+    if (bars.some((bar) => bar.id === normalizedId)) return `sheet-bar-${normalizedId}`;
+    return '';
+  };
+
+  const applyAttributeEffectValue = (
+    targetId: string,
+    baseValue: number,
+    contributions: number[],
+  ) => {
+    const calculationType = getAttributeCalculationType(targetId);
+    if (calculationType === 'override-highest') {
+      return baseValue + (contributions.length > 0 ? Math.max(...contributions) : 0);
+    }
+    if (calculationType === 'override-lowest') {
+      return baseValue + (contributions.length > 0 ? Math.min(...contributions) : 0);
+    }
+    return baseValue + contributions.reduce((sum, contribution) => sum + contribution, 0);
+  };
+
+  const buildCharacterSheetSyncValues = (context: Record<string, number>) => {
+    const values: Record<string, string | number> = {};
+
+    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
+      if (!attr.id) return;
+      const rawValue = context[attr.id];
+      if (Number.isFinite(rawValue)) {
+        values[attr.id] = rawValue;
+        if ((attr.valueOptions || []).length > 0) {
+          values[`${attr.id}_text`] = formatAttributeOutput(attr.id, rawValue);
+        }
+      }
+    });
+
+    mainAttrs.forEach((attr) => {
+      if (!attr.id) return;
+      const rawModifier = context[`${attr.id}_mod`];
+      if (Number.isFinite(rawModifier)) {
+        values[`${attr.id}_mod`] = rawModifier;
+      }
+    });
+
+    bars.forEach((bar) => {
+      if (!bar.id) return;
+      const currentValue = context[`${bar.id}_current`];
+      const maxValue = context[`${bar.id}_max`];
+      if (Number.isFinite(currentValue)) {
+        values[`${bar.id}_current`] = currentValue;
+      }
+      if (Number.isFinite(maxValue)) {
+        values[`${bar.id}_max`] = maxValue;
+      }
+    });
+
+    return values;
   };
 
   const exportAttributePreset = () => {
@@ -2318,13 +2610,15 @@ export const Characters: React.FC = () => {
       spiritualAge: '',
       alignment: '',
       visibility: 'private',
+      sendToSpreadsheet: true,
       userId: userId || 'guest',
       bio: '',
       backstory: '',
       notes: '',
-      portraitUrl: '',
-      displayStats: [],
-      attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
+        portraitUrl: '',
+        displayStats: [],
+        displaySlotStates: {},
+        attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
       attributeSectionColumns: DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
       skills: [],
       generalItems: [],
@@ -2346,6 +2640,27 @@ export const Characters: React.FC = () => {
       const updated = { ...selectedCharacter, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders };
       setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders } : c)));
       setSelectedCharacter(updated);
+      if (updated.sendToSpreadsheet ?? true) {
+        const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
+        setIsSheetSyncing(true);
+        const syncResult = await syncCharacterSheet({
+          characterId: updated.id,
+          characterName: updated.name,
+          sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+          tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+          values: syncValues,
+        });
+        setIsSheetSyncing(false);
+        setSheetSyncStatus({
+          tone: syncResult.success ? 'success' : 'error',
+          message: syncResult.message,
+        });
+      } else {
+        setSheetSyncStatus({
+          tone: 'success',
+          message: 'Spreadsheet sync skipped for this character.',
+        });
+      }
       return;
     }
 
@@ -2360,12 +2675,14 @@ export const Characters: React.FC = () => {
       spiritualAge: editSpiritualAge,
       alignment: editAlignment,
       visibility: editVisibility,
+      sendToSpreadsheet,
       bio: backstory,
       backstory,
       notes,
       portraitUrl,
       tags: charTags,
       displayStats,
+      displaySlotStates,
       attributeSectionModes,
       attributeSectionColumns,
       mainAttributes: mainAttrs,
@@ -2388,6 +2705,43 @@ export const Characters: React.FC = () => {
     await saveCharacter(updated);
     setCharacters(characters.map(c => (c.id === updated.id ? updated : c)));
     setSelectedCharacter(updated);
+    if (updated.sendToSpreadsheet ?? true) {
+      const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
+      setIsSheetSyncing(true);
+      const syncResult = await syncCharacterSheet({
+        characterId: updated.id,
+        characterName: updated.name,
+        sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+        tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+        values: syncValues,
+      });
+      setIsSheetSyncing(false);
+      setSheetSyncStatus({
+        tone: syncResult.success ? 'success' : 'error',
+        message: syncResult.message,
+      });
+    } else {
+      setSheetSyncStatus({
+        tone: 'success',
+        message: 'Spreadsheet sync skipped for this character.',
+      });
+    }
+  };
+
+  const handleReloadFromFirestore = async () => {
+    if (!selectedCharacter) return;
+
+    const reloadedCharacter = await reloadCharacterFromFirestore(selectedCharacter.id, userId);
+    if (!reloadedCharacter) {
+      window.alert('Could not reload this character from Firestore.');
+      return;
+    }
+
+    setCharacters((prev) => prev.map((character) => (
+      character.id === reloadedCharacter.id ? reloadedCharacter : character
+    )));
+    setSelectedCharacter(reloadedCharacter);
+    setSheetSyncStatus(null);
   };
 
   const handleToggleFav = async (e: React.MouseEvent, charId: string) => {
@@ -2547,58 +2901,357 @@ export const Characters: React.FC = () => {
 
   // ── Full Character Sheet ─────────────────────────────────────────────────────
 
-  if (isViewingSheet && selectedCharacter) {
-    const finalContext = getCharacterContext();
-    const favoriteDisplayMap = new Map<string, { id: string; name: string; value: string }>();
-    mainAttrs.filter(attr => attr.favorite).forEach((attr) => {
-      const baseValue = finalContext[attr.id] ?? 0;
-      const modValue = finalContext[`${attr.id}_mod`] ?? 0;
-      favoriteDisplayMap.set(attr.id, {
+    if (isViewingSheet && selectedCharacter) {
+      const finalContext = getCharacterContext();
+      const attributeEffectHistory: Record<string, Array<{ label: string; value: number; sourceAnchorId?: string }>> = {};
+      const pushAttributeHistory = (targetId: string, label: string, value: number, sourceAnchorId?: string) => {
+        if (!targetId || !Number.isFinite(value) || Math.abs(value) < 0.0001) return;
+        if (!attributeEffectHistory[targetId]) attributeEffectHistory[targetId] = [];
+        attributeEffectHistory[targetId].push({ label, value, sourceAnchorId });
+      };
+
+      [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
+        if (!attr.id) return;
+        const baseValue = evalCharFormula(attr.value || '0', finalContext);
+        pushAttributeHistory(attr.id, `${attr.name || attr.id} base`, baseValue);
+      });
+
+      mainAttrs.forEach((attr) => {
+        if (!attr.id) return;
+        const baseValue = finalContext[attr.id] || 0;
+        const formula = (modFormula || 'Math.floor((@value - 10) / 2)').replace(/@value/g, baseValue.toString());
+        const modValue = evalCharFormula(formula, finalContext);
+        pushAttributeHistory(`${attr.id}_mod`, `${attr.name || attr.id} modifier formula`, modValue);
+      });
+
+      skills.forEach((skill) => {
+        if (!skill.id) return;
+        const proficiencyValue = finalContext.proficiency ?? 0;
+        const mode = skill.proficiencyMode || 'none';
+        const proficiencyBonus = mode === 'half'
+          ? Math.floor(proficiencyValue / 2)
+          : mode === 'proficient'
+            ? proficiencyValue
+            : mode === 'expertise'
+              ? proficiencyValue * 2
+              : 0;
+        if (proficiencyBonus !== 0) {
+          pushAttributeHistory(skill.id, `${skill.name || skill.id} proficiency`, proficiencyBonus);
+        }
+      });
+
+      (charStatuses || []).forEach((status) => {
+        (status.effects || []).forEach((effect) => {
+          if (!(effect.active ?? true) || !effect.targetId) return;
+          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          pushAttributeHistory(effect.targetId, `${status.name || 'Status'} effect`, effectValue, `status-${status.id}`);
+        });
+      });
+
+      (charInventory || []).forEach((item) => {
+        if (!item.equipped) return;
+        (item.effects || []).forEach((effect) => {
+          if (!(effect.active ?? true) || !effect.targetId) return;
+          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          pushAttributeHistory(effect.targetId, `${item.name || 'Item'} effect`, effectValue, `inventory-item-${item.id}`);
+        });
+        (item.actions || []).forEach((action) => {
+          (action.effects || []).forEach((effect) => {
+            if (!(effect.active ?? true) || !effect.targetId) return;
+            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            pushAttributeHistory(effect.targetId, `${item.name || 'Item'} / ${action.name || 'Action'}`, effectValue, `inventory-item-${item.id}`);
+          });
+        });
+      });
+
+      const favoriteDisplayMap = new Map<string, { id: string; name: string; value: string }>();
+      mainAttrs.filter(attr => attr.favorite).forEach((attr) => {
+        const baseValue = finalContext[attr.id] ?? 0;
+        const modValue = finalContext[`${attr.id}_mod`] ?? 0;
+        favoriteDisplayMap.set(attr.id, {
         id: attr.id,
         name: attr.name || getReferenceDisplayName(attr.id),
-        value: `${baseValue} (${modValue >= 0 ? `+${modValue}` : modValue})`,
+        value: `${formatAttributeOutput(attr.id, baseValue)} (${modValue >= 0 ? `+${modValue}` : modValue})`,
       });
     });
     secondaryAttrs.filter(attr => attr.favorite).forEach((attr) => {
       favoriteDisplayMap.set(attr.id, {
         id: attr.id,
         name: attr.name || getReferenceDisplayName(attr.id),
-        value: `${finalContext[attr.id] ?? 0}`,
+        value: formatAttributeOutput(attr.id, finalContext[attr.id] ?? 0),
       });
     });
     skills.filter(attr => attr.favorite).forEach((attr) => {
       favoriteDisplayMap.set(attr.id, {
         id: attr.id,
         name: attr.name || getReferenceDisplayName(attr.id),
-        value: `${finalContext[attr.id] ?? 0}`,
+        value: formatAttributeOutput(attr.id, finalContext[attr.id] ?? 0),
       });
     });
     otherAttrs.filter(attr => attr.favorite).forEach((attr) => {
       favoriteDisplayMap.set(attr.id, {
         id: attr.id,
         name: attr.name || getReferenceDisplayName(attr.id),
-        value: `${finalContext[attr.id] ?? 0}`,
+        value: formatAttributeOutput(attr.id, finalContext[attr.id] ?? 0),
       });
     });
-    bars.filter(bar => bar.favorite).forEach((bar) => {
-      favoriteDisplayMap.set(bar.id, {
-        id: bar.id,
-        name: bar.name || getReferenceDisplayName(bar.id),
-        value: `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_max`] ?? 0}`,
+      bars.filter(bar => bar.favorite).forEach((bar) => {
+        favoriteDisplayMap.set(bar.id, {
+          id: bar.id,
+          name: bar.name || getReferenceDisplayName(bar.id),
+          value: `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_max`] ?? 0}`,
+        });
       });
-    });
-    const orderedFavoriteIds = [
-      ...displayStats.map(stat => stat.referenceId).filter(referenceId => favoriteDisplayMap.has(referenceId)),
-      ...Array.from(favoriteDisplayMap.keys()).filter(referenceId => !displayStats.some(stat => stat.referenceId === referenceId)),
-    ];
-    const favoriteDisplayEntries = orderedFavoriteIds.map((referenceId) => favoriteDisplayMap.get(referenceId)).filter(Boolean) as Array<{ id: string; name: string; value: string }>;
+      const favoriteDisplayEntries = (() => {
+        const cols = Math.max(1, attributeSectionColumns.display);
+        const persistedStats = displayStats.filter(stat => favoriteDisplayMap.has(stat.referenceId));
+        const usedReferenceIds = new Set(persistedStats.map(stat => stat.referenceId).filter(Boolean));
+        const entries = displayStats
+          .map((stat, index) => {
+            const favorite = favoriteDisplayMap.get(stat.referenceId);
+            if (!favorite) return null;
+            return {
+              slotId: stat.id,
+              referenceId: stat.referenceId,
+              colors: stat.colors,
+              row: stat.row ?? Math.floor(index / cols),
+              column: stat.column ?? (index % cols),
+              ...favorite,
+            };
+          })
+          .filter(Boolean) as Array<{ slotId: string; referenceId: string; colors?: CharacterDisplayStat['colors']; row: number; column: number; id: string; name: string; value: string }>;
 
-    const PROFICIENCY_STYLES: Record<NonNullable<SkillAttribute['proficiencyMode']>, { label: string; icon: React.ReactNode; className: string }> = {
-      none: { label: 'No Proficiency', icon: <X size={14} />, className: 'bg-stone-900/60 border-stone-700 text-stone-400' },
-      half: { label: 'Half Proficiency', icon: <Shield size={14} />, className: 'bg-sky-900/30 border-sky-500/40 text-sky-200 shadow-[0_0_14px_rgba(56,189,248,0.28)]' },
-      proficient: { label: 'Proficient', icon: <Check size={14} />, className: 'bg-emerald-900/30 border-emerald-500/40 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.28)]' },
-      expertise: { label: 'Expertise', icon: <Star size={14} />, className: 'bg-amber-900/40 border-amber-400/50 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.35)]' },
-    };
+        const virtualStats = persistedStats.map(stat => ({
+          ...stat,
+          row: stat.row ?? 0,
+          column: stat.column ?? 0,
+        }));
+        Array.from(favoriteDisplayMap.values()).forEach((favorite) => {
+          if (usedReferenceIds.has(favorite.id)) return;
+          const slot = getNextAvailableDisplaySlot(virtualStats, displaySlotStates, cols);
+          entries.push({
+            slotId: `display_auto_${favorite.id}`,
+            referenceId: favorite.id,
+            colors: undefined,
+            row: slot.row,
+            column: slot.column,
+            ...favorite,
+          });
+          virtualStats.push({
+            id: `virtual_${favorite.id}`,
+            referenceId: favorite.id,
+            row: slot.row,
+            column: slot.column,
+          });
+        });
+
+        return entries.sort((left, right) => {
+          if (left.row !== right.row) return left.row - right.row;
+          if (left.column !== right.column) return left.column - right.column;
+          return left.name.localeCompare(right.name);
+        });
+      })();
+
+      const PROFICIENCY_STYLES: Record<NonNullable<SkillAttribute['proficiencyMode']>, { label: string; icon: React.ReactNode; className: string }> = {
+        none: { label: 'No Proficiency', icon: <X size={14} />, className: 'bg-stone-900/60 border-stone-700 text-stone-400' },
+        half: { label: 'Half Proficiency', icon: <Shield size={14} />, className: 'bg-sky-900/30 border-sky-500/40 text-sky-200 shadow-[0_0_14px_rgba(56,189,248,0.28)]' },
+        proficient: { label: 'Proficient', icon: <Check size={14} />, className: 'bg-emerald-900/30 border-emerald-500/40 text-emerald-200 shadow-[0_0_14px_rgba(52,211,153,0.28)]' },
+        expertise: { label: 'Expertise', icon: <Star size={14} />, className: 'bg-amber-900/40 border-amber-400/50 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.35)]' },
+      };
+
+      const jumpToHistorySource = (anchorId: string) => {
+        const element = document.getElementById(anchorId);
+        if (element) {
+          element.scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+      };
+
+      const jumpToSheetReference = (referenceId: string) => {
+        const anchorId = getSheetReferenceAnchorId(referenceId);
+        if (!anchorId) return;
+        jumpToHistorySource(anchorId);
+      };
+
+      const openHistoryPopover = (referenceId: string) => {
+        if (historyCloseTimeoutRef.current) {
+          window.clearTimeout(historyCloseTimeoutRef.current);
+          historyCloseTimeoutRef.current = null;
+        }
+        setOpenAttributeHistoryId(referenceId);
+      };
+
+      const closeHistoryPopover = (referenceId: string) => {
+        if (historyCloseTimeoutRef.current) {
+          window.clearTimeout(historyCloseTimeoutRef.current);
+        }
+        historyCloseTimeoutRef.current = window.setTimeout(() => {
+          setOpenAttributeHistoryId(current => current === referenceId ? null : current);
+          historyCloseTimeoutRef.current = null;
+        }, 260);
+      };
+
+      const renderAttributeHistory = (referenceId: string) => {
+        const historyEntries = attributeEffectHistory[referenceId] || [];
+        return (
+          <div
+            className="relative inline-block"
+            onPointerEnter={() => openHistoryPopover(referenceId)}
+            onPointerLeave={() => closeHistoryPopover(referenceId)}
+          >
+            <button
+              onClick={() => setOpenAttributeHistoryId(current => current === referenceId ? null : referenceId)}
+              className="px-2 py-1 rounded border border-amber-800/30 bg-black/20 text-[10px] uppercase tracking-[0.18em] text-amber-400 hover:text-amber-200 cursor-pointer"
+            >
+              History
+            </button>
+            {openAttributeHistoryId === referenceId && (
+              <div
+                className="absolute right-0 top-full z-30 mt-1 w-72 rounded-xl border border-amber-700/30 bg-stone-950/95 p-3 shadow-2xl"
+                onPointerEnter={() => openHistoryPopover(referenceId)}
+                onPointerLeave={() => closeHistoryPopover(referenceId)}
+              >
+                <p className="text-[11px] uppercase tracking-[0.18em] text-amber-500 mb-2">Affecting this value</p>
+                {historyEntries.length === 0 ? (
+                  <p className="text-xs text-stone-500 italic">No active effects.</p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {historyEntries.map((entry, index) => (
+                      <div key={`${referenceId}-${index}`} className="flex items-center justify-between gap-3 text-xs">
+                        {entry.sourceAnchorId ? (
+                          <button
+                            onClick={() => jumpToHistorySource(entry.sourceAnchorId!)}
+                            className="text-left text-amber-100/85 hover:text-amber-300 underline cursor-pointer"
+                          >
+                            {entry.label}
+                          </button>
+                        ) : (
+                          <span className="text-amber-100/85">{entry.label}</span>
+                        )}
+                        <span className={`font-mono ${entry.value >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                          {entry.value >= 0 ? '+' : ''}{entry.value}
+                        </span>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            )}
+          </div>
+        );
+      };
+
+      const renderMainAttributeHistory = (attributeId: string) => (
+        <div className="space-y-2">
+          {renderAttributeHistory(attributeId)}
+          <div className="border-t border-amber-800/20 pt-2">
+            {renderAttributeHistory(`${attributeId}_mod`)}
+          </div>
+        </div>
+      );
+
+      const renderAttributeOptionsEditor = (
+        attr: CustomAttribute | SkillAttribute,
+        items: (CustomAttribute | SkillAttribute)[],
+        setItems: React.Dispatch<React.SetStateAction<any[]>>,
+        actualIndex: number,
+      ) => {
+        if (openAttributeOptionsId !== attr.id) return null;
+        const valueOptions = attr.valueOptions || [];
+
+        return (
+          <div className="mt-2 rounded-xl border border-amber-800/20 bg-black/20 p-3 space-y-3">
+            <div>
+              <label className="block text-[11px] font-bold uppercase tracking-[0.16em] text-amber-500 mb-2">Attribute Type</label>
+              <div className="flex flex-wrap gap-2">
+                {[
+                  { key: 'sum', label: 'Normal' },
+                  { key: 'override-highest', label: 'Highest Override' },
+                  { key: 'override-lowest', label: 'Lowest Override' },
+                ].map((mode) => (
+                  <button
+                    key={mode.key}
+                    onClick={() => {
+                      const next = [...items];
+                      next[actualIndex] = { ...next[actualIndex], calculationType: mode.key as AttributeCalculationType };
+                      setItems(next);
+                    }}
+                    className={`px-2 py-1 rounded border text-[11px] cursor-pointer ${
+                      (attr.calculationType || DEFAULT_ATTRIBUTE_CALCULATION_TYPE) === mode.key
+                        ? 'bg-amber-900/40 border-amber-500/50 text-amber-100'
+                        : 'bg-stone-900/40 border-stone-700/40 text-stone-400 hover:text-amber-200'
+                    }`}
+                  >
+                    {mode.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <div className="flex items-center justify-between mb-2">
+                <label className="block text-[11px] font-bold uppercase tracking-[0.16em] text-amber-500">Value Labels</label>
+                <button
+                  onClick={() => {
+                    const next = [...items];
+                    const nextOptions = [...(next[actualIndex].valueOptions || []), { value: '0', label: '' }];
+                    next[actualIndex] = { ...next[actualIndex], valueOptions: nextOptions };
+                    setItems(next);
+                  }}
+                  className="px-2 py-1 bg-amber-900/30 border border-amber-800/40 rounded text-[10px] text-amber-200 hover:bg-amber-900/50 cursor-pointer"
+                >
+                  + Label
+                </button>
+              </div>
+              <div className="space-y-2">
+                {valueOptions.length === 0 ? (
+                  <p className="text-xs text-stone-500 italic">No labels yet. Add one to map values like `1 = Light Armor`.</p>
+                ) : valueOptions.map((option, optionIndex) => (
+                  <div key={`${attr.id}-option-${optionIndex}`} className="grid grid-cols-[90px_minmax(0,1fr)_auto] gap-2 items-center">
+                    <input
+                      type="number"
+                      value={option.value}
+                      onChange={(e) => {
+                        const next = [...items];
+                        const nextOptions = [...(next[actualIndex].valueOptions || [])];
+                        nextOptions[optionIndex] = { ...nextOptions[optionIndex], value: e.target.value };
+                        next[actualIndex] = { ...next[actualIndex], valueOptions: nextOptions };
+                        setItems(next);
+                      }}
+                      className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 focus:outline-none"
+                    />
+                    <input
+                      type="text"
+                      value={option.label}
+                      onChange={(e) => {
+                        const next = [...items];
+                        const nextOptions = [...(next[actualIndex].valueOptions || [])];
+                        nextOptions[optionIndex] = { ...nextOptions[optionIndex], label: e.target.value };
+                        next[actualIndex] = { ...next[actualIndex], valueOptions: nextOptions };
+                        setItems(next);
+                      }}
+                      placeholder="Heavy Armor"
+                      className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm text-amber-100 focus:outline-none"
+                    />
+                    <button
+                      onClick={() => {
+                        const next = [...items];
+                        next[actualIndex] = {
+                          ...next[actualIndex],
+                          valueOptions: (next[actualIndex].valueOptions || []).filter((_: unknown, index: number) => index !== optionIndex),
+                        };
+                        setItems(next);
+                      }}
+                      className="text-stone-600 hover:text-red-400 cursor-pointer"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))}
+              </div>
+            </div>
+          </div>
+        );
+      };
 
     const renderAttributeSection = (
       title: string,
@@ -2661,13 +3314,14 @@ export const Characters: React.FC = () => {
             .map((attr, idx, filteredItems) => {
             const actualIndex = items.findIndex(item => item.id === attr.id);
             const evalVal = finalContext[attr.id] || 0;
+            const displayValue = formatAttributeOutput(attr.id, evalVal);
             const skillMode = options?.skillMode;
             const proficiencyMode = skillMode ? ((attr as SkillAttribute).proficiencyMode || 'none') : 'none';
             const proficiencyStyle = PROFICIENCY_STYLES[proficiencyMode as NonNullable<SkillAttribute['proficiencyMode']>];
 
             return (
-              <div key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-3 flex flex-col gap-2 shadow-lg">
-                <div className="flex items-center justify-between gap-2">
+                <div id={`sheet-attr-${idPrefix}-${attr.id}`} key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-3 flex flex-col gap-2 shadow-lg">
+                  <div className="flex items-center justify-between gap-2">
                   <input
                     type="text"
                     value={attr.name}
@@ -2703,6 +3357,13 @@ export const Characters: React.FC = () => {
                     <Star size={14} fill={attr.favorite ? 'currentColor' : 'none'} />
                   </button>
                   <button
+                    onClick={() => setOpenAttributeOptionsId(current => current === attr.id ? null : attr.id)}
+                    className={`p-1 rounded border cursor-pointer ${openAttributeOptionsId === attr.id ? 'bg-amber-900/40 border-amber-500/50 text-amber-100' : 'border-stone-700 text-stone-500 hover:text-amber-300'}`}
+                    title="Override and value label options"
+                  >
+                    <Settings size={14} />
+                  </button>
+                  <button
                     onClick={() => setItems(moveListItem(items as any[], attr.id, 'up'))}
                     disabled={idx === 0}
                     className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
@@ -2725,11 +3386,15 @@ export const Characters: React.FC = () => {
                   >
                     <Trash2 size={14} />
                   </button>
-                </div>
-                <div className="flex items-center justify-end">
-                  <input
-                    type="text"
-                    value={attr.value}
+                  </div>
+                  {renderAttributeOptionsEditor(attr, items, setItems, actualIndex)}
+                  <div className="flex items-center justify-end">
+                    {attr.id && renderAttributeHistory(attr.id)}
+                  </div>
+                  <div className="flex items-center justify-end">
+                    <input
+                      type="text"
+                      value={attr.value}
                     onChange={(e) => {
                       const next = [...items];
                       next[actualIndex].value = e.target.value;
@@ -2759,7 +3424,7 @@ export const Characters: React.FC = () => {
                       <span className="hidden sm:inline">{proficiencyStyle.label}</span>
                     </button>
                   )}
-                  <span className="text-lg font-bold font-mono text-amber-200">{evalVal}</span>
+                  <span className="text-lg font-bold font-mono text-amber-200">{displayValue}</span>
                 </div>
               </div>
             );
@@ -2784,22 +3449,50 @@ export const Characters: React.FC = () => {
             <ArrowLeft size={20} /> Back to List
           </button>
           <div className="flex gap-3">
+            {sheetSyncStatus && (
+              <div
+                className={`flex items-center px-3 py-2 text-xs rounded border ${
+                  sheetSyncStatus.tone === 'error'
+                    ? 'border-rose-800/40 bg-rose-950/20 text-rose-200'
+                    : 'border-emerald-800/40 bg-emerald-950/20 text-emerald-200'
+                }`}
+              >
+                {isSheetSyncing ? 'Syncing spreadsheet...' : sheetSyncStatus.message}
+              </div>
+            )}
             {/* Visibility dropdown — only owner can change */}
             {isCharacterOwner ? (
-              <select
-                value={editVisibility}
-                onChange={(e) => setEditVisibility(e.target.value as 'private' | 'public')}
-                className="bg-stone-900 border border-stone-700 rounded px-3 py-2 text-sm text-amber-200 focus:outline-none focus:border-amber-500/50 cursor-pointer"
-              >
-                <option value="private">🔒 Private</option>
-                <option value="public">🌐 Public</option>
-              </select>
+              <>
+                <select
+                  value={editVisibility}
+                  onChange={(e) => setEditVisibility(e.target.value as 'private' | 'public')}
+                  className="bg-stone-900 border border-stone-700 rounded px-3 py-2 text-sm text-amber-200 focus:outline-none focus:border-amber-500/50 cursor-pointer"
+                >
+                  <option value="private">🔒 Private</option>
+                  <option value="public">🌐 Public</option>
+                </select>
+                <select
+                  value={sendToSpreadsheet ? 'send' : 'skip'}
+                  onChange={(e) => setSendToSpreadsheet(e.target.value === 'send')}
+                  className="bg-stone-900 border border-stone-700 rounded px-3 py-2 text-sm text-amber-200 focus:outline-none focus:border-amber-500/50 cursor-pointer"
+                >
+                  <option value="send">Send to Spreadsheet</option>
+                  <option value="skip">Do Not Send to Spreadsheet</option>
+                </select>
+              </>
             ) : (
               <span className="flex items-center gap-1 px-3 py-2 text-sm text-stone-400 border border-stone-700/30 rounded">
                 {selectedCharacter.visibility === 'public' ? '🌐 Public' : '🔒 Private'}
               </span>
             )}
-            <button onClick={handleSaveAll} disabled={!canEditInventory && !isCharacterOwner} className="flex items-center gap-2 px-4 py-2 bg-amber-900/40 border border-amber-800/40 rounded hover:bg-amber-900/60 hover:border-amber-500/80 text-amber-200 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
+            <button
+              onClick={handleReloadFromFirestore}
+              disabled={!selectedCharacter || !userId || userId === 'guest' || isSheetSyncing}
+              className="flex items-center gap-2 px-4 py-2 bg-stone-900/40 border border-stone-700/40 rounded hover:bg-stone-900/60 hover:border-amber-500/60 text-stone-200 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+            >
+              <RefreshCw size={16} /> Load
+            </button>
+            <button onClick={handleSaveAll} disabled={(!canEditInventory && !isCharacterOwner) || isSheetSyncing} className="flex items-center gap-2 px-4 py-2 bg-amber-900/40 border border-amber-800/40 rounded hover:bg-amber-900/60 hover:border-amber-500/80 text-amber-200 text-sm cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed">
               <Save size={16} /> Save
             </button>
           </div>
@@ -2904,7 +3597,7 @@ export const Characters: React.FC = () => {
               <div className="bg-amber-950/30 border border-amber-800/20 p-4 rounded-xl mb-6">
                 <div className="flex items-center justify-between gap-3 mb-3">
                   <p className="text-xs font-bold uppercase tracking-[0.2em] text-amber-500">Display Attributes</p>
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 flex-wrap justify-end">
                     <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
                     <input
                       type="number"
@@ -2914,44 +3607,192 @@ export const Characters: React.FC = () => {
                       onChange={(e) => updateAttributeSectionColumns('display', parseInt(e.target.value, 10) || 1)}
                       className="w-14 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-xs text-amber-100 focus:outline-none"
                     />
+                    <button
+                      onClick={() => setDisplayLayoutMode(prev => !prev)}
+                      className={`p-1.5 rounded border cursor-pointer ${displayLayoutMode ? 'bg-amber-900/40 border-amber-600/50 text-amber-200' : 'bg-stone-900/50 border-stone-700/40 text-stone-300 hover:text-amber-200'}`}
+                      title="Display layout settings"
+                    >
+                      <Settings size={14} />
+                    </button>
                   </div>
                 </div>
                 {favoriteDisplayEntries.length === 0 ? (
                   <div className="text-xs text-stone-500 italic">No favorite attributes or bars yet.</div>
                 ) : (
-                  <div
-                    className="grid gap-3"
-                    style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.display}, minmax(0, 1fr))` }}
-                  >
-                    {favoriteDisplayEntries.map((stat) => (
-                      <div key={stat.id} className="rounded-xl border border-amber-700/20 bg-gradient-to-br from-amber-950/30 to-black/20 p-3 shadow-lg">
-                        <div className="flex items-center justify-between gap-2 mb-2">
-                          <p className="text-[11px] uppercase tracking-[0.2em] text-amber-500 truncate">
-                            {stat.name}
-                          </p>
-                          <div className="flex items-center gap-1">
-                            <button
-                              onClick={() => moveDisplayStatReference(stat.id, 'up', favoriteDisplayEntries.map(entry => entry.id))}
-                              disabled={favoriteDisplayEntries[0]?.id === stat.id}
-                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                  (() => {
+                    const cols = Math.max(1, attributeSectionColumns.display);
+                    const slotMap = new Map(
+                      favoriteDisplayEntries.map(entry => [getDisplaySlotKey(entry.row, entry.column), entry])
+                    );
+                    const stateIndexes = Object.keys(displaySlotStates).map((key) => {
+                      const [row, column] = key.split(':').map(Number);
+                      return row * cols + column;
+                    });
+                    const maxEntryIndex = favoriteDisplayEntries.reduce((highest, entry) => Math.max(highest, entry.row * cols + entry.column), -1);
+                    const maxStateIndex = stateIndexes.length > 0 ? Math.max(...stateIndexes) : -1;
+                    const baseRows = Math.max(
+                      1,
+                      Math.floor(Math.max(maxEntryIndex, maxStateIndex, cols - 1) / cols) + 1,
+                    );
+                    const totalRows = displayLayoutMode ? baseRows + 1 : baseRows;
+                    const slots = Array.from({ length: totalRows * cols });
+
+                    const getSlotStateClasses = (slotState: 'unlocked' | 'locked' | 'blocked') => {
+                      if (slotState === 'blocked') return 'border-red-800/50 bg-red-950/10';
+                      if (slotState === 'locked') return 'border-sky-800/50 bg-sky-950/10';
+                      return 'border-stone-700/40 bg-black/10';
+                    };
+
+                    const getSlotStateLabel = (slotState: 'unlocked' | 'locked' | 'blocked') => {
+                      if (slotState === 'blocked') return 'Blocked';
+                      if (slotState === 'locked') return 'Locked';
+                      return 'Unlocked';
+                    };
+
+                    return (
+                      <div
+                        className="grid gap-3"
+                        style={{ gridTemplateColumns: `repeat(${cols}, minmax(0, 1fr))` }}
+                      >
+                        {slots.map((_, gridIndex) => {
+                          const row = Math.floor(gridIndex / cols);
+                          const column = gridIndex % cols;
+                          const slotKey = getDisplaySlotKey(row, column);
+                          const slotState = displaySlotStates[slotKey] || 'unlocked';
+                          const stat = slotMap.get(slotKey) || null;
+                          const canDrop = displayLayoutMode && slotState === 'unlocked';
+                          const canDrag = Boolean(stat && displayLayoutMode && slotState === 'unlocked' && !String(stat?.slotId).startsWith('display_auto_'));
+
+                          const slotControls = displayLayoutMode ? (
+                            <div className="mb-2 flex items-center justify-between gap-2">
+                              <span className="text-[10px] text-stone-500">R{row + 1} C{column + 1}</span>
+                              <button
+                                onClick={() => cycleDisplaySlotState(row, column)}
+                                className={`px-1.5 py-0.5 rounded text-[10px] border cursor-pointer ${
+                                  slotState === 'blocked'
+                                    ? 'bg-red-950/30 border-red-700/40 text-red-200'
+                                    : slotState === 'locked'
+                                      ? 'bg-sky-950/30 border-sky-700/40 text-sky-200'
+                                      : 'bg-stone-900/40 border-stone-700/40 text-stone-300'
+                                }`}
+                                title={`Slot state: ${getSlotStateLabel(slotState)}`}
+                              >
+                                {slotState === 'unlocked' ? 'U' : slotState === 'locked' ? 'L' : 'X'}
+                              </button>
+                            </div>
+                          ) : null;
+
+                          if (!stat) {
+                            if (!displayLayoutMode) {
+                              return <div key={`display-empty-${gridIndex}`} aria-hidden="true" />;
+                            }
+
+                            return (
+                              <div
+                                key={`display-empty-${gridIndex}`}
+                                onDragOver={(event) => {
+                                  if (!canDrop) return;
+                                  event.preventDefault();
+                                }}
+                                onDrop={(event) => {
+                                  event.preventDefault();
+                                  if (!canDrop || !draggingDisplayStatId) return;
+                                  moveDisplayStatToSlot(draggingDisplayStatId, row, column);
+                                  setDraggingDisplayStatId(null);
+                                }}
+                                className={`min-h-[10rem] rounded-xl border border-dashed p-2 ${getSlotStateClasses(slotState)}`}
+                              >
+                                {slotControls}
+                                <div className="flex h-[calc(100%-1.5rem)] items-center justify-center rounded-lg border border-dashed border-stone-800/40 text-[11px] uppercase tracking-[0.18em] text-stone-600">
+                                  {slotState === 'blocked' ? 'Blocked Slot' : slotState === 'locked' ? 'Locked Empty Slot' : 'Drop Attribute Here'}
+                                </div>
+                              </div>
+                            );
+                          }
+
+                          const backgroundColor = stat.colors?.background;
+                          const labelColor = stat.colors?.label;
+                          const valueColor = stat.colors?.value;
+
+                          return (
+                            <div
+                              key={stat.slotId}
+                              onDragOver={(event) => {
+                                if (!canDrop) return;
+                                event.preventDefault();
+                              }}
+                              onDrop={(event) => {
+                                event.preventDefault();
+                                if (!canDrop || !draggingDisplayStatId) return;
+                                moveDisplayStatToSlot(draggingDisplayStatId, row, column);
+                                setDraggingDisplayStatId(null);
+                              }}
+                              className={displayLayoutMode ? `min-h-[10rem] rounded-xl border border-dashed p-2 ${getSlotStateClasses(slotState)}` : ''}
                             >
-                              <ArrowUp size={13} />
-                            </button>
-                            <button
-                              onClick={() => moveDisplayStatReference(stat.id, 'down', favoriteDisplayEntries.map(entry => entry.id))}
-                              disabled={favoriteDisplayEntries[favoriteDisplayEntries.length - 1]?.id === stat.id}
-                              className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
-                            >
-                              <ArrowDown size={13} />
-                            </button>
-                          </div>
-                        </div>
-                        <p className="text-3xl font-bold text-amber-200 font-mono break-all leading-none">
-                          {stat.value}
-                        </p>
+                              {slotControls}
+                              <div
+                                draggable={canDrag}
+                                onDragStart={() => canDrag && setDraggingDisplayStatId(stat.slotId)}
+                                onDragEnd={() => setDraggingDisplayStatId(null)}
+                                className={`rounded-xl border border-amber-700/20 bg-gradient-to-br from-amber-950/30 to-black/20 p-3 shadow-lg ${canDrag ? 'cursor-move' : ''} ${displayLayoutMode && slotState === 'locked' ? 'opacity-80' : ''}`}
+                                style={backgroundColor ? { background: backgroundColor, borderColor: backgroundColor } : undefined}
+                              >
+                                <div className="flex items-start justify-between gap-2 mb-2">
+                                  <button
+                                    onClick={() => jumpToSheetReference(stat.referenceId)}
+                                    className="text-[11px] uppercase tracking-[0.2em] truncate text-left hover:underline cursor-pointer"
+                                    style={{ color: labelColor || undefined }}
+                                    title="Jump to attribute"
+                                  >
+                                    {stat.name}
+                                  </button>
+                                  <div className="relative">
+                                    <button
+                                      onClick={() => setOpenDisplayColorStatId(current => current === stat.slotId ? null : stat.slotId)}
+                                      className="p-1 text-stone-500 hover:text-amber-300 cursor-pointer"
+                                      title="Colors"
+                                    >
+                                      <Settings size={13} />
+                                    </button>
+                                    {openDisplayColorStatId === stat.slotId && (
+                                      <div className="absolute right-0 top-full z-20 mt-2 w-48 rounded-lg border border-amber-800/20 bg-stone-950/95 p-2 shadow-xl">
+                                        <div className="grid grid-cols-3 gap-2 mb-2">
+                                          <label className="text-[10px] text-stone-400">
+                                            Bg
+                                            <input type="color" value={stat.colors?.background || '#1c1917'} onChange={(e) => updateDisplayStatColors(stat.slotId, 'background', e.target.value)} className="block w-full h-8 mt-1 bg-transparent cursor-pointer" />
+                                          </label>
+                                          <label className="text-[10px] text-stone-400">
+                                            Label
+                                            <input type="color" value={stat.colors?.label || '#f59e0b'} onChange={(e) => updateDisplayStatColors(stat.slotId, 'label', e.target.value)} className="block w-full h-8 mt-1 bg-transparent cursor-pointer" />
+                                          </label>
+                                          <label className="text-[10px] text-stone-400">
+                                            Value
+                                            <input type="color" value={stat.colors?.value || '#fde68a'} onChange={(e) => updateDisplayStatColors(stat.slotId, 'value', e.target.value)} className="block w-full h-8 mt-1 bg-transparent cursor-pointer" />
+                                          </label>
+                                        </div>
+                                        <button
+                                          onClick={() => {
+                                            setDisplayStats(prev => prev.map(entry => entry.id === stat.slotId ? { ...entry, colors: {} } : entry));
+                                            setOpenDisplayColorStatId(null);
+                                          }}
+                                          className="w-full px-2 py-1 bg-stone-900/50 border border-stone-700/40 rounded text-[10px] text-stone-200 hover:bg-stone-900/70 cursor-pointer"
+                                        >
+                                          Reset Colors
+                                        </button>
+                                      </div>
+                                    )}
+                                  </div>
+                                </div>
+                                <p className="text-3xl font-bold font-mono break-all leading-none" style={{ color: valueColor || undefined }}>
+                                  {stat.value}
+                                </p>
+                              </div>
+                            </div>
+                          );
+                        })}
                       </div>
-                    ))}
-                  </div>
+                    );
+                  })()
                 )}
               </div>
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4 mb-6">
@@ -3210,10 +4051,11 @@ export const Characters: React.FC = () => {
                   {mainAttrs.filter(attr => attributeSectionModes.main === 'all' || attr.favorite).map((attr, idx, filteredMainAttrs) => {
                     const actualIndex = mainAttrs.findIndex(item => item.id === attr.id);
                     const evalVal = finalContext[attr.id] || 0;
+                    const displayValue = formatAttributeOutput(attr.id, evalVal);
                     const modVal = finalContext[`${attr.id}_mod`] || 0;
 
                     return (
-                      <div key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-3 flex flex-col gap-2 shadow-lg">
+                      <div id={`sheet-attr-main-${attr.id}`} key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-3 flex flex-col gap-2 shadow-lg">
                         <div className="flex items-center justify-between gap-2">
                           <input
                             type="text"
@@ -3250,6 +4092,13 @@ export const Characters: React.FC = () => {
                             <Star size={14} fill={attr.favorite ? 'currentColor' : 'none'} />
                           </button>
                           <button
+                            onClick={() => setOpenAttributeOptionsId(current => current === attr.id ? null : attr.id)}
+                            className={`p-1 rounded border cursor-pointer ${openAttributeOptionsId === attr.id ? 'bg-amber-900/40 border-amber-500/50 text-amber-100' : 'border-stone-700 text-stone-500 hover:text-amber-300'}`}
+                            title="Override and value label options"
+                          >
+                            <Settings size={14} />
+                          </button>
+                          <button
                             onClick={() => setMainAttrs(moveListItem(mainAttrs, attr.id, 'up'))}
                             disabled={idx === 0}
                             className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
@@ -3273,6 +4122,7 @@ export const Characters: React.FC = () => {
                             <Trash2 size={14} />
                           </button>
                         </div>
+                        {renderAttributeOptionsEditor(attr, mainAttrs, setMainAttrs, actualIndex)}
                         <div className="flex items-center justify-between">
                           <input
                             type="text"
@@ -3290,8 +4140,11 @@ export const Characters: React.FC = () => {
                           >
                             <Dices size={12} /> Roll
                           </button>
+                          <div className="mr-2">
+                            {attr.id && renderMainAttributeHistory(attr.id)}
+                          </div>
                           <div className="flex flex-col items-end">
-                            <span className="text-lg font-bold font-mono text-amber-200">{evalVal}</span>
+                            <span className="text-lg font-bold font-mono text-amber-200">{displayValue}</span>
                             <span className="text-xs font-mono font-bold bg-amber-900/40 px-2 py-0.5 rounded text-amber-400">
                               {modVal >= 0 ? `+${modVal}` : modVal}
                             </span>
@@ -3363,7 +4216,7 @@ export const Characters: React.FC = () => {
                       const percent = safeMax > 0 ? Math.round((clampedCurrent / safeMax) * 100) : 0;
 
                       return (
-                        <div key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
+                        <div id={`sheet-bar-${bar.id}`} key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
                           <div className="flex items-center justify-between gap-2">
                             <input
                               type="text"
@@ -3517,7 +4370,7 @@ export const Characters: React.FC = () => {
 
                 <div className="space-y-4">
                   {charStatuses.map((status, idx) => (
-                    <div key={status.id} className="rounded-xl p-4 shadow-lg flex flex-col gap-3 border" style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
+                    <div id={`status-${status.id}`} key={status.id} className="rounded-xl p-4 shadow-lg flex flex-col gap-3 border" style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
                       <div className="flex items-center justify-between gap-3">
                         <input
                           type="text"
@@ -3858,7 +4711,7 @@ export const Characters: React.FC = () => {
                             style={{ background: `linear-gradient(to bottom, ${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}aa, ${inventoryFolders.find(folder => folder.id === effectiveFolderId)?.color || '#b45309'}22)` }}
                           />
                         )}
-                        <div className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${item.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
+                        <div id={`inventory-item-${item.id}`} className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${item.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
                           {effectiveFolderId && (
                             <div
                               className="absolute -left-4 top-7 h-px w-4"

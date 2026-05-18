@@ -45,7 +45,27 @@ function Read-JsonFile {
     return $null
   }
 
-  return $raw | ConvertFrom-Json -Depth 100
+  return $raw | ConvertFrom-Json
+}
+
+function Get-ObjectPropertyValue {
+  param(
+    [Parameter(Mandatory = $true)]
+    [object]$ObjectValue,
+    [Parameter(Mandatory = $true)]
+    [string]$PropertyName
+  )
+
+  if ($null -eq $ObjectValue) {
+    return $null
+  }
+
+  $property = $ObjectValue.PSObject.Properties[$PropertyName]
+  if ($null -eq $property) {
+    return $null
+  }
+
+  return $property.Value
 }
 
 $repoRoot = Resolve-ExistingPath (Join-Path $PSScriptRoot '..')
@@ -90,13 +110,16 @@ try {
   }
 
   $workspaceFolderName = Split-Path -Leaf $sourceRoot
-  $workspaceTitle = if ($manifest.workspaceTitle) { [string]$manifest.workspaceTitle } else { $workspaceFolderName -replace '-export$','' }
-  $workspaceId = if ($manifest.workspaceId) { [string]$manifest.workspaceId } else { ConvertTo-Slug ($workspaceFolderName -replace '-export$','') }
+  $manifestWorkspaceTitle = Get-ObjectPropertyValue -ObjectValue $manifest -PropertyName 'workspaceTitle'
+  $manifestWorkspaceId = Get-ObjectPropertyValue -ObjectValue $manifest -PropertyName 'workspaceId'
+
+  $workspaceTitle = if ($manifestWorkspaceTitle) { [string]$manifestWorkspaceTitle } else { $workspaceFolderName -replace '-export$','' }
+  $workspaceId = if ($manifestWorkspaceId) { [string]$manifestWorkspaceId } else { ConvertTo-Slug ($workspaceFolderName -replace '-export$','') }
   if ([string]::IsNullOrWhiteSpace($workspaceId)) {
     $workspaceId = 'user-workspace'
   }
 
-  $pageEntries = @($manifest.pages)
+  $pageEntries = @(Get-ObjectPropertyValue -ObjectValue $manifest -PropertyName 'pages')
   if ($pageEntries.Count -eq 0) {
     throw 'No pages were found in the export manifest.'
   }
@@ -130,7 +153,7 @@ try {
 
     $systemPages = @(
       $pageEntries | Where-Object {
-        $_.metadata.system -eq $system
+        (Get-ObjectPropertyValue -ObjectValue (Get-ObjectPropertyValue -ObjectValue $_ -PropertyName 'metadata') -PropertyName 'system') -eq $system
       }
     )
 
@@ -139,7 +162,8 @@ try {
     }
 
     foreach ($page in $systemPages) {
-      $pageId = [string]$page.metadata.id
+      $pageMetadata = Get-ObjectPropertyValue -ObjectValue $page -PropertyName 'metadata'
+      $pageId = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'id')
       if ([string]::IsNullOrWhiteSpace($pageId)) {
         throw "A page in the manifest is missing an id for system '$system'."
       }
@@ -172,15 +196,15 @@ try {
         workspaceId = $workspaceId
         workspaceTitle = $workspaceTitle
         id = $pageId
-        title = [string]$page.metadata.title
-        subtitle = [string]$page.metadata.subtitle
-        icon = [string]$page.metadata.icon
+        title = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'title')
+        subtitle = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'subtitle')
+        icon = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'icon')
         content = $contentPath
         system = $system
-        parentId = [string]$page.metadata.parentId
-        sidebarVisible = [bool]$page.metadata.sidebarVisible
-        order = [string]$page.metadata.order
-        width = $page.metadata.width
+        parentId = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'parentId')
+        sidebarVisible = [bool](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'sidebarVisible')
+        order = [string](Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'order')
+        width = Get-ObjectPropertyValue -ObjectValue $pageMetadata -PropertyName 'width'
       }
 
       $filteredPages += $registryEntry
@@ -204,4 +228,3 @@ try {
     Remove-Item -LiteralPath $cleanupPath -Recurse -Force
   }
 }
-

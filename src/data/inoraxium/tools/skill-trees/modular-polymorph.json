@@ -1,0 +1,1377 @@
+{
+  "Skills": [
+    {
+      "Skill Name": "Balık",
+      "Skill Position": "(25,10)",
+      "Skill Position Exact": {
+        "x": 3030,
+        "y": 1170
+      },
+      "Skill Level": 1,
+      "Skill Description": "Pasif:\nSuda nefes alabilme\nMax HP %40 düşer\n\nAlınabilir:\nDarkvision\nDerin sudaki hareket kısıtlama etkilerinden etkilenmeme\nDerin sudayken fiziksel görüşle ilgili gizlilik denemelerine +2 alırsın.\nSudayken +2 MAP\nSudayken +1 Dex\nBoyut artışı (+%20 Max HP)",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Su Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Amfibi",
+      "Skill Position": "(17,8)",
+      "Skill Position Exact": {
+        "x": 2070,
+        "y": 930
+      },
+      "Skill Level": 1,
+      "Skill Description": "Click to edit skill description.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Kara Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Sürüngen",
+      "Skill Position": "(17,10)",
+      "Skill Position Exact": {
+        "x": 2070,
+        "y": 1170
+      },
+      "Skill Level": 1,
+      "Skill Description": "Click to edit skill description.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Solucan"
+      ],
+      "Skill Prerequisite": "Kara Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Kuş",
+      "Skill Position": "(25,6)",
+      "Skill Position Exact": {
+        "x": 3030,
+        "y": 690
+      },
+      "Skill Level": 1,
+      "Skill Description": "Pasif:\nMax HP %40 düşer\nUçma yeteneği\n\nAktif:\nPerception zarlarına +2 bonus\nDarkvision\nHavadayken +2 MAP\nHavadayken +1 Dex\nBoyut artışı (+%20 Max HP)",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Hava Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Memeli",
+      "Skill Position": "(17,6)",
+      "Skill Position Exact": {
+        "x": 2070,
+        "y": 690
+      },
+      "Skill Level": 1,
+      "Skill Description": "Pasif:\n-%40 Max HP\n\nAktif:\n+1 AP\n+2 MAP\n+1 STR\n+1 DEX\nBoyut artışı (Max HP %20 artar, gizlilik 1 azalır, 3. ye alınca DEX'in AC'ye eklenmez ama bunu aldığın sayı kadar 2 AC artışı alırsın)\nDarkvision kazanırsın\nPerception zarlarına +? bonus",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Kara Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Böcek",
+      "Skill Position": "(23,8)",
+      "Skill Position Exact": {
+        "x": 2790,
+        "y": 930
+      },
+      "Skill Level": 1,
+      "Skill Description": "Pasif:\n-%60 Max HP\nGizlilik denemelerine +3\n\nAktif:\nBöcek zehri: Hedef maximum 5 tur olacak şekilde her tur CON SAVE atar, 15 VEYA üstü atamazsa 25*Level'ın kadar zehir hasarı alır. Başarılı olursa zehrin etkisi biter.\n+%10 Max HP\n+2 Dex",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Uçan Böcek",
+        "Su Böceği"
+      ],
+      "Skill Prerequisite": "Polymorph (Animal) (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Solucan",
+      "Skill Position": "(15,10)",
+      "Skill Position Exact": {
+        "x": 1830,
+        "y": 1170
+      },
+      "Skill Level": 1,
+      "Skill Description": "-%90 Max HP\nGizlilik zarlarına +?\nToprak altı, çatlak araları gibi yerlere girebilir. Toprak altında güvende olur.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Sürüngen (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Polymorph (Animal)",
+      "Skill Position": "(21,8)",
+      "Skill Position Exact": {
+        "x": 2525,
+        "y": 905
+      },
+      "Skill Level": 1,
+      "Skill Description": "Click to edit skill description.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Su Canlıları",
+        "Hava Canlıları",
+        "Kara Canlıları",
+        "Böcek"
+      ],
+      "Skill Prerequisite": "-",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Su Canlıları",
+      "Skill Position": "(23,10)",
+      "Skill Position Exact": {
+        "x": 2790,
+        "y": 1170
+      },
+      "Skill Level": 1,
+      "Skill Description": "",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Balık",
+        "Su Böceği"
+      ],
+      "Skill Prerequisite": "Polymorph (Animal) (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Hava Canlıları",
+      "Skill Position": "(23,6)",
+      "Skill Position Exact": {
+        "x": 2790,
+        "y": 690
+      },
+      "Skill Level": 1,
+      "Skill Description": "Click to edit skill description.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Kuş",
+        "Uçan Böcek"
+      ],
+      "Skill Prerequisite": "Polymorph (Animal) (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Basic Form",
+      "Skill Position": "(18,13)",
+      "Skill Position Exact": {
+        "x": 2165,
+        "y": 1505
+      },
+      "Skill Level": 1,
+      "Skill Description": "Sadece Pasif bonus",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Improved Form",
+        "Specialized Form",
+        "Exotic Imitation Form"
+      ],
+      "Skill Prerequisite": "-",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Improved Form",
+      "Skill Position": "(20,13)",
+      "Skill Position Exact": {
+        "x": 2430,
+        "y": 1530
+      },
+      "Skill Level": 1,
+      "Skill Description": "+1 Seçim",
+      "Skill Max Points": 3,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Refined Form"
+      ],
+      "Skill Prerequisite": "Basic Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Refined Form",
+      "Skill Position": "(21,13)",
+      "Skill Position Exact": {
+        "x": 2550,
+        "y": 1530
+      },
+      "Skill Level": 1,
+      "Skill Description": "+2 Seçim",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Enhanced Form"
+      ],
+      "Skill Prerequisite": "Improved Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Enhanced Form",
+      "Skill Position": "(22,13)",
+      "Skill Position Exact": {
+        "x": 2670,
+        "y": 1530
+      },
+      "Skill Level": 1,
+      "Skill Description": "+3 Seçim",
+      "Skill Max Points": 8,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Advanced Form"
+      ],
+      "Skill Prerequisite": "Refined Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Advanced Form",
+      "Skill Position": "(23,13)",
+      "Skill Position Exact": {
+        "x": 2790,
+        "y": 1530
+      },
+      "Skill Level": 1,
+      "Skill Description": "+4 Seçim",
+      "Skill Max Points": 12,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Enhanced Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Specialized Form",
+      "Skill Position": "(20,14)",
+      "Skill Position Exact": {
+        "x": 2430,
+        "y": 1650
+      },
+      "Skill Level": 1,
+      "Skill Description": "Spesifik özelliği olan formlar",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Evolved Form"
+      ],
+      "Skill Prerequisite": "Basic Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Exotic Imitation Form",
+      "Skill Position": "(20,12)",
+      "Skill Position Exact": {
+        "x": 2430,
+        "y": 1410
+      },
+      "Skill Level": 1,
+      "Skill Description": "Daha önce karşılaştığın bir egzotik hayvanın daha güçsüz bir haline dönüşürsün.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Exotic Form"
+      ],
+      "Skill Prerequisite": "Basic Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Evolved Form",
+      "Skill Position": "(21,14)",
+      "Skill Position Exact": {
+        "x": 2550,
+        "y": 1650
+      },
+      "Skill Level": 1,
+      "Skill Description": "Specialized Form'a bonus ekleyebilmeye izin verir",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Specialized Form (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Kara Canlıları",
+      "Skill Position": "(19,8)",
+      "Skill Position Exact": {
+        "x": 2310,
+        "y": 930
+      },
+      "Skill Level": 1,
+      "Skill Description": "Click to edit skill description.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [
+        "Memeli",
+        "Sürüngen",
+        "Amfibi"
+      ],
+      "Skill Prerequisite": "Polymorph (Animal) (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Uçan Böcek",
+      "Skill Position": "(24,7)",
+      "Skill Position Exact": {
+        "x": 2910,
+        "y": 810
+      },
+      "Skill Level": 1,
+      "Skill Description": "Aktif:\nUçabilir",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Hava Canlıları (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Su Böceği",
+      "Skill Position": "(24,9)",
+      "Skill Position Exact": {
+        "x": 2910,
+        "y": 1050
+      },
+      "Skill Level": 1,
+      "Skill Description": "Aktif:\nYüzebilir, suda nefes alabilir",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Böcek (1)",
+      "Skill Resources": []
+    },
+    {
+      "Skill Name": "Exotic Form",
+      "Skill Position": "(21,12)",
+      "Skill Position Exact": {
+        "x": 2550,
+        "y": 1410
+      },
+      "Skill Level": 1,
+      "Skill Description": "Daha önce karşılaştığın bir egzotik hayvana dönüşürsün.",
+      "Skill Max Points": 5,
+      "Skill Current Points": 0,
+      "Skill Image": "/axe-hammer-grey.png",
+      "Skill Dependencies": [],
+      "Skill Prerequisite": "Exotic Imitation Form (1)",
+      "Skill Resources": []
+    }
+  ],
+  "Class Name": " ",
+  "FullData": {
+    "hideLockedSkills": 0,
+    "totalStats": {},
+    "showInfo": false,
+    "showStatsSummary": false,
+    "config": {
+      "paths": {
+        "assets": "/src/app/assets",
+        "config": "/src/app/config",
+        "images": {
+          "skills": "/img/skill",
+          "backgrounds": "/img/background",
+          "default": "/img/skill/axe-hammer-grey.png"
+        }
+      },
+      "grid": {
+        "spacing": 120,
+        "startX": 100,
+        "startY": 100
+      },
+      "skill": {
+        "size": 100,
+        "offset": 30
+      },
+      "connection": {
+        "height": 2
+      },
+      "skillImages": [
+        "/axe-hammer-grey.png",
+        "/fire-orb.png",
+        "/fire-rock.png",
+        "/flaming-spear.png",
+        "/flaming-staff.png",
+        "/golden-arrow.png",
+        "/gray-spear.png",
+        "/ornate-spear.png",
+        "/skull-blue.png",
+        "/small-trident.png",
+        "/spectral-dagger.png",
+        "/water-sword.png"
+      ]
+    },
+    "skills": [
+      {
+        "id": 9,
+        "x": 3030,
+        "y": 1170,
+        "name": "Balık",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Pasif:\nSuda nefes alabilme\nMax HP %40 düşer\n\nAlınabilir:\nDarkvision\nDerin sudaki hareket kısıtlama etkilerinden etkilenmeme\nDerin sudayken fiziksel görüşle ilgili gizlilik denemelerine +2 alırsın.\nSudayken +2 MAP\nSudayken +1 Dex\nBoyut artışı (+%20 Max HP)",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 10,
+        "x": 2070,
+        "y": 930,
+        "name": "Amfibi",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Click to edit skill description.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 11,
+        "x": 2070,
+        "y": 1170,
+        "name": "Sürüngen",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Click to edit skill description.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 12,
+        "x": 3030,
+        "y": 690,
+        "name": "Kuş",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Pasif:\nMax HP %40 düşer\nUçma yeteneği\n\nAktif:\nPerception zarlarına +2 bonus\nDarkvision\nHavadayken +2 MAP\nHavadayken +1 Dex\nBoyut artışı (+%20 Max HP)",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 13,
+        "x": 2070,
+        "y": 690,
+        "name": "Memeli",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Pasif:\n-%40 Max HP\n\nAktif:\n+1 AP\n+2 MAP\n+1 STR\n+1 DEX\nBoyut artışı (Max HP %20 artar, gizlilik 1 azalır, 3. ye alınca DEX'in AC'ye eklenmez ama bunu aldığın sayı kadar 2 AC artışı alırsın)\nDarkvision kazanırsın\nPerception zarlarına +? bonus",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 14,
+        "x": 2790,
+        "y": 930,
+        "name": "Böcek",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Pasif:\n-%60 Max HP\nGizlilik denemelerine +3\n\nAktif:\nBöcek zehri: Hedef maximum 5 tur olacak şekilde her tur CON SAVE atar, 15 VEYA üstü atamazsa 25*Level'ın kadar zehir hasarı alır. Başarılı olursa zehrin etkisi biter.\n+%10 Max HP\n+2 Dex",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 17,
+        "x": 1830,
+        "y": 1170,
+        "name": "Solucan",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "-%90 Max HP\nGizlilik zarlarına +?\nToprak altı, çatlak araları gibi yerlere girebilir. Toprak altında güvende olur.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 18,
+        "x": 2525,
+        "y": 905,
+        "name": "Polymorph (Animal)",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Click to edit skill description.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 110,
+        "borderType": "solid",
+        "shape": "square",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 19,
+        "x": 2790,
+        "y": 1170,
+        "name": "Su Canlıları",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "square",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 20,
+        "x": 2790,
+        "y": 690,
+        "name": "Hava Canlıları",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Click to edit skill description.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "square",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 23,
+        "x": 2165,
+        "y": 1505,
+        "name": "Basic Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Sadece Pasif bonus",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 110,
+        "borderType": "solid",
+        "shape": "square",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 24,
+        "x": 2430,
+        "y": 1530,
+        "name": "Improved Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "+1 Seçim",
+        "maxPoints": 3,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 25,
+        "x": 2550,
+        "y": 1530,
+        "name": "Refined Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "+2 Seçim",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 26,
+        "x": 2670,
+        "y": 1530,
+        "name": "Enhanced Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "+3 Seçim",
+        "maxPoints": 8,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 27,
+        "x": 2790,
+        "y": 1530,
+        "name": "Advanced Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "+4 Seçim",
+        "maxPoints": 12,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 28,
+        "x": 2430,
+        "y": 1650,
+        "name": "Specialized Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Spesifik özelliği olan formlar",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 29,
+        "x": 2430,
+        "y": 1410,
+        "name": "Exotic Imitation Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Daha önce karşılaştığın bir egzotik hayvanın daha güçsüz bir haline dönüşürsün.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 30,
+        "x": 2550,
+        "y": 1650,
+        "name": "Evolved Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Specialized Form'a bonus ekleyebilmeye izin verir",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 31,
+        "x": 2310,
+        "y": 930,
+        "name": "Kara Canlıları",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Click to edit skill description.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "square",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 34,
+        "x": 2910,
+        "y": 810,
+        "name": "Uçan Böcek",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Aktif:\nUçabilir",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 35,
+        "x": 2910,
+        "y": 1050,
+        "name": "Su Böceği",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Aktif:\nYüzebilir, suda nefes alabilir",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      },
+      {
+        "id": 36,
+        "x": 2550,
+        "y": 1410,
+        "name": "Exotic Form",
+        "showActions": false,
+        "showTooltip": false,
+        "description": "Daha önce karşılaştığın bir egzotik hayvana dönüşürsün.",
+        "maxPoints": 5,
+        "currentPoints": 0,
+        "requiredPoints": 0,
+        "image": "/img/skill/axe-hammer-grey.png",
+        "shouldAnimate": true,
+        "resources": [],
+        "size": 60,
+        "borderType": "solid",
+        "shape": "round",
+        "cost": 1,
+        "prerequisiteModeOverride": "global",
+        "exclusiveSkillIds": []
+      }
+    ],
+    "connections": [
+      {
+        "id": "18-19",
+        "from": 18,
+        "to": 19,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2520,
+          "y": 960
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "19-9",
+        "from": 19,
+        "to": 9,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2760,
+          "y": 960
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "23-24",
+        "from": 23,
+        "to": 24,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2339,
+          "y": 1560
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "24-25",
+        "from": 24,
+        "to": 25,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2459,
+          "y": 1560
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "25-26",
+        "from": 25,
+        "to": 26,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2579,
+          "y": 1560
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "26-27",
+        "from": 26,
+        "to": 27,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2699,
+          "y": 1560
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "23-28",
+        "from": 23,
+        "to": 28,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2339,
+          "y": 1620
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "28-30",
+        "from": 28,
+        "to": 30,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2459,
+          "y": 1680
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "18-20",
+        "from": 18,
+        "to": 20,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2519,
+          "y": 1020
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "20-12",
+        "from": 20,
+        "to": 12,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2759,
+          "y": 960
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "18-31",
+        "from": 18,
+        "to": 31,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2339,
+          "y": 960
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "18-14",
+        "from": 18,
+        "to": 14,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2519,
+          "y": 1080
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "20-34",
+        "from": 20,
+        "to": 34,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2699,
+          "y": 900
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "14-34",
+        "from": 14,
+        "to": 34,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2699,
+          "y": 1020
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "14-35",
+        "from": 14,
+        "to": 35,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2699,
+          "y": 1140
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "19-35",
+        "from": 19,
+        "to": 35,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2699,
+          "y": 1260
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "31-13",
+        "from": 31,
+        "to": 13,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2039,
+          "y": 1020
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "31-11",
+        "from": 31,
+        "to": 11,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2039,
+          "y": 1140
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "31-10",
+        "from": 31,
+        "to": 10,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2039,
+          "y": 1020
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "11-17",
+        "from": 11,
+        "to": 17,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 1919,
+          "y": 1380
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "29-36",
+        "from": 29,
+        "to": 36,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2399,
+          "y": 900
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      },
+      {
+        "id": "23-29",
+        "from": 23,
+        "to": 29,
+        "hasControlPoint": false,
+        "controlPoint": {
+          "x": 2459,
+          "y": 1500
+        },
+        "mutuallyExclusive": false,
+        "dotted": false,
+        "isHovered": false
+      }
+    ],
+    "connectingFrom": null,
+    "skillIdCounter": 39,
+    "draggedSkill": null,
+    "dragOffset": {
+      "x": -28.5,
+      "y": -19.5
+    },
+    "draggedElement": {},
+    "isDragging": false,
+    "isLinking": false,
+    "hoveredSkill": null,
+    "defaultMaxPoints": 5,
+    "dragStartTime": 1778692451411,
+    "dragStartPos": {
+      "x": 3001.5,
+      "y": 1150.5
+    },
+    "dragThreshold": 5,
+    "showOptions": false,
+    "isPanning": false,
+    "panStart": {
+      "x": 1543,
+      "y": 937
+    },
+    "treePosition": {
+      "x": 0,
+      "y": 0
+    },
+    "scale": 1,
+    "minScale": 0.5,
+    "maxScale": 2,
+    "scaleStep": 0.1,
+    "isLoaded": false,
+    "touchStartX": null,
+    "touchStartY": null,
+    "lastTouchDistance": null,
+    "touchTimeout": null,
+    "doubleTapDelay": 300,
+    "lastTap": 0,
+    "editingSkill": null,
+    "oldSkills": null,
+    "oldBackgroundLink": null,
+    "oldName": null,
+    "currentBackgroundLink": "/img/background/grass-ancient.jpg",
+    "currentName": " ",
+    "currentClassDescription": null,
+    "inputText": "",
+    "isLoading": false,
+    "historyIndex": 3,
+    "maxHistorySize": 50,
+    "showImageSelector": false,
+    "selectedImage": null,
+    "availableImages": [
+      "/axe-hammer-grey.png",
+      "/fire-orb.png",
+      "/fire-rock.png",
+      "/flaming-spear.png",
+      "/flaming-staff.png",
+      "/golden-arrow.png",
+      "/gray-spear.png",
+      "/ornate-spear.png",
+      "/skull-blue.png",
+      "/small-trident.png",
+      "/spectral-dagger.png",
+      "/water-sword.png"
+    ],
+    "skillShape": "round",
+    "customImages": [],
+    "gridSnapEnabled": true,
+    "snapThreshold": 8,
+    "mode": "edit",
+    "overlayColor": "#000000",
+    "overlayOpacity": 75,
+    "showArrows": true,
+    "showGlobalGrid": true,
+    "gridOpacity": 12,
+    "gridSize": 120,
+    "maxPoints": 20,
+    "selectionBox": null,
+    "initialClick": {
+      "x": 2754.4444444444443,
+      "y": 1486.8888888888887
+    },
+    "showLoadModal": false,
+    "initialPositions": null,
+    "prerequisiteMode": "all",
+    "showGenerateControls": false,
+    "lastPanTime": 0,
+    "treeEl": {},
+    "imageUrl": "",
+    "defaultSkillImage": "/img/skill/axe-hammer-grey.png",
+    "defaultMaxSkillPoints": 5,
+    "selectingDefaultImage": false,
+    "showSkillNames": false,
+    "skillSizePresets": {
+      "small": 30,
+      "medium": 60,
+      "large": 110,
+      "huge": 330
+    },
+    "showRequirementsTooltip": true,
+    "skillNamesSize": 12,
+    "selectedConnection": null,
+    "editingConnection": false,
+    "controlPoints": [],
+    "addSkillOnClick": true,
+    "treeUnlockColor": "#ffd700",
+    "treeUnlockBoxshadow": "0 0 5px rgba(0, 0, 0, 0.5)",
+    "treeLockedColor": "#292929",
+    "treeLockedBoxshadow": "0 0 5px rgba(0, 0, 0, 0.5)",
+    "colorLockedSkills": false,
+    "showNews": true,
+    "keepTooltipOpen": false,
+    "openAllTooltips": false,
+    "showOpenTrees": false,
+    "treeSearchQuery": "",
+    "searchResults": [],
+    "isSearching": false,
+    "skillGoogleFontName": "",
+    "skillFontSize": 12,
+    "systemFontName": "",
+    "systemFontSize": 12,
+    "showNewsWindow": false,
+    "closedNewsIds": [
+      "news-011",
+      "news-010",
+      "news-009",
+      "news-008",
+      "news-007",
+      "news-006",
+      "news-005",
+      "news-001"
+    ],
+    "newsItems": [
+      {
+        "id": "news-011",
+        "date": "Dec 11, 2025",
+        "title": "New Features Added / Bugfixes",
+        "content": "• Delete option for your saved trees<br>• 'Open All Tooltips' toggle in the settings<br>• Edit icons now show above tooltips<br>"
+      },
+      {
+        "id": "news-010",
+        "date": "Dec 6, 2024",
+        "title": "Paid Patreon Accounts are Coming January 1st",
+        "content": "Everyone who logs in with a free Patreon account before January 1st will get Builder Tier for free forever.<br> <br>Starting January 1st, I'll be charging $3 a month (the Builder Tier on Patreon) to host new trees (the share tree online button). All existing trees will continue to be hosted at no cost.<br> <br>You can still save, download, input/upload files locally like normal without an account. It's only new clicks of the share tree online button that you'll need a Builder Tier Patreon account.<br> <br> I've <a href='https://github.com/hdevx/Skill-Tree-Maker' target='_blank'>given the code away for free under MIT License</a>. Feel free to host your own tool with no accounts, contribute features, or use it locally.<br> "
+      },
+      {
+        "id": "news-009",
+        "date": "Dec 5, 2024",
+        "title": "New Features Added",
+        "content": "• Improved mobile support<br>• Fixed mobile grid attachement when flipping device<br>• Fixed mobile skills moving when naming/editing<br>"
+      },
+      {
+        "id": "news-008",
+        "date": "Dec 2, 2024",
+        "title": "New Features Added",
+        "content": "• Ctrl+Click to link from selected skills<br>"
+      },
+      {
+        "id": "news-007",
+        "date": "Sept 3, 2024",
+        "title": "New Features Added",
+        "content": "- Requirements Tooltip Added<br> When hovering over a skill, the unmet requirements are shown above the skill description. This can be toggled on and off globally in the settings under \"Show Requirements Description\".<br> - Mutually Exclusive Skills<br> - Edit Connection Window<br> - Set the cost of each skill level for individual skills (previously could only be 1).<br> - Set the skill selection color under \"Tree Unlock Color\" in the settings.<br> - \"Add New Skill On Click\" toggle in the settings. Turn this off to disable new skills being made when clicking or tapping an empty part of the tree.<br> "
+      },
+      {
+        "id": "news-006",
+        "date": "July 30, 2024",
+        "title": "New Features Added",
+        "content": "- Individual skill size, basic shapes, borders <br> - Mass skill edits<br> "
+      },
+      {
+        "id": "news-005",
+        "date": "June 25, 2024",
+        "title": "New Features Added",
+        "content": "- Setting for default skill icons for new skills<br> - Setting for default max skill points for new skills<br> - Removable custom images with an 'x' button in the top right of each custom image <br> - 'Auto Format Skills From Circle' button in the settings. This should branch skills evenly spaced from their root node.<br> "
+      },
+      {
+        "id": "news-001",
+        "date": "January 15, 2025",
+        "title": "Welcome to Skill Tree Maker!",
+        "content": "Create amazing skill trees for your RPG characters and games. Drag and drop skills, connect them, and export as JSON!"
+      }
+    ],
+    "showAccount": false,
+    "accountStatus": {
+      "logged_in": false
+    },
+    "showPatreonModal": false,
+    "patreonModalTitle": "",
+    "patreonModalMessage": "",
+    "patreonModalButtonText": ""
+  }
+}

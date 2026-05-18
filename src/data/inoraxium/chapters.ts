@@ -1,6 +1,6 @@
 import { Chapter } from '../../types';
 import registry from './user-pages/registry.json';
-import { mergeUserPageRegistry } from '../user-pages';
+import { mergeUserPageRegistry, UserPageRegistry } from '../user-pages';
 
 import { playersHandbookCodex } from './players-handbook/chapters/players-handbook-chapters';
 import { styleChapter } from './styles/styles';
@@ -26,7 +26,7 @@ const baseAllChapters: Chapter[] = [
   toolsChapter,
 ];
 
-const mergedUserPages = mergeUserPageRegistry(baseVisibleChapters, baseAllChapters, registry, 'inoraxium');
+const mergedUserPages = mergeUserPageRegistry(baseVisibleChapters, baseAllChapters, registry as unknown as UserPageRegistry, 'inoraxium');
 
 // Put chapters here only if they should appear in the sidebar.
 export const chapters: Chapter[] = mergedUserPages.chapters;

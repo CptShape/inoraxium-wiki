@@ -76,6 +76,27 @@ workspace-name-export/
 - `pages/<page-id>/assets/*`
   Uploaded image files used by that page.
 
+## Workspace name and workspace id
+
+In the visual editor, the right sidebar has a `Workspace` panel with:
+
+- `Workspace name`
+- `Workspace id`
+
+How they are used:
+
+- `Workspace name`
+  A human-readable label shown in the editor and stored in the export manifest.
+- `Workspace id`
+  The stable technical identity for the workspace.
+  This is what the importer uses to decide whether an export should replace an existing imported workspace or create a new one.
+
+Important rule:
+
+- if you are updating an existing imported workspace, keep the same `Workspace id`
+
+The editor also has a `Match name` button to regenerate the id from the current workspace name.
+
 ## Where imported user pages live
 
 Imported user pages are kept per system so they do not interfere with hand-authored code chapters.
@@ -107,6 +128,54 @@ You can also pass an already extracted export folder:
 ```powershell
 npm run import:user-pages -- "C:\path\to\workspace-export"
 ```
+
+## How to list imported workspaces
+
+Run:
+
+```powershell
+npm run list:user-pages
+```
+
+That prints every imported workspace from both systems with:
+
+- system
+- workspace id
+- workspace title
+- page count
+- page ids
+- storage path
+
+To list only one system:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/list-user-workspaces.ps1 -System inoraxium
+```
+
+or:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File scripts/list-user-workspaces.ps1 -System horaghfus
+```
+
+## How to delete an imported workspace
+
+Run:
+
+```powershell
+npm run delete:user-pages -- -System inoraxium -WorkspaceId darth-maul
+```
+
+or:
+
+```powershell
+npm run delete:user-pages -- -System horaghfus -WorkspaceId example-workspace
+```
+
+This deletes:
+
+- the workspace folder under `src/data/<system>/user-pages/workspaces/<workspace-id>/`
+- all matching entries from that system's `registry.json`
 
 ## What the importer does
 
@@ -165,16 +234,25 @@ Imported pages can also use `parentId` to attach themselves under another chapte
 
 ## Editing imported workspaces later
 
-The next recommended step is loading imported workspaces back into the visual editor.
+Imported workspaces now appear in the visual editor under `Imported Workspaces`.
 
-The registry now stores:
+When an editor clicks one:
 
-- `workspaceId`
-- `workspaceTitle`
-- page metadata
-- content path
+- its pages are loaded into `Created Pages`
+- the workspace name and workspace id are restored
+- the pages can be edited and exported again
 
-That will make it possible for the editor to show existing imported workspaces and let users revise them instead of rebuilding from scratch.
+To update an existing imported workspace instead of creating a second copy:
 
-That part is not fully implemented yet, but the import structure is now designed for it.
+- load the existing imported workspace
+- keep the same `Workspace id`
+- export again
+- run `npm run import:user-pages -- "<path-to-new-zip>"`
 
+The importer replaces the whole matching workspace for that system.
+
+That means:
+
+- edited pages are updated
+- newly added pages are added
+- removed pages are deleted from that imported workspace

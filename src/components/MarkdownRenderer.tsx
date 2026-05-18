@@ -6,7 +6,7 @@ import type { Components } from 'react-markdown';
 import { Chapter } from '../types';
 import { getTimelineConfig, parseMarkdownContent } from '../utils/markdownContent';
 import { TimelinePage } from './TimelinePage';
-import Infobox, { parseInfoboxMarkup, renderInfoboxRichText } from './Infobox';
+import Infobox, { InfoboxData, parseInfoboxMarkup, renderInfoboxRichText } from './Infobox';
 
 export interface PartInfo {
   id: string;
@@ -43,6 +43,11 @@ const markdownModules = (import.meta as any).glob(
   ['../data/**/*.md'],
   { query: '?raw', import: 'default' }
 );
+
+const imageModules = (import.meta as any).glob(
+  ['../**/*.{png,jpg,jpeg,webp,avif,gif,svg}'],
+  { eager: true, import: 'default' }
+) as Record<string, string>;
 
 const normalizeMarkdownPath = (value: string) => {
   const trimmed = value.trim();
@@ -107,6 +112,265 @@ const splitMarkdownWithInfoboxes = (source: string): MarkdownSegment[] => {
   return segments.length > 0 ? segments : [{ type: 'markdown', content: source }];
 };
 
+const slugifyLinkTarget = (value: string) =>
+  value
+    .trim()
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-+|-+$/g, '');
+
+const preprocessWikiSyntax = (source: string) => {
+  let next = source.replace(/!\[\[([^\]]+)\]\]/g, (_match, target) => {
+    const trimmed = String(target).trim();
+    return `<img src="${trimmed}" alt="${trimmed}" />`;
+  });
+
+  next = next.replace(/\[\[([^\]|#]+?)(?:#([^\]|]+))?(?:\|([^\]]+))?\]\]/g, (_match, rawTarget, rawPart, rawAlias) => {
+    const target = slugifyLinkTarget(String(rawTarget));
+    const part = rawPart ? String(rawPart).trim() : '';
+    const alias = rawAlias ? String(rawAlias).trim() : String(rawTarget).trim();
+
+    return `<a href="#" data-go-chapter="${target}"${part ? ` data-go-chapter-part="${part}"` : ''}>${alias}</a>`;
+  });
+
+  next = next.replace(/\|\|(.+?)\|\|/g, (_match, content) => `<spoiler-text>${content}</spoiler-text>`);
+
+  return next;
+};
+
+const resolveContentAssetPath = (
+  value?: string,
+  assetMap?: Record<string, string>,
+  currentMarkdownPath?: string
+) => {
+  if (!value) return '';
+  const trimmed = value.trim();
+  if (!trimmed) return '';
+  if (assetMap?.[trimmed]) return assetMap[trimmed];
+  if (/^(https?:)?\/\//.test(trimmed) || trimmed.startsWith('/')) return trimmed;
+  if (trimmed.startsWith('src/')) {
+    const normalized = `../${trimmed.slice('src/'.length)}`;
+    return imageModules[normalized] ?? trimmed;
+  }
+  if (currentMarkdownPath && trimmed.startsWith('assets/')) {
+    const pageDirectory = currentMarkdownPath.slice(0, currentMarkdownPath.lastIndexOf('/'));
+    const siblingAssetPath = `${pageDirectory}/${trimmed}`;
+    if (imageModules[siblingAssetPath]) {
+      return imageModules[siblingAssetPath];
+    }
+    const workspaceDirectory = pageDirectory.slice(0, pageDirectory.lastIndexOf('/'));
+    const workspaceAssetPath = `${workspaceDirectory}/${trimmed}`;
+    if (imageModules[workspaceAssetPath]) {
+      return imageModules[workspaceAssetPath];
+    }
+  }
+  const basename = trimmed.slice(trimmed.lastIndexOf('/') + 1);
+  const basenameMatches = Object.entries(imageModules).filter(([modulePath]) => modulePath.endsWith(`/${basename}`));
+  if (basenameMatches.length === 1) {
+    return basenameMatches[0][1];
+  }
+  return imageModules[trimmed] ?? trimmed;
+};
+
+const RESERVED_FRONTMATTER_KEYS = new Set([
+  'title',
+  'subtitle',
+  'image',
+  'layout',
+  'infobox',
+  'tags',
+  'id',
+  'system',
+  'parentId',
+  'sidebarVisible',
+  'hiddenButLinkable',
+  'order',
+  'width',
+  'folder',
+  'pageType',
+  'timeline',
+  'startYear',
+  'endYear',
+  'scale',
+  'events',
+  'ranges',
+]);
+
+const stringifyFrontmatterValue = (value: unknown): string => {
+  if (Array.isArray(value)) {
+    return value.map((item) => stringifyFrontmatterValue(item)).join(', ');
+  }
+  if (value && typeof value === 'object') {
+    return JSON.stringify(value);
+  }
+  if (value === null || typeof value === 'undefined') {
+    return '';
+  }
+  return String(value);
+};
+
+const normalizeFrontmatterImages = (value: unknown): InfoboxData['image'] => {
+  if (Array.isArray(value)) {
+    return value
+      .map((item) => {
+        if (typeof item === 'string') {
+          return item;
+        }
+        if (Array.isArray(item) && item.length > 0) {
+          return {
+            src: String(item[0]),
+            caption: item.length > 1 ? String(item[1]) : undefined,
+          };
+        }
+        if (item && typeof item === 'object') {
+          const typedItem = item as Record<string, unknown>;
+          if (typeof typedItem.src === 'string') {
+            return {
+              src: typedItem.src,
+              caption: typeof typedItem.caption === 'string' ? typedItem.caption : undefined,
+            };
+          }
+          if (typeof typedItem.path === 'string') {
+            return {
+              src: typedItem.path,
+              caption: typeof typedItem.caption === 'string' ? typedItem.caption : undefined,
+            };
+          }
+        }
+        return String(item);
+      })
+      .filter(Boolean);
+  }
+
+  if (typeof value === 'string' && value.trim()) {
+    return value.trim();
+  }
+
+  return undefined;
+};
+
+const buildInfoboxFromFrontmatter = (frontmatter: Record<string, unknown>): InfoboxData | null => {
+  if (frontmatter.infobox === false) {
+    return null;
+  }
+
+  const title = typeof frontmatter.title === 'string' && frontmatter.title.trim()
+    ? frontmatter.title.trim()
+    : null;
+
+  const layoutRules = Array.isArray(frontmatter.layout) ? frontmatter.layout : [];
+  const aliasMap = new Map<string, string>();
+  const headerAboveMap = new Map<string, string>();
+  const headerBelowMap = new Map<string, string>();
+  const groupRules: Array<{ keys: string[] }> = [];
+
+  layoutRules.forEach((rule) => {
+    if (!rule || typeof rule !== 'object') return;
+    const typedRule = rule as Record<string, unknown>;
+    if (typedRule.type === 'alias' && Array.isArray(typedRule.keys) && typeof typedRule.text === 'string') {
+      typedRule.keys.forEach((key) => aliasMap.set(String(key), typedRule.text as string));
+    }
+    if (typedRule.type === 'group' && Array.isArray(typedRule.keys)) {
+      groupRules.push({
+        keys: typedRule.keys.map((key) => String(key)),
+      });
+    }
+    if (typedRule.type === 'header' && typeof typedRule.text === 'string') {
+      if (typeof typedRule.above === 'string') {
+        headerAboveMap.set(typedRule.above, typedRule.text);
+      }
+      if (typeof typedRule.below === 'string') {
+        headerBelowMap.set(typedRule.below, typedRule.text);
+      }
+    }
+  });
+
+  const fieldEntries = Object.entries(frontmatter)
+    .filter(([key]) => !RESERVED_FRONTMATTER_KEYS.has(key))
+    .map(([key, value]) => ({
+      key,
+      label: aliasMap.get(key) || key.replace(/[_-]+/g, ' '),
+      value: preprocessWikiSyntax(stringifyFrontmatterValue(value)),
+    }))
+    .filter((entry) => entry.value.trim().length > 0);
+  const fieldEntryMap = new Map(fieldEntries.map((entry) => [entry.key, entry]));
+  const consumedKeys = new Set<string>();
+
+  if (!title && fieldEntries.length === 0 && !frontmatter.image) {
+    return null;
+  }
+
+  const defaultSectionTitle =
+    typeof frontmatter.infobox === 'string' && frontmatter.infobox.trim() ? frontmatter.infobox.trim() : 'Overview';
+  const sections: InfoboxData['sections'] = [];
+  let currentSection: InfoboxData['sections'][number] = {
+    title: defaultSectionTitle,
+    color: 'rgb(var(--theme-700-rgb) / 0.92)',
+    titleColor: '#ffffff',
+    entryBackgroundColor: '#ffffff',
+    labelColor: '#000000',
+    valueColor: '#000000',
+    defaultOpen: true,
+    entries: [],
+  };
+
+  const pushSectionIfNeeded = () => {
+    if (currentSection.entries.length > 0) {
+      sections.push(currentSection);
+    }
+  };
+
+  fieldEntries.forEach((entry) => {
+    if (consumedKeys.has(entry.key)) {
+      return;
+    }
+
+    const aboveHeader = headerAboveMap.get(entry.key);
+    if (aboveHeader) {
+      pushSectionIfNeeded();
+      currentSection = { ...currentSection, title: aboveHeader, entries: [] };
+    }
+
+    const matchingGroup = groupRules.find((rule) => rule.keys.includes(entry.key) && rule.keys.every((key) => fieldEntryMap.has(key)));
+
+    if (matchingGroup) {
+      currentSection.entries.push({
+        label: '',
+        value: '',
+        columns: matchingGroup.keys.map((key) => {
+          const groupEntry = fieldEntryMap.get(key)!;
+          return {
+            label: groupEntry.label,
+            value: groupEntry.value,
+          };
+        }),
+      });
+      matchingGroup.keys.forEach((key) => consumedKeys.add(key));
+    } else {
+      currentSection.entries.push({
+        label: entry.label,
+        value: entry.value,
+      });
+      consumedKeys.add(entry.key);
+    }
+
+    const belowHeader = headerBelowMap.get(entry.key);
+    if (belowHeader) {
+      pushSectionIfNeeded();
+      currentSection = { ...currentSection, title: belowHeader, entries: [] };
+    }
+  });
+
+  pushSectionIfNeeded();
+
+  return {
+    title: preprocessWikiSyntax(title || 'Untitled Page'),
+    image: normalizeFrontmatterImages(frontmatter.image),
+    titleTextColor: '#ffffff',
+    sections,
+  };
+};
+
 // ── Helper: check if an element has a custom class from raw HTML ──────────────
 const hasCustomClass = (className?: string): boolean => {
   return !!className && className.trim().length > 0;
@@ -116,7 +380,8 @@ const hasCustomClass = (className?: string): boolean => {
 // Creates component overrides with access to the cross-chapter link callback.
 const createComponents = (
   onCrossChapterLink?: (chapterId: string, partId?: string) => void,
-  assetMap?: Record<string, string>
+  assetMap?: Record<string, string>,
+  currentMarkdownPath?: string
 ): Components & Record<string, React.ElementType> => ({
   h1: ({ children, className, ...props }) => (
     <h1
@@ -341,6 +606,26 @@ const createComponents = (
 
     return <td className={resolvedClassName} {...props}>{children}</td>;
   },
+  img: ({ src, alt, className, ...props }) => (
+    <img
+      src={resolveContentAssetPath(src, assetMap, currentMarkdownPath)}
+      alt={alt ?? ''}
+      className={className ?? 'my-4 rounded-lg max-w-full'}
+      {...props}
+    />
+  ),
+  'spoiler-text': ({ children }) => {
+    const [revealed, setRevealed] = React.useState(false);
+    return (
+      <button
+        type="button"
+        onClick={() => setRevealed((value) => !value)}
+        className={`rounded px-1.5 py-0.5 transition-colors ${revealed ? 'bg-stone-700 text-amber-100' : 'bg-stone-950 text-stone-950 shadow-[inset_0_0_0_1px_rgba(245,158,11,0.25)]'}`}
+      >
+        {children}
+      </button>
+    );
+  },
 
   // ── Generic elements ─────────────────────────────────────────────────────
   div: ({ className, children, ...props }) => (
@@ -362,7 +647,8 @@ const createComponents = (
 
 const createInfoboxComponents = (
   onCrossChapterLink?: (chapterId: string, partId?: string) => void,
-  assetMap?: Record<string, string>
+  assetMap?: Record<string, string>,
+  currentMarkdownPath?: string
 ): Components => ({
   p: ({ children, className, ...props }) => (
     <p className={className ?? 'mb-0 text-inherit leading-relaxed'} {...props}>
@@ -429,7 +715,7 @@ const createInfoboxComponents = (
   },
   img: ({ src, alt, className, ...props }) => (
     <img
-      src={(src && assetMap?.[src]) || src || ''}
+      src={resolveContentAssetPath(src, assetMap, currentMarkdownPath)}
       alt={alt ?? ''}
       className={className ?? 'my-2 rounded-lg max-w-full'}
       {...props}
@@ -453,12 +739,12 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   // Memoize components so they only recreate when the callback changes
   const components = useMemo(
-    () => createComponents(onCrossChapterLink, assetMap),
-    [assetMap, onCrossChapterLink]
+    () => createComponents(onCrossChapterLink, assetMap, normalizedPath),
+    [assetMap, normalizedPath, onCrossChapterLink]
   );
   const infoboxComponents = useMemo(
-    () => createInfoboxComponents(onCrossChapterLink, assetMap),
-    [assetMap, onCrossChapterLink]
+    () => createInfoboxComponents(onCrossChapterLink, assetMap, normalizedPath),
+    [assetMap, normalizedPath, onCrossChapterLink]
   );
 
   // Load the markdown file or use inline text
@@ -524,8 +810,13 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   const contentSegments = useMemo(() => {
     if (state.status !== 'success') return [];
-    return splitMarkdownWithInfoboxes(parsedContent?.body ?? state.text);
+    return splitMarkdownWithInfoboxes(preprocessWikiSyntax(parsedContent?.body ?? state.text));
   }, [parsedContent, state]);
+
+  const frontmatterInfobox = useMemo(() => {
+    if (!parsedContent) return null;
+    return buildInfoboxFromFrontmatter(parsedContent.frontmatter);
+  }, [parsedContent]);
 
   // After the markdown has rendered into the DOM, find [data-part] anchors.
   // Timeline pages do not use the in-page part navigator for now.
@@ -588,6 +879,14 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
 
   return (
     <div ref={divRef}>
+      {frontmatterInfobox && (
+        <Infobox
+          data={frontmatterInfobox}
+          assetMap={assetMap}
+          pagePath={normalizedPath}
+          renderRichText={(content, className) => renderInfoboxRichText(preprocessWikiSyntax(content), infoboxComponents, className)}
+        />
+      )}
       {contentSegments.map((segment, index) => {
         if (segment.type === 'infobox') {
           const infoboxData = parseInfoboxMarkup(segment.markup);
@@ -600,6 +899,7 @@ const MarkdownRenderer: React.FC<MarkdownRendererProps> = ({
               key={`infobox-${index}`}
               data={infoboxData}
               assetMap={assetMap}
+              pagePath={normalizedPath}
               renderRichText={(content, className) => renderInfoboxRichText(content, infoboxComponents, className)}
             />
           );

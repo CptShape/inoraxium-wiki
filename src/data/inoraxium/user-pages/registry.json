@@ -1,4 +1,77 @@
 {
-  "version": 1,
-  "pages": []
+    "version":  1,
+    "pages":  [
+                  {
+                      "workspaceId":  "test",
+                      "workspaceTitle":  "Test",
+                      "id":  "test--folder-a-main",
+                      "aliases":  [
+                                      "main",
+                                      "main"
+                                  ],
+                      "title":  "main",
+                      "subtitle":  null,
+                      "icon":  "",
+                      "content":  "src/data/inoraxium/user-pages/workspaces/test/test--folder-a-main/page.md",
+                      "system":  "inoraxium",
+                      "parentId":  "",
+                      "sidebarVisible":  true,
+                      "order":  "main",
+                      "width":  "",
+                      "folderPath":  "folder a",
+                      "sourceFile":  "folder a/main.md",
+                      "tags":  [
+
+                               ],
+                      "isFolder":  false
+                  },
+                  {
+                      "workspaceId":  "test",
+                      "workspaceTitle":  "Test",
+                      "id":  "test--folder-a-test-123",
+                      "aliases":  [
+                                      "Test 123",
+                                      "Test 123"
+                                  ],
+                      "title":  "Test 123",
+                      "subtitle":  null,
+                      "icon":  "",
+                      "content":  "src/data/inoraxium/user-pages/workspaces/test/test--folder-a-test-123/page.md",
+                      "system":  "inoraxium",
+                      "parentId":  "",
+                      "sidebarVisible":  false,
+                      "order":  "Test 123",
+                      "width":  "",
+                      "folderPath":  "folder a",
+                      "sourceFile":  "folder a/Test 123.md",
+                      "tags":  [
+                                   "test"
+                               ],
+                      "isFolder":  false
+                  },
+                  {
+                      "workspaceId":  "test",
+                      "workspaceTitle":  "Test",
+                      "id":  "test--folder-a-test-345",
+                      "aliases":  [
+                                      "test 345",
+                                      "Test 345 Infobox"
+                                  ],
+                      "title":  "Test 345 Infobox",
+                      "subtitle":  null,
+                      "icon":  "",
+                      "content":  "src/data/inoraxium/user-pages/workspaces/test/test--folder-a-test-345/page.md",
+                      "system":  "inoraxium",
+                      "parentId":  "",
+                      "sidebarVisible":  false,
+                      "order":  "test 345",
+                      "width":  "",
+                      "folderPath":  "folder a",
+                      "sourceFile":  "folder a/test 345.md",
+                      "tags":  [
+                                   "test2"
+                               ],
+                      "isFolder":  false
+                  }
+              ]
 }

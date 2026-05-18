@@ -1,6 +1,16 @@
 // Recursive Chapter interface for infinite nesting
 export interface Chapter {
   id: string;
+  aliases?: string[];
+  userPageMeta?: {
+    workspaceId: string;
+    workspaceTitle: string;
+    sourceFile?: string;
+    folderPath?: string;
+    tags?: string[];
+    isFolder?: boolean;
+    isWorkspaceMain?: boolean;
+  };
   title: string;
   subtitle?: string;
   icon?: string;

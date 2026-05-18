@@ -9,6 +9,14 @@ import { DiceMacros } from './DiceMacros';
 import { MessageSender } from './MessageSender';
 import { WorldMap } from './WorldMap';
 import Characters from './Characters';
+import { SkillTreePage } from './SkillTreePage';
+
+interface WorkspaceFolderNode {
+  id: string;
+  name: string;
+  children: WorkspaceFolderNode[];
+  pages: Chapter[];
+}
 
 interface ContentViewProps {
   activeChapter: Chapter | null;
@@ -35,6 +43,9 @@ export const ContentView: React.FC<ContentViewProps> = ({
 
   // ── Copy link feedback ──────────────────────────────────────────────────
   const [linkCopied, setLinkCopied] = useState(false);
+  const [workspaceTab, setWorkspaceTab] = useState<'content' | 'tags' | 'folders'>('content');
+  const [selectedWorkspaceTag, setSelectedWorkspaceTag] = useState<string | null>(null);
+  const [expandedWorkspaceFolders, setExpandedWorkspaceFolders] = useState<Set<string>>(new Set());
 
   const handleCopyLink = () => {
     navigator.clipboard.writeText(window.location.href);
@@ -129,10 +140,22 @@ export const ContentView: React.FC<ContentViewProps> = ({
   // Called when a link with data-go-chapter is clicked inside the markdown.
   // Navigates to the target chapter and optionally scrolls to a data-part.
   const handleCrossChapterLink = useCallback((chapterId: string, partId?: string) => {
-    // Find the target chapter recursively
+    const flattenChapters = (chapters: Chapter[]): Chapter[] => {
+      const result: Chapter[] = [];
+      for (const chapter of chapters) {
+        result.push(chapter);
+        if (chapter.subChapters) {
+          result.push(...flattenChapters(chapter.subChapters));
+        }
+      }
+      return result;
+    };
+
+    const flatChapters = flattenChapters(allChapters);
+
     const findChapterById = (chapters: Chapter[], id: string): Chapter | null => {
       for (const ch of chapters) {
-        if (ch.id === id) return ch;
+        if (ch.id === id || ch.aliases?.includes(id)) return ch;
         if (ch.subChapters) {
           const found = findChapterById(ch.subChapters, id);
           if (found) return found;
@@ -141,11 +164,20 @@ export const ContentView: React.FC<ContentViewProps> = ({
       return null;
     };
 
-    const targetChapter = findChapterById(allChapters, chapterId);
+    const activeWorkspaceId = activeChapter?.userPageMeta?.workspaceId;
+    const workspaceScopedMatch = activeWorkspaceId
+      ? flatChapters.find(
+          (chapter) =>
+            chapter.userPageMeta?.workspaceId === activeWorkspaceId &&
+            (chapter.id === chapterId || chapter.aliases?.includes(chapterId))
+        ) ?? null
+      : null;
+
+    const targetChapter = workspaceScopedMatch ?? findChapterById(allChapters, chapterId);
     if (!targetChapter) return;
 
     // Navigate to the chapter
-    onChapterSelect?.(chapterId, [chapterId]);
+    onChapterSelect?.(targetChapter.id, [targetChapter.id]);
 
     // If a part was specified, scroll to it after the chapter loads
     if (partId) {
@@ -179,12 +211,124 @@ export const ContentView: React.FC<ContentViewProps> = ({
 
       setTimeout(tryScrollToPart, 200);
     }
-  }, [allChapters, onChapterSelect]);
+  }, [activeChapter?.userPageMeta?.workspaceId, allChapters, onChapterSelect]);
+
+  const workspaceId = activeChapter?.userPageMeta?.workspaceId || null;
+  const isWorkspaceMain = activeChapter?.userPageMeta?.isWorkspaceMain === true;
+  const workspacePages = React.useMemo(
+    () =>
+      workspaceId
+        ? allChapters.filter((chapter) => chapter.userPageMeta?.workspaceId === workspaceId && !chapter.userPageMeta?.isFolder)
+        : [],
+    [allChapters, workspaceId]
+  );
+
+  const workspaceTagMap = React.useMemo(() => {
+    const map = new Map<string, Chapter[]>();
+    workspacePages.forEach((chapter) => {
+      (chapter.userPageMeta?.tags ?? []).forEach((tag) => {
+        const normalizedTag = tag.trim();
+        if (!normalizedTag) return;
+        const list = map.get(normalizedTag) ?? [];
+        list.push(chapter);
+        map.set(normalizedTag, list);
+      });
+    });
+    return new Map(
+      Array.from(map.entries()).sort((left, right) => left[0].localeCompare(right[0], undefined, { sensitivity: 'base' }))
+    );
+  }, [workspacePages]);
+
+  const workspaceFolderTree = React.useMemo<WorkspaceFolderNode[]>(() => {
+    const root: WorkspaceFolderNode[] = [];
+
+    const ensureNode = (container: WorkspaceFolderNode[], key: string, name: string) => {
+      const existing = container.find((item) => item.id === key);
+      if (existing) return existing;
+      const next: WorkspaceFolderNode = { id: key, name, children: [], pages: [] };
+      container.push(next);
+      return next;
+    };
+
+    workspacePages.forEach((chapter) => {
+      const folderPath = chapter.userPageMeta?.folderPath?.trim() || '';
+      if (!folderPath) return;
+
+      const segments = folderPath.split('/').filter(Boolean);
+      let level = root;
+      let currentPath = '';
+      let lastNode: WorkspaceFolderNode | null = null;
+
+      for (const segment of segments) {
+        currentPath = currentPath ? `${currentPath}/${segment}` : segment;
+        const node = ensureNode(level, currentPath, segment);
+        lastNode = node;
+        level = node.children;
+      }
+
+      if (lastNode) {
+        lastNode.pages.push(chapter);
+      }
+    });
+
+    const sortNode = (node: WorkspaceFolderNode) => {
+      node.children.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+      node.pages.sort((left, right) => left.title.localeCompare(right.title, undefined, { sensitivity: 'base' }));
+      node.children.forEach(sortNode);
+    };
+
+    root.forEach(sortNode);
+    return root.sort((left, right) => left.name.localeCompare(right.name, undefined, { sensitivity: 'base' }));
+  }, [workspacePages]);
+
+  const renderWorkspaceFolderNode = (node: WorkspaceFolderNode, depth = 0): React.ReactNode => {
+    const isExpanded = expandedWorkspaceFolders.has(node.id);
+    return (
+      <div key={node.id} className="space-y-2">
+        <button
+          onClick={() =>
+            setExpandedWorkspaceFolders((prev) => {
+              const next = new Set(prev);
+              if (next.has(node.id)) {
+                next.delete(node.id);
+              } else {
+                next.add(node.id);
+              }
+              return next;
+            })
+          }
+          className="flex w-full items-center gap-2 rounded-lg border border-amber-800/20 bg-amber-950/10 px-3 py-2 text-left text-amber-300 hover:bg-amber-900/20"
+          style={{ paddingLeft: `${depth * 14 + 12}px`, fontFamily: "'Cinzel', serif" }}
+        >
+          <span className="text-xs">{isExpanded ? '▾' : '▸'}</span>
+          <span>{node.name}</span>
+        </button>
+        {isExpanded && (
+          <div className="space-y-2">
+            {node.pages.map((page) => (
+              <button
+                key={page.id}
+                onClick={() => onChapterSelect?.(page.id, [page.id])}
+                className="flex w-full items-center rounded-lg border border-stone-800 bg-black/20 px-3 py-2 text-left text-sm text-amber-100 hover:border-amber-700/40 hover:bg-amber-950/10"
+                style={{ paddingLeft: `${depth * 14 + 34}px`, fontFamily: "'IM Fell English', serif" }}
+              >
+                {page.title}
+              </button>
+            ))}
+            {node.children.map((child) => renderWorkspaceFolderNode(child, depth + 1))}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   // Reset parts whenever the chapter changes
   useEffect(() => {
     setParts([]);
     setActivePartIndex(0);
+    setWorkspaceTab('content');
+    setSelectedWorkspaceTag(null);
+    setExpandedWorkspaceFolders(new Set());
     // Scroll back to top on chapter change
     if (scrollContainerRef.current) {
       scrollContainerRef.current.scrollTop = 0;
@@ -399,6 +543,76 @@ export const ContentView: React.FC<ContentViewProps> = ({
             )}
           </div>
 
+          {isWorkspaceMain && (
+            <div className="mb-8 rounded-2xl border border-amber-800/30 bg-stone-900/45 p-4">
+              <div className="mb-4 flex flex-wrap gap-2">
+                {(['content', 'tags', 'folders'] as const).map((tab) => (
+                  <button
+                    key={tab}
+                    onClick={() => setWorkspaceTab(tab)}
+                    className={`rounded-lg border px-3 py-1.5 text-xs font-bold uppercase tracking-wide ${
+                      workspaceTab === tab
+                        ? 'border-amber-500/50 bg-amber-900/30 text-amber-100'
+                        : 'border-stone-700 bg-stone-900 text-stone-400 hover:border-amber-800/40 hover:text-amber-200'
+                    }`}
+                  >
+                    {tab}
+                  </button>
+                ))}
+              </div>
+
+              {workspaceTab === 'tags' && (
+                <div className="space-y-4">
+                  <div className="flex flex-wrap gap-2">
+                    {workspaceTagMap.size === 0 ? (
+                      <p className="text-sm text-stone-500">No tags found in this workspace.</p>
+                    ) : (
+                      Array.from(workspaceTagMap.keys()).map((tag) => (
+                        <button
+                          key={tag}
+                          onClick={() => setSelectedWorkspaceTag(tag)}
+                          className={`rounded-full border px-3 py-1 text-xs ${
+                            selectedWorkspaceTag === tag
+                              ? 'border-amber-500/50 bg-amber-900/30 text-amber-100'
+                              : 'border-amber-800/30 bg-amber-950/10 text-amber-300 hover:bg-amber-900/20'
+                          }`}
+                        >
+                          #{tag}
+                        </button>
+                      ))
+                    )}
+                  </div>
+                  {selectedWorkspaceTag && workspaceTagMap.has(selectedWorkspaceTag) && (
+                    <div className="space-y-2">
+                      <p className="text-sm text-amber-400" style={{ fontFamily: "'Cinzel', serif" }}>
+                        Pages tagged with `{selectedWorkspaceTag}`
+                      </p>
+                      {workspaceTagMap.get(selectedWorkspaceTag)!.map((page) => (
+                        <button
+                          key={`${selectedWorkspaceTag}-${page.id}`}
+                          onClick={() => onChapterSelect?.(page.id, [page.id])}
+                          className="block w-full rounded-lg border border-stone-800 bg-black/20 px-3 py-2 text-left text-amber-100 hover:border-amber-700/40 hover:bg-amber-950/10"
+                        >
+                          {page.title}
+                        </button>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              )}
+
+              {workspaceTab === 'folders' && (
+                <div className="space-y-3">
+                  {workspaceFolderTree.length === 0 ? (
+                    <p className="text-sm text-stone-500">No folder structure found for this workspace.</p>
+                  ) : (
+                    workspaceFolderTree.map((node) => renderWorkspaceFolderNode(node))
+                  )}
+                </div>
+              )}
+            </div>
+          )}
+
           {/* ── Mythology Module (special chapter) ─────────────────────────── */}
           {activeChapter.content === 'mythology' ? (
             <div className="-mx-4 -mb-6">
@@ -455,8 +669,15 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
+          {/* ── Skill Tree (special chapter) ──────────────────────────────── */}
+          {activeChapter.content === 'skill-tree' ? (
+            <div className="-mx-4 -mb-6">
+              <SkillTreePage system="inoraxium" />
+            </div>
+          ) : null}
+
           {/* ── Markdown content ───────────────────────────────────────────── */}
-          {activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'dice-macros' && activeChapter.content !== 'message-sender' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && (
+          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'dice-macros' && activeChapter.content !== 'message-sender' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'skill-tree' && (
             <div style={{ fontFamily: "'IM Fell English', serif" }}>
               <MarkdownRenderer
                 path={activeChapter.content}
