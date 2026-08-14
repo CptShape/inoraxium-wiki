@@ -1270,6 +1270,23 @@ export const Characters: React.FC = () => {
     if (discordErr) setDiceError(`Discord: ${discordErr}`);
   };
 
+  const openHomebrewViewer = (
+    entityType: 'general-item' | 'inventory-item' | 'spell' | 'status',
+    entryId: string,
+  ) => {
+    if (!selectedCharacter?.id || !entryId) return;
+    const targetUrl = `${window.location.origin}${window.location.pathname}#homebrew-viewer/${entityType}/${encodeURIComponent(selectedCharacter.id)}/${encodeURIComponent(entryId)}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const openHomebrewLibrary = (
+    category: 'general-items' | 'inventory' | 'statuses' | 'spells',
+  ) => {
+    if (!selectedCharacter?.id) return;
+    const targetUrl = `${window.location.origin}${window.location.pathname}#homebrew-library/${category}/${encodeURIComponent(selectedCharacter.id)}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
+
   const toggleInventoryActionDescription = (actionId: string) => {
     setExpandedInventoryActionDescriptions(prev => (
       prev.includes(actionId) ? prev.filter(id => id !== actionId) : [...prev, actionId]
@@ -4360,12 +4377,20 @@ export const Characters: React.FC = () => {
                     </h3>
                     <p className="text-xs text-orange-100/55 mt-1">Temporary conditions, active modifiers, and encounter-state effects.</p>
                   </div>
-                  <button
-                    onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [], color: '#f59e0b', hidden: false }])}
-                    className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
-                  >
-                    + Add Status
-                  </button>
+                  <div className="flex items-center gap-2">
+                    <button
+                      onClick={() => openHomebrewLibrary('statuses')}
+                      className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
+                    >
+                      <Share2 size={13} /> Share Web
+                    </button>
+                    <button
+                      onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [], color: '#f59e0b', hidden: false }])}
+                      className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                    >
+                      + Add Status
+                    </button>
+                  </div>
                 </div>
 
                 <div className="space-y-4">
@@ -4439,6 +4464,12 @@ export const Characters: React.FC = () => {
                         className="text-base text-amber-300 hover:text-amber-200 cursor-pointer self-start"
                       >
                         {expandedStatusDescriptions.includes(status.id) ? 'Hide' : 'Show More'}
+                      </button>
+                      <button
+                        onClick={() => openHomebrewViewer('status', status.id)}
+                        className="inline-flex items-center gap-1 text-sm text-sky-300 hover:text-sky-200 cursor-pointer self-start"
+                      >
+                        <Share2 size={14} /> Share Web
                       </button>
 
                       {/* Effects area */}
@@ -4529,6 +4560,12 @@ export const Characters: React.FC = () => {
                       </p>
                     </div>
                     <div className="flex items-center gap-2">
+                      <button
+                        onClick={() => openHomebrewLibrary('inventory')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
+                      >
+                        <Share2 size={13} /> Share Web
+                      </button>
                       {canEditInventory && (
                         <button
                           onClick={addInventoryItem}
@@ -4562,14 +4599,22 @@ export const Characters: React.FC = () => {
                         <h4 className="text-lg font-bold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>General Items</h4>
                         <p className="text-sm text-stone-500">Simple shared items like potions, rations, or keys.</p>
                       </div>
-                      {canEditInventory && (
+                      <div className="flex items-center gap-2">
                         <button
-                          onClick={addGeneralItem}
-                          className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-sm text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                          onClick={() => openHomebrewLibrary('general-items')}
+                          className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
                         >
-                          + Add General Item
+                          <Share2 size={13} /> Share Web
                         </button>
-                      )}
+                        {canEditInventory && (
+                          <button
+                            onClick={addGeneralItem}
+                            className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-sm text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                          >
+                            + Add General Item
+                          </button>
+                        )}
+                      </div>
                     </div>
                     {charGeneralItems.length === 0 ? (
                       <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
@@ -4623,6 +4668,12 @@ export const Characters: React.FC = () => {
                                   className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-900/30 border border-sky-800/40 rounded text-xs text-sky-200 hover:bg-sky-900/50 cursor-pointer"
                                 >
                                   <Share2 size={13} /> Share
+                                </button>
+                                <button
+                                  onClick={() => openHomebrewViewer('general-item', item.id)}
+                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
+                                >
+                                  <Share2 size={13} /> Share Web
                                 </button>
                                 {canEditInventory && (
                                   <button
@@ -4850,6 +4901,12 @@ export const Characters: React.FC = () => {
                                 className="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 cursor-pointer"
                               >
                                 <Share2 size={12} /> Share
+                              </button>
+                              <button
+                                onClick={() => openHomebrewViewer('inventory-item', item.id)}
+                                className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:text-indigo-200 cursor-pointer"
+                              >
+                                <Share2 size={12} /> Share Web
                               </button>
                             </div>
                           </div>
@@ -5178,14 +5235,22 @@ export const Characters: React.FC = () => {
                         Magic, techniques, and powers. Folder groups help separate schools, loadouts, or situational kits.
                       </p>
                     </div>
-                    {isCharacterOwner && (
+                    <div className="flex items-center gap-2">
                       <button
-                        onClick={addSpell}
-                        className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                        onClick={() => openHomebrewLibrary('spells')}
+                        className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
                       >
-                        + Add Spell
+                        <Share2 size={13} /> Share Web
                       </button>
-                    )}
+                      {isCharacterOwner && (
+                        <button
+                          onClick={addSpell}
+                          className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                        >
+                          + Add Spell
+                        </button>
+                      )}
+                    </div>
                   </div>
 
                   {!isCharacterOwner && (
@@ -5384,6 +5449,12 @@ export const Characters: React.FC = () => {
                               className="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 cursor-pointer"
                             >
                               <Share2 size={12} /> Share
+                            </button>
+                            <button
+                              onClick={() => openHomebrewViewer('spell', spell.id)}
+                              className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:text-indigo-200 cursor-pointer"
+                            >
+                              <Share2 size={12} /> Share Web
                             </button>
                           </div>
 

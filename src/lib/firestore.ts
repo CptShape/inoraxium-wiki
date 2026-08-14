@@ -207,6 +207,34 @@ export const reloadCharacterFromFirestore = async (
   }
 };
 
+export const loadCharacterById = async (
+  characterId: string,
+  userId: string | null,
+): Promise<CharacterData | null> => {
+  const localMatch = getLocalCharacters().find((character) => character.id === characterId) || null;
+
+  const fs = await getFirestore();
+  if (fs) {
+    try {
+      const snapshot = await fs.getDoc(fs.doc(fs.db, 'characters', characterId));
+      if (snapshot.exists()) {
+        const data = { id: snapshot.id, ...snapshot.data() } as CharacterData;
+        const isOwner = !!userId && data.userId === userId;
+        if (isOwner || data.visibility === 'public' || !data.userId || data.userId === 'guest') {
+          return data;
+        }
+      }
+    } catch (err) {
+      console.error('Failed to load character by id from Firestore:', err);
+    }
+  }
+
+  if (!localMatch) return null;
+  const isLocalOwner = !userId || localMatch.userId === userId || localMatch.userId === 'guest';
+  const isLocalPublic = localMatch.visibility === 'public';
+  return isLocalOwner || isLocalPublic ? localMatch : null;
+};
+
 // ─── Favorites ─────────────────────────────────────────────────────────────────
 // Favourites live in a separate collection keyed by `${userId}_${characterId}`.
 

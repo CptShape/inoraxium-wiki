@@ -2,6 +2,8 @@ import React, { useEffect, useState, useCallback } from 'react';
 import { Sidebar } from './components/Sidebar';
 import { ContentView } from './components/ContentView';
 import { VisualPageEditor } from './components/VisualPageEditor';
+import { HomebrewViewer, HomebrewViewerEntityType } from './components/HomebrewViewer';
+import { HomebrewLibraryViewer, HomebrewLibraryCategory } from './components/HomebrewLibraryViewer';
 import { gameSystems } from './data/gameSystems';
 import { Chapter, GameSystemId } from './types';
 
@@ -49,6 +51,17 @@ function clearHash() {
 }
 // ─────────────────────────────────────────────────────────────────────
 
+interface HomebrewViewerRoute {
+  entityType: HomebrewViewerEntityType;
+  characterId: string;
+  entryId: string;
+}
+
+interface HomebrewLibraryRoute {
+  category: HomebrewLibraryCategory;
+  characterId: string;
+}
+
 function App() {
   const [currentSystem, setCurrentSystem] = useState<GameSystemId>('inoraxium');
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -58,6 +71,8 @@ function App() {
   const [breadcrumb, setBreadcrumb] = useState<string[]>([]);
   const [breadcrumbPath, setBreadcrumbPath] = useState<string[]>([]);
   const [isEditorOpen, setIsEditorOpen] = useState(false);
+  const [homebrewViewerRoute, setHomebrewViewerRoute] = useState<HomebrewViewerRoute | null>(null);
+  const [homebrewLibraryRoute, setHomebrewLibraryRoute] = useState<HomebrewLibraryRoute | null>(null);
 
   const systemDefinition = gameSystems[currentSystem];
   const chapters = systemDefinition.chapters;
@@ -101,6 +116,8 @@ function App() {
 
   const handleChapterSelect = useCallback((chapterId: string, path: string[] | null = null) => {
     setIsEditorOpen(false);
+    setHomebrewViewerRoute(null);
+    setHomebrewLibraryRoute(null);
     setActiveChapterId(chapterId);
 
     // If a full path is provided (from ContentView card click or timeline event), use it
@@ -137,6 +154,8 @@ function App() {
 
   const resetSystemState = useCallback((systemId: GameSystemId) => {
     setIsEditorOpen(false);
+    setHomebrewViewerRoute(null);
+    setHomebrewLibraryRoute(null);
     setActiveChapterId(null);
     setBreadcrumb([]);
     setBreadcrumbPath([]);
@@ -155,11 +174,55 @@ function App() {
   // Navigate from a hash path (array of IDs)
   const navigateFromHashPath = useCallback((path: string[]) => {
     if (path.length === 0) {
+      setHomebrewViewerRoute(null);
+      setHomebrewLibraryRoute(null);
       setActiveChapterId(null);
       setBreadcrumb([]);
       setBreadcrumbPath([]);
       return;
     }
+
+    if (path[0] === 'homebrew-viewer') {
+      const entityType = path[1] as HomebrewViewerEntityType | undefined;
+      const characterId = path[2] ? decodeURIComponent(path[2]) : '';
+      const entryId = path[3] ? decodeURIComponent(path[3]) : '';
+      const isSupportedEntity =
+        entityType === 'general-item'
+        || entityType === 'inventory-item'
+        || entityType === 'spell'
+        || entityType === 'status';
+
+      if (isSupportedEntity && characterId && entryId) {
+        setHomebrewViewerRoute({ entityType, characterId, entryId });
+        setHomebrewLibraryRoute(null);
+        setActiveChapterId(null);
+        setBreadcrumb(['Homebrew Viewer']);
+        setBreadcrumbPath(path);
+        return;
+      }
+    }
+
+    if (path[0] === 'homebrew-library') {
+      const category = path[1] as HomebrewLibraryCategory | undefined;
+      const characterId = path[2] ? decodeURIComponent(path[2]) : '';
+      const isSupportedCategory =
+        category === 'general-items'
+        || category === 'inventory'
+        || category === 'statuses'
+        || category === 'spells';
+
+      if (isSupportedCategory && characterId) {
+        setHomebrewViewerRoute(null);
+        setHomebrewLibraryRoute({ category, characterId });
+        setActiveChapterId(null);
+        setBreadcrumb(['Homebrew Library']);
+        setBreadcrumbPath(path);
+        return;
+      }
+    }
+
+    setHomebrewViewerRoute(null);
+    setHomebrewLibraryRoute(null);
 
     const targetId = path[path.length - 1];
     const chapter = findChapterById(allChapters, targetId);
@@ -203,6 +266,8 @@ function App() {
         setActiveChapterId(null);
         setBreadcrumb([]);
         setBreadcrumbPath([]);
+        setHomebrewViewerRoute(null);
+        setHomebrewLibraryRoute(null);
         clearHash();
       }
     }
@@ -267,6 +332,8 @@ function App() {
         onToggleSystem={handleToggleSystem}
         onClearSelection={() => {
           setIsEditorOpen(false);
+          setHomebrewViewerRoute(null);
+          setHomebrewLibraryRoute(null);
           setActiveChapterId(null);
           setBreadcrumb([]);
           setBreadcrumbPath([]);
@@ -281,6 +348,19 @@ function App() {
       />
       {isEditorOpen ? (
         <VisualPageEditor currentSystem={currentSystem} onExit={() => setIsEditorOpen(false)} />
+      ) : homebrewViewerRoute ? (
+        <HomebrewViewer
+          entityType={homebrewViewerRoute.entityType}
+          characterId={homebrewViewerRoute.characterId}
+          entryId={homebrewViewerRoute.entryId}
+          onBack={() => window.history.back()}
+        />
+      ) : homebrewLibraryRoute ? (
+        <HomebrewLibraryViewer
+          category={homebrewLibraryRoute.category}
+          characterId={homebrewLibraryRoute.characterId}
+          onBack={() => window.history.back()}
+        />
       ) : (
         <ContentView
           activeChapter={activeChapter}

@@ -9,4 +9,6 @@ npm run build
 
 npm run import:chronicler -- "C:\Dev\FRP\Chronicler\Test.zip" -System inoraxium
 
+npm run list:user-pages
+
 npm run delete:user-pages -- -System inoraxium -WorkspaceId test
