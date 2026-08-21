@@ -3408,6 +3408,11 @@ export const Characters: React.FC = () => {
   // ── CRUD ─────────────────────────────────────────────────────────────────────
 
   const handleCreate = async () => {
+    if (!userId || userId === 'guest') {
+      window.alert('Please sign in before creating a character so it can be saved to Firestore.');
+      return;
+    }
+
     const id = `char-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
     const newChar: CharacterData = {
       id,
@@ -3421,22 +3426,50 @@ export const Characters: React.FC = () => {
       alignment: '',
       visibility: 'private',
       sendToSpreadsheet: true,
-      userId: userId || 'guest',
+      userId,
+      ownerEmail: userEmail || undefined,
       bio: '',
       backstory: '',
       notes: '',
-        portraitUrl: '',
-        displayStats: [],
-        displaySlotStates: {},
-        attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
+      portraitUrl: '',
+      tags: [],
+      displayStats: [],
+      displaySlotStates: {},
+      attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
       attributeSectionColumns: DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
+      mainAttributes: [],
+      secondaryAttributes: [],
       skills: [],
+      otherAttributes: [],
+      bars: [],
+      diceMacros: DEFAULT_CHARACTER_DICE_STATE.macros.map((macro) => ({ ...macro })),
+      diceMacroFolders: [],
+      collapsedDiceMacroFolderIds: [],
+      statuses: [],
+      statusFolders: [],
+      collapsedStatusFolderIds: [],
       generalItems: [],
+      inventory: [],
       inventoryFolders: [],
+      collapsedInventoryFolderIds: [],
+      collapsedSheetQuickRoll: false,
+      spells: [],
       spellFolders: [],
+      collapsedSpellFolderIds: [],
+      modifierFormula: modFormula,
       createdAt: Date.now(),
     };
-    await saveCharacter(newChar);
+
+    const saveResult = await saveCharacter(newChar);
+    if (!saveResult.remoteSaved) {
+      const message = saveResult.remoteSkipped
+        ? 'Character was created locally, but Firestore save was skipped because the signed-in user was not available.'
+        : 'Character was created locally, but Firestore save failed. Check Firebase rules/login and try Save again.';
+      setSheetSyncStatus({ tone: 'error', message });
+      window.alert(message);
+    } else {
+      setSheetSyncStatus({ tone: 'success', message: 'Character created and saved to Firestore.' });
+    }
     setCharacters([...characters, newChar]);
     setSelectedCharacter(newChar);
   };
@@ -3481,6 +3514,10 @@ export const Characters: React.FC = () => {
 
   const handleCreateFromSelected = async () => {
     if (!selectedCharacter) return;
+    if (!userId || userId === 'guest') {
+      window.alert('Please sign in before creating a character so it can be saved to Firestore.');
+      return;
+    }
 
     const inventoryFolderClone = cloneEntryFolders(selectedCharacter.inventoryFolders || []);
     const spellFolderClone = cloneEntryFolders(selectedCharacter.spellFolders || []);
@@ -3500,7 +3537,8 @@ export const Characters: React.FC = () => {
       alignment: '',
       visibility: 'private',
       sendToSpreadsheet: selectedCharacter.sendToSpreadsheet ?? true,
-      userId: userId || 'guest',
+      userId,
+      ownerEmail: userEmail || undefined,
       bio: '',
       backstory: '',
       notes: '',
@@ -3571,7 +3609,16 @@ export const Characters: React.FC = () => {
       createdAt: Date.now(),
     };
 
-    await saveCharacter(newChar);
+    const saveResult = await saveCharacter(newChar);
+    if (!saveResult.remoteSaved) {
+      const message = saveResult.remoteSkipped
+        ? 'Character copy was created locally, but Firestore save was skipped because the signed-in user was not available.'
+        : 'Character copy was created locally, but Firestore save failed. Check Firebase rules/login and try Save again.';
+      setSheetSyncStatus({ tone: 'error', message });
+      window.alert(message);
+    } else {
+      setSheetSyncStatus({ tone: 'success', message: 'Character copy created and saved to Firestore.' });
+    }
     setCharacters(prev => [...prev, newChar]);
     setSelectedCharacter(newChar);
   };
@@ -3652,9 +3699,25 @@ export const Characters: React.FC = () => {
       collapsedSpellFolderIds: collapsedSpellFolders,
       modifierFormula: modFormula,
     };
-    await saveCharacter(updated);
+    const saveResult = await saveCharacter(updated);
     setCharacters(characters.map(c => (c.id === updated.id ? updated : c)));
     setSelectedCharacter(updated);
+    if (!saveResult.remoteSaved && !saveResult.remoteSkipped) {
+      window.alert('Character was saved locally, but Firestore save failed. Your browser has the changes, but the database does not yet.');
+      setSheetSyncStatus({
+        tone: 'error',
+        message: 'Character was saved locally, but Firestore save failed. Your browser has the changes, but the database does not yet.',
+      });
+      return;
+    }
+    if (saveResult.remoteSkipped) {
+      window.alert('Character was saved locally only because no signed-in Firestore user was available.');
+      setSheetSyncStatus({
+        tone: 'error',
+        message: 'Character was saved locally only because no signed-in Firestore user was available.',
+      });
+      return;
+    }
     if (updated.sendToSpreadsheet ?? true) {
       const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
       setIsSheetSyncing(true);
@@ -7518,7 +7581,12 @@ export const Characters: React.FC = () => {
           <p className="text-stone-400 text-sm mt-1">Build your roster of heroes. All data is saved securely.</p>
         </div>
         <div className="flex gap-2">
-          <button onClick={handleCreate} className="flex items-center gap-1.5 px-4 py-2 bg-emerald-900/40 text-emerald-300 rounded border border-emerald-800/40 hover:bg-emerald-900/60 text-sm cursor-pointer shadow-md">
+          <button
+            onClick={handleCreate}
+            disabled={!userId || userId === 'guest'}
+            title={!userId || userId === 'guest' ? 'Sign in to create a Firestore character.' : 'Create a new character'}
+            className="flex items-center gap-1.5 px-4 py-2 bg-emerald-900/40 text-emerald-300 rounded border border-emerald-800/40 hover:bg-emerald-900/60 text-sm cursor-pointer shadow-md disabled:opacity-40 disabled:cursor-not-allowed"
+          >
             <Plus size={16} /> Create Character
           </button>
           <button onClick={fetchAll} className="flex items-center gap-1.5 px-3 py-2 bg-stone-700/40 text-stone-300 rounded border border-stone-600/40 hover:bg-stone-700/60 text-sm cursor-pointer shadow-md">
@@ -7781,7 +7849,8 @@ export const Characters: React.FC = () => {
                 <div className="mt-2 flex gap-2">
                   <button
                     onClick={handleCreateFromSelected}
-                    disabled={!selectedCharacter || (!isCharacterOwner && !canEditInventory)}
+                    disabled={!selectedCharacter || !userId || userId === 'guest' || (!isCharacterOwner && !canEditInventory)}
+                    title={!userId || userId === 'guest' ? 'Sign in to create a Firestore character.' : 'Create a new character from this one'}
                     className="flex-1 px-4 py-2 bg-emerald-900/35 border border-emerald-800/40 rounded hover:bg-emerald-900/55 hover:border-emerald-500/70 text-emerald-200 transition-colors text-sm font-bold tracking-wider cursor-pointer flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
                     style={{ fontFamily: "'Cinzel', serif" }}
                   >

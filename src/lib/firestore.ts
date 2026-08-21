@@ -13,6 +13,13 @@ export interface AdminAccess {
   source: string | null;
 }
 
+export interface CharacterSaveResult {
+  localSaved: boolean;
+  remoteSaved: boolean;
+  remoteSkipped: boolean;
+  error?: unknown;
+}
+
 // ─── Firebase Firestore Abstraction ──────────────────────────────────────────
 
 let firestoreInstance: any = null;
@@ -64,6 +71,23 @@ const getLocalCharacters = (): CharacterData[] => JSON.parse(localStorage.getIte
 
 const setLocalCharacters = (characters: CharacterData[]) => {
   localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(characters));
+};
+
+const stripUndefinedDeep = (value: unknown): unknown => {
+  if (Array.isArray(value)) {
+    return value.map((item) => (item === undefined ? null : stripUndefinedDeep(item)));
+  }
+
+  if (value && typeof value === 'object') {
+    return Object.entries(value as Record<string, unknown>).reduce<Record<string, unknown>>((next, [key, entry]) => {
+      if (entry !== undefined) {
+        next[key] = stripUndefinedDeep(entry);
+      }
+      return next;
+    }, {});
+  }
+
+  return value;
 };
 
 const normalizeCsvEnv = (value?: string): string[] => (
@@ -191,7 +215,7 @@ export const loadCharacters = async (userId: string | null, includeAll = false):
   }
 };
 
-export const saveCharacter = async (character: CharacterData): Promise<void> => {
+export const saveCharacter = async (character: CharacterData): Promise<CharacterSaveResult> => {
   const localData: CharacterData[] = getLocalCharacters();
   const existIdx = localData.findIndex(c => c.id === character.id);
   const normalized = { ...character, visibility: character.visibility ?? 'private' };
@@ -202,15 +226,19 @@ export const saveCharacter = async (character: CharacterData): Promise<void> => 
   }
   setLocalCharacters(localData);
 
-  if (!character.userId || character.userId === 'guest') return;
+  if (!character.userId || character.userId === 'guest') {
+    return { localSaved: true, remoteSaved: false, remoteSkipped: true };
+  }
 
   const fs = await getFirestore();
-  if (!fs) return;
+  if (!fs) return { localSaved: true, remoteSaved: false, remoteSkipped: true };
 
   try {
-    await fs.setDoc(fs.doc(fs.db, 'characters', character.id), normalized);
+    await fs.setDoc(fs.doc(fs.db, 'characters', character.id), stripUndefinedDeep(normalized));
+    return { localSaved: true, remoteSaved: true, remoteSkipped: false };
   } catch (err) {
     console.error('Failed to save to Firestore:', err);
+    return { localSaved: true, remoteSaved: false, remoteSkipped: false, error: err };
   }
 };
 
@@ -242,7 +270,11 @@ export const saveCharacterInventory = async (
   if (!fs) return;
 
   try {
-    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), { inventory, inventoryFolders, collapsedInventoryFolderIds, generalItems }, { merge: true });
+    await fs.setDoc(
+      fs.doc(fs.db, 'characters', characterId),
+      stripUndefinedDeep({ inventory, inventoryFolders, collapsedInventoryFolderIds, generalItems }),
+      { merge: true }
+    );
   } catch (err) {
     console.error('Failed to save inventory to Firestore:', err);
   }
