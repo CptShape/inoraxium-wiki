@@ -27,6 +27,7 @@ export interface CharacterDiceMacro {
   id: string;
   name: string;
   formula: string;
+  folderId?: string | null;
 }
 
 export interface CharacterEntryFolder {
@@ -97,7 +98,13 @@ export interface CharacterGeneralItem {
   name: string;
   description: string;
   quantity: number;
+  status: string;
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical' | 'unique';
+  equipped?: boolean;
+  macros: CharacterDiceMacro[];
+  effects?: StatusEffect[];
+  actions?: CharacterAction[];
+  hidden?: boolean;
 }
 
 export interface CharacterInventoryItem {
@@ -130,6 +137,7 @@ export interface CharacterStatus {
   effects: StatusEffect[];
   color?: string;
   hidden?: boolean;
+  folderId?: string | null;
 }
 
 export interface CharacterData {
@@ -145,6 +153,8 @@ export interface CharacterData {
   visibility?: 'private' | 'public';
   sendToSpreadsheet?: boolean;
   userId?: string | null;
+  ownerEmail?: string;
+  ownerTransferredAt?: number;
   bio?: string;
   backstory?: string;
   notes?: string;
@@ -161,7 +171,11 @@ export interface CharacterData {
   otherAttributes?: CustomAttribute[];
   bars?: CharacterBar[];
   diceMacros?: CharacterDiceMacro[];
+  diceMacroFolders?: CharacterEntryFolder[];
+  collapsedDiceMacroFolderIds?: string[];
   statuses?: CharacterStatus[];
+  statusFolders?: CharacterEntryFolder[];
+  collapsedStatusFolderIds?: string[];
   generalItems?: CharacterGeneralItem[];
   inventory?: CharacterInventoryItem[];
   inventoryFolders?: CharacterEntryFolder[];

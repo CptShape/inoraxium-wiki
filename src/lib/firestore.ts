@@ -1,5 +1,18 @@
 import { CharacterData, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem } from '../types/character';
 
+export interface UserProfile {
+  uid: string;
+  email: string;
+  displayName: string;
+  photoURL?: string;
+  provider?: string;
+}
+
+export interface AdminAccess {
+  isAdmin: boolean;
+  source: string | null;
+}
+
 // ─── Firebase Firestore Abstraction ──────────────────────────────────────────
 
 let firestoreInstance: any = null;
@@ -53,11 +66,73 @@ const setLocalCharacters = (characters: CharacterData[]) => {
   localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(characters));
 };
 
+const normalizeCsvEnv = (value?: string): string[] => (
+  (value || '')
+    .split(',')
+    .map((item) => item.trim().toLowerCase())
+    .filter(Boolean)
+);
+
+const hasAdminPermission = (value: unknown): boolean => {
+  if (!value || typeof value !== 'object') return false;
+  const record = value as Record<string, unknown>;
+
+  if (record.admin === true || record.isAdmin === true) return true;
+
+  const role = typeof record.role === 'string' ? record.role.toLowerCase() : null;
+  if (role === 'admin') return true;
+
+  const roles = Array.isArray(record.roles) ? record.roles.map((item) => String(item).toLowerCase()) : [];
+  if (roles.includes('admin')) return true;
+
+  const permissions = Array.isArray(record.permissions)
+    ? record.permissions.map((item) => String(item).toLowerCase())
+    : [];
+  return permissions.includes('admin');
+};
+
+export const loadAdminAccess = async (uid: string | null, email?: string | null): Promise<AdminAccess> => {
+  if (!uid) return { isAdmin: false, source: null };
+
+  const adminUids = normalizeCsvEnv(import.meta.env.VITE_ADMIN_UIDS as string | undefined);
+  if (adminUids.includes(uid.toLowerCase())) {
+    return { isAdmin: true, source: 'env:VITE_ADMIN_UIDS' };
+  }
+
+  const adminEmails = normalizeCsvEnv(import.meta.env.VITE_ADMIN_EMAILS as string | undefined);
+  if (email && adminEmails.includes(email.toLowerCase())) {
+    return { isAdmin: true, source: 'env:VITE_ADMIN_EMAILS' };
+  }
+
+  const fs = await getFirestore();
+  if (!fs) return { isAdmin: false, source: null };
+
+  try {
+    const candidates: Array<[string, string]> = [
+      ['adminUsers', uid],
+      ['userPermissions', uid],
+      ['users', uid],
+    ];
+
+    for (const [collectionName, docId] of candidates) {
+      const snapshot = await fs.getDoc(fs.doc(fs.db, collectionName, docId));
+      if (snapshot.exists() && hasAdminPermission(snapshot.data())) {
+        return { isAdmin: true, source: `${collectionName}/${docId}` };
+      }
+    }
+  } catch (err) {
+    console.error('Failed to load admin access:', err);
+  }
+
+  return { isAdmin: false, source: null };
+};
+
 /** Load characters visible to `userId`:
  *  - Own characters (all visibilities)
  *  - Public characters from other users
+ *  - All characters when the caller is an admin
  */
-export const loadCharacters = async (userId: string | null): Promise<CharacterData[]> => {
+export const loadCharacters = async (userId: string | null, includeAll = false): Promise<CharacterData[]> => {
   const localData: CharacterData[] = getLocalCharacters();
 
   const fs = await getFirestore();
@@ -67,6 +142,18 @@ export const loadCharacters = async (userId: string | null): Promise<CharacterDa
   }
 
   try {
+    if (includeAll) {
+      const allSnap = await fs.getDocs(fs.collection(fs.db, 'characters'));
+      const allChars: CharacterData[] = [];
+      allSnap.forEach((d: any) => allChars.push({ id: d.id, ...d.data() }));
+      const mergedMap = new Map<string, CharacterData>();
+      allChars.forEach(c => mergedMap.set(c.id, c));
+      localData.forEach(l => {
+        if (!mergedMap.has(l.id)) mergedMap.set(l.id, l);
+      });
+      return Array.from(mergedMap.values());
+    }
+
     // Load own characters (all visibilities)
     const ownQ = fs.query(fs.collection(fs.db, 'characters'), fs.where('userId', '==', userId));
     const ownSnap = await fs.getDocs(ownQ);
@@ -204,6 +291,63 @@ export const reloadCharacterFromFirestore = async (
   } catch (err) {
     console.error('Failed to reload character from Firestore:', err);
     return null;
+  }
+};
+
+export const loadUserProfiles = async (): Promise<UserProfile[]> => {
+  const fs = await getFirestore();
+  if (!fs) return [];
+
+  try {
+    const snapshot = await fs.getDocs(fs.collection(fs.db, 'users'));
+    const profiles: UserProfile[] = [];
+    snapshot.forEach((d: any) => {
+      const data = d.data() || {};
+      profiles.push({
+        uid: data.uid || d.id,
+        email: data.email || '',
+        displayName: data.displayName || data.email || d.id,
+        photoURL: data.photoURL || '',
+        provider: data.provider || '',
+      });
+    });
+    return profiles.sort((a, b) => (
+      (a.email || a.displayName || a.uid).localeCompare(b.email || b.displayName || b.uid)
+    ));
+  } catch (err) {
+    console.error('Failed to load user profiles:', err);
+    return [];
+  }
+};
+
+export const transferCharacterOwner = async (
+  characterId: string,
+  nextOwnerUid: string,
+  nextOwnerEmail?: string
+): Promise<void> => {
+  const localData: CharacterData[] = getLocalCharacters();
+  const existIdx = localData.findIndex(c => c.id === characterId);
+  if (existIdx >= 0) {
+    localData[existIdx] = {
+      ...localData[existIdx],
+      userId: nextOwnerUid,
+      ownerEmail: nextOwnerEmail || undefined,
+    } as CharacterData;
+    setLocalCharacters(localData);
+  }
+
+  const fs = await getFirestore();
+  if (!fs) return;
+
+  try {
+    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), {
+      userId: nextOwnerUid,
+      ownerEmail: nextOwnerEmail || '',
+      ownerTransferredAt: Date.now(),
+    }, { merge: true });
+  } catch (err) {
+    console.error('Failed to transfer character owner:', err);
+    throw err;
   }
 };
 

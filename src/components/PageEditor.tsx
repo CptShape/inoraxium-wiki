@@ -279,7 +279,7 @@ const duplicatePage = (page: EditorPageDraft): EditorPageDraft => {
 };
 
 export const PageEditorLauncher: React.FC<PageEditorLauncherProps> = ({ currentSystem }) => {
-  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null });
+  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null, email: null });
   const [canEdit, setCanEdit] = useState(false);
   const [permissionLoading, setPermissionLoading] = useState(true);
   const [permissionSource, setPermissionSource] = useState<string | null>(null);

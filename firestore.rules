@@ -1,0 +1,139 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    function signedIn() {
+      return request.auth != null;
+    }
+
+    function isAdmin() {
+      return signedIn()
+        && exists(/databases/$(database)/documents/adminUsers/$(request.auth.uid));
+    }
+
+    function hasEditorRecord(path) {
+      return signedIn()
+        && exists(path)
+        && (
+          get(path).data.canEdit == true
+          || get(path).data.edit == true
+          || get(path).data.role in ['admin', 'editor', 'edit']
+          || (
+            get(path).data.keys().hasAny(['roles'])
+            && get(path).data.roles is list
+            && get(path).data.roles.hasAny(['admin', 'editor', 'edit'])
+          )
+          || (
+            get(path).data.keys().hasAny(['permissions'])
+            && get(path).data.permissions is list
+            && get(path).data.permissions.hasAny(['admin', 'editor', 'edit'])
+          )
+        );
+    }
+
+    function isEditor() {
+      return isAdmin()
+        || hasEditorRecord(/databases/$(database)/documents/editorPermissions/$(request.auth.uid))
+        || hasEditorRecord(/databases/$(database)/documents/userPermissions/$(request.auth.uid))
+        || hasEditorRecord(/databases/$(database)/documents/users/$(request.auth.uid));
+    }
+
+    function ownsExistingCharacter() {
+      return signedIn() && resource.data.userId == request.auth.uid;
+    }
+
+    function ownsNewCharacter() {
+      return signedIn() && request.resource.data.userId == request.auth.uid;
+    }
+
+    function publicInventoryOnlyUpdate() {
+      return signedIn()
+        && resource.data.visibility == 'public'
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'inventory',
+          'inventoryFolders',
+          'collapsedInventoryFolderIds',
+          'generalItems'
+        ]);
+    }
+
+    match /characters/{characterId} {
+      allow read: if isAdmin()
+        || ownsExistingCharacter()
+        || resource.data.visibility == 'public';
+
+      allow create: if isAdmin() || ownsNewCharacter();
+
+      allow update: if isAdmin()
+        || ownsExistingCharacter()
+        || publicInventoryOnlyUpdate();
+
+      allow delete: if isAdmin() || ownsExistingCharacter();
+    }
+
+    match /users/{userId} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+
+      allow create: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.keys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'photoURL',
+          'provider',
+          'lastLoginAt'
+        ]);
+
+      allow update: if signedIn()
+        && request.auth.uid == userId
+        && request.resource.data.uid == userId
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'uid',
+          'email',
+          'displayName',
+          'photoURL',
+          'provider',
+          'lastLoginAt'
+        ]);
+
+      allow delete: if isAdmin();
+    }
+
+    match /adminUsers/{userId} {
+      allow read: if signedIn() && request.auth.uid == userId;
+      allow write: if false;
+    }
+
+    match /editorPermissions/{userId} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+      allow write: if isAdmin();
+    }
+
+    match /userPermissions/{userId} {
+      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+      allow write: if isAdmin();
+    }
+
+    match /favorites/{favoriteId} {
+      allow read: if signedIn() && resource.data.userId == request.auth.uid;
+      allow create, update: if signedIn() && request.resource.data.userId == request.auth.uid;
+      allow delete: if isAdmin()
+        || (signedIn() && resource.data.userId == request.auth.uid);
+    }
+
+    match /userDiceSettings/{userId} {
+      allow read, write: if signedIn() && request.auth.uid == userId;
+    }
+
+    match /skillTrees/{treeId} {
+      allow read: if true;
+      allow create, update, delete: if isEditor();
+    }
+
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}

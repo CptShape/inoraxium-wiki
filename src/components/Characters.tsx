@@ -24,7 +24,7 @@ function evalCharFormula(formula: string, context: Record<string, number>): numb
     return 0;
   }
 }
-import { loadCharacters, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore } from '../lib/firestore';
+import { loadAdminAccess, loadCharacters, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore, loadUserProfiles, transferCharacterOwner, UserProfile } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { addCombatantToBattleTracker } from '../lib/battleTracker';
 
@@ -58,16 +58,35 @@ interface DiceRoll {
 }
 
 interface CharacterAttributePreset {
+  schema?: 'inoraxium-character-attributes';
+  version?: 1;
   mainAttributes: CustomAttribute[];
   secondaryAttributes: CustomAttribute[];
   skills: SkillAttribute[];
   otherAttributes: CustomAttribute[];
   bars: CharacterBar[];
+  displayStats?: CharacterDisplayStat[];
+  displaySlotStates?: Record<string, 'unlocked' | 'locked' | 'blocked'>;
+  attributeSectionModes?: CharacterAttributeSectionModes;
   modifierFormula: string;
   attributeSectionColumns: Required<CharacterAttributeSectionColumns>;
 }
 
+type CharacterEntryExportKind = 'item' | 'spell' | 'status' | 'macro';
+
+interface CharacterEntryExportPayload {
+  schema: 'inoraxium-character-entry';
+  version: 1;
+  kind: CharacterEntryExportKind;
+  exportedAt: string;
+  sourceCharacterName?: string;
+  folderName?: string | null;
+  entry: unknown;
+}
+
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
+type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'inventory' | 'spells' | 'statuses';
+type MacroSheetSubTab = 'main' | 'rolls' | string;
 
 interface AttributeResolvedOption {
   value: number;
@@ -177,6 +196,19 @@ const CHARACTER_PORTRAIT_OPTIONS = Object.entries(PORTRAIT_IMAGE_MODULES)
     url,
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
+
+const normalizeGeneralItem = (item: CharacterGeneralItem): CharacterGeneralItem => ({
+  ...item,
+  description: item.description || '',
+  quantity: Number.isFinite(item.quantity) ? item.quantity : 1,
+  status: item.status || (item.equipped ? 'equipped' : 'unequipped'),
+  rarity: item.rarity || 'common',
+  equipped: item.equipped ?? false,
+  macros: item.macros || [],
+  effects: item.effects || [],
+  actions: item.actions || [],
+  hidden: item.hidden ?? false,
+});
 
 const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
   max: (args) => Math.max(...args),
@@ -360,11 +392,18 @@ async function sendMessageToDiscord(webhookUrl: string, username: string, messag
 
 export const Characters: React.FC = () => {
   const [userId, setUserId] = useState<string | null>(null);
+  const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [isAdmin, setIsAdmin] = useState(false);
+  const [adminSource, setAdminSource] = useState<string | null>(null);
+  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
+  const [ownerTransferUid, setOwnerTransferUid] = useState('');
+  const [ownerTransferStatus, setOwnerTransferStatus] = useState<string | null>(null);
   const [characters, setCharacters] = useState<CharacterData[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [filteredCharacters, setFilteredCharacters] = useState<CharacterData[]>([]);
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterData | null>(null);
   const [isViewingSheet, setIsViewingSheet] = useState(false);
+  const [activeSheetTab, setActiveSheetTab] = useState<CharacterSheetTab>('bio');
 
   // Filtering
   const [searchName, setSearchName] = useState('');
@@ -408,11 +447,15 @@ export const Characters: React.FC = () => {
   const [otherAttrs, setOtherAttrs] = useState<CustomAttribute[]>([]);
   const [bars, setBars] = useState<CharacterBar[]>([]);
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
+  const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
+  const [activeStatusCategoryId, setActiveStatusCategoryId] = useState<string | null>(null);
+  const [collapsedStatusFolders, setCollapsedStatusFolders] = useState<string[]>([]);
   const [expandedStatusDescriptions, setExpandedStatusDescriptions] = useState<string[]>([]);
   const [charGeneralItems, setCharGeneralItems] = useState<CharacterGeneralItem[]>([]);
   const [expandedGeneralItemDescriptions, setExpandedGeneralItemDescriptions] = useState<string[]>([]);
   const [charInventory, setCharInventory] = useState<CharacterInventoryItem[]>([]);
   const [inventoryFolders, setInventoryFolders] = useState<CharacterEntryFolder[]>([]);
+  const [activeInventoryCategoryId, setActiveInventoryCategoryId] = useState<string | null>(null);
   const [collapsedInventoryFolders, setCollapsedInventoryFolders] = useState<string[]>([]);
   const [collapsedInventoryItems, setCollapsedInventoryItems] = useState<string[]>([]);
   const [expandedInventoryDescriptions, setExpandedInventoryDescriptions] = useState<string[]>([]);
@@ -420,6 +463,7 @@ export const Characters: React.FC = () => {
   const [collapsedSheetQuickRoll, setCollapsedSheetQuickRoll] = useState(false);
   const [charSpells, setCharSpells] = useState<CharacterSpell[]>([]);
   const [spellFolders, setSpellFolders] = useState<CharacterEntryFolder[]>([]);
+  const [activeSpellCategoryId, setActiveSpellCategoryId] = useState<string | null>(null);
   const [collapsedSpellFolders, setCollapsedSpellFolders] = useState<string[]>([]);
   const [expandedSpellDescriptions, setExpandedSpellDescriptions] = useState<string[]>([]);
   const [expandedSpellActionDescriptions, setExpandedSpellActionDescriptions] = useState<string[]>([]);
@@ -429,6 +473,9 @@ export const Characters: React.FC = () => {
   const [modFormula, setModFormula] = useState<string>('rounddown((@value - 10) / 2)');
   const [showModOptions, setShowModOptions] = useState<boolean>(false);
   const [sheetDiceMacros, setSheetDiceMacros] = useState<CharacterDiceMacro[]>(DEFAULT_CHARACTER_DICE_STATE.macros);
+  const [diceMacroFolders, setDiceMacroFolders] = useState<CharacterEntryFolder[]>([]);
+  const [activeMacroCategoryId, setActiveMacroCategoryId] = useState<MacroSheetSubTab>('main');
+  const [collapsedDiceMacroFolders, setCollapsedDiceMacroFolders] = useState<string[]>([]);
   const [mainDiceState, setMainDiceState] = useState<UserDiceSettings>(DEFAULT_CHARACTER_DICE_STATE);
   const [rollResults, setRollResults] = useState<RollResult[]>([]);
   const [editingMacroId, setEditingMacroId] = useState<string | null>(null);
@@ -456,18 +503,48 @@ export const Characters: React.FC = () => {
   // ── Auth & Data ──────────────────────────────────────────────────────────────
 
   useEffect(() => {
-    return authProvider.onAuthChange((state) => setUserId(state.uid));
+    return authProvider.onAuthChange((state) => {
+      setUserId(state.uid);
+      setUserEmail(state.email);
+    });
   }, []);
 
+  useEffect(() => {
+    let cancelled = false;
+    loadAdminAccess(userId, userEmail).then((access) => {
+      if (cancelled) return;
+      setIsAdmin(access.isAdmin);
+      setAdminSource(access.source);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, userEmail]);
+
+  useEffect(() => {
+    if (!isAdmin) {
+      setUserProfiles([]);
+      return;
+    }
+
+    let cancelled = false;
+    loadUserProfiles().then((profiles) => {
+      if (!cancelled) setUserProfiles(profiles);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [isAdmin]);
+
   const fetchAll = async () => {
-    const chars = await loadCharacters(userId);
+    const chars = await loadCharacters(userId, isAdmin);
     setCharacters(chars);
     const favs = await loadFavorites(userId);
     setFavoriteIds(favs);
     if (chars.length > 0 && !selectedCharacter) setSelectedCharacter(chars[0]);
   };
 
-  useEffect(() => { fetchAll(); }, [userId]);
+  useEffect(() => { fetchAll(); }, [userId, isAdmin]);
 
   useEffect(() => {
     let next = [...characters];
@@ -510,19 +587,53 @@ export const Characters: React.FC = () => {
       setOtherAttrs(selectedCharacter.otherAttributes || []);
       setBars(selectedCharacter.bars || []);
       setSheetDiceMacros(selectedCharacter.diceMacros || DEFAULT_CHARACTER_DICE_STATE.macros);
+      setDiceMacroFolders(selectedCharacter.diceMacroFolders || []);
+      setActiveMacroCategoryId('main');
+      setCollapsedDiceMacroFolders(selectedCharacter.collapsedDiceMacroFolderIds || []);
       setCharStatuses(selectedCharacter.statuses || []);
-      setCharGeneralItems(selectedCharacter.generalItems || []);
+      setStatusFolders(selectedCharacter.statusFolders || []);
+      setActiveStatusCategoryId(null);
+      setCollapsedStatusFolders(selectedCharacter.collapsedStatusFolderIds || []);
+      setCharGeneralItems((selectedCharacter.generalItems || []).map(normalizeGeneralItem));
       setCharInventory(selectedCharacter.inventory || []);
       setInventoryFolders(selectedCharacter.inventoryFolders || []);
+      setActiveInventoryCategoryId(null);
       setCollapsedInventoryFolders(selectedCharacter.collapsedInventoryFolderIds || []);
       setCollapsedSheetQuickRoll(selectedCharacter.collapsedSheetQuickRoll ?? false);
       setCharSpells(selectedCharacter.spells || []);
       setSpellFolders(selectedCharacter.spellFolders || []);
+      setActiveSpellCategoryId(null);
       setCollapsedSpellFolders(selectedCharacter.collapsedSpellFolderIds || []);
       setCollapsedInventoryItems((selectedCharacter.inventory || []).filter(item => item.hidden).map(item => item.id));
       setModFormula(selectedCharacter.modifierFormula || 'Math.floor((@value - 10) / 2)');
+      setOwnerTransferUid(selectedCharacter.userId || '');
+      setOwnerTransferStatus(null);
     }
   }, [selectedCharacter]);
+
+  useEffect(() => {
+    if (activeInventoryCategoryId && !inventoryFolders.some(folder => folder.id === activeInventoryCategoryId)) {
+      setActiveInventoryCategoryId(null);
+    }
+  }, [activeInventoryCategoryId, inventoryFolders]);
+
+  useEffect(() => {
+    if (activeSpellCategoryId && !spellFolders.some(folder => folder.id === activeSpellCategoryId)) {
+      setActiveSpellCategoryId(null);
+    }
+  }, [activeSpellCategoryId, spellFolders]);
+
+  useEffect(() => {
+    if (activeStatusCategoryId && !statusFolders.some(folder => folder.id === activeStatusCategoryId)) {
+      setActiveStatusCategoryId(null);
+    }
+  }, [activeStatusCategoryId, statusFolders]);
+
+  useEffect(() => {
+    if (activeMacroCategoryId !== 'main' && activeMacroCategoryId !== 'rolls' && !diceMacroFolders.some(folder => folder.id === activeMacroCategoryId)) {
+      setActiveMacroCategoryId('main');
+    }
+  }, [activeMacroCategoryId, diceMacroFolders]);
 
   useEffect(() => {
     if (!selectedCharacter) return;
@@ -536,6 +647,8 @@ export const Characters: React.FC = () => {
     setQuickDescription('');
     setQuickAttrInput('');
     setQuickAttrRefs([]);
+    setActiveSheetTab('bio');
+    setActiveMacroCategoryId('main');
     setExpandedStatusDescriptions([]);
     setExpandedGeneralItemDescriptions([]);
     setExpandedInventoryDescriptions([]);
@@ -679,6 +792,12 @@ export const Characters: React.FC = () => {
       setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
       setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
       setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
+      setDisplayStats(Array.isArray(parsed.displayStats) ? parsed.displayStats : []);
+      setDisplaySlotStates(parsed.displaySlotStates || {});
+      setAttributeSectionModes({
+        ...DEFAULT_ATTRIBUTE_SECTION_MODES,
+        ...(parsed.attributeSectionModes || {}),
+      });
       setAttributeSectionColumns({
         ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
         ...(parsed.attributeSectionColumns || {}),
@@ -736,6 +855,28 @@ export const Characters: React.FC = () => {
       const effectBuckets: Record<string, number[]> = {};
 
       (charInventory || []).forEach(item => {
+        if (!item.equipped) return;
+
+        (item.effects || []).forEach(effect => {
+          if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
+            const effVal = evalCharFormula(effect.value || '0', sourceContext);
+            if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+            effectBuckets[effect.targetId].push(effVal);
+          }
+        });
+
+        (item.actions || []).forEach(action => {
+          (action.effects || []).forEach(effect => {
+            if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
+              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+              effectBuckets[effect.targetId].push(effVal);
+            }
+          });
+        });
+      });
+
+      (charGeneralItems || []).map(normalizeGeneralItem).forEach(item => {
         if (!item.equipped) return;
 
         (item.effects || []).forEach(effect => {
@@ -918,7 +1059,8 @@ export const Characters: React.FC = () => {
     return ids;
   };
 
-  const isCharacterOwner = !!selectedCharacter && (selectedCharacter.userId === userId || !selectedCharacter.userId);
+  const isSelectedCharacterOwnedByUser = !!selectedCharacter && (selectedCharacter.userId === userId || !selectedCharacter.userId);
+  const isCharacterOwner = !!selectedCharacter && (isAdmin || isSelectedCharacterOwnedByUser);
   const canEditInventory = !!selectedCharacter && (isCharacterOwner || selectedCharacter.visibility === 'public');
 
   const createFolder = (name: string, parentId?: string | null): CharacterEntryFolder => ({
@@ -978,6 +1120,20 @@ export const Characters: React.FC = () => {
     return getOrderedFolders(folders).findIndex(folder => folder.id === folderId);
   };
 
+  const getRootFolderId = (folders: CharacterEntryFolder[], folderId: string | null | undefined): string | null => {
+    let current = folderId ?? null;
+    let root: string | null = null;
+    while (current) {
+      root = current;
+      current = folders.find(folder => folder.id === current)?.parentId ?? null;
+    }
+    return root;
+  };
+
+  const isFolderInTree = (folders: CharacterEntryFolder[], rootFolderId: string, folderId: string | null | undefined): boolean => (
+    folderId === rootFolderId || isFolderDescendant(folders, rootFolderId, folderId)
+  );
+
   const isFolderVisible = (folders: CharacterEntryFolder[], folderId: string | null | undefined): boolean => {
     let current = folderId ?? null;
     while (current) {
@@ -1035,6 +1191,126 @@ export const Characters: React.FC = () => {
     setInventoryFolders(prev => [...prev, createFolder('New Inventory Folder', parentId)]);
   };
 
+  const updateStatusFolder = (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => {
+    setStatusFolders(prev => prev.map(folder => folder.id === folderId ? updater(folder) : folder));
+  };
+
+  const moveStatusFolder = (folderId: string, direction: 'up' | 'down') => {
+    setStatusFolders(prev => {
+      const index = prev.findIndex(folder => folder.id === folderId);
+      if (index < 0) return prev;
+      const parentId = prev[index].parentId ?? null;
+      const siblingIndexes = prev
+        .map((folder, idx) => ({ folder, idx }))
+        .filter(entry => (entry.folder.parentId ?? null) === parentId)
+        .map(entry => entry.idx);
+      const siblingPosition = siblingIndexes.indexOf(index);
+      const targetSiblingPosition = direction === 'up' ? siblingPosition - 1 : siblingPosition + 1;
+      if (siblingPosition < 0 || targetSiblingPosition < 0 || targetSiblingPosition >= siblingIndexes.length) return prev;
+
+      const targetIndex = siblingIndexes[targetSiblingPosition];
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(index < targetIndex ? targetIndex : targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addStatusFolder = (parentId: string | null = null) => {
+    setStatusFolders(prev => [...prev, createFolder('New Status Folder', parentId)]);
+  };
+
+  const updateDiceMacroFolder = (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => {
+    setDiceMacroFolders(prev => prev.map(folder => folder.id === folderId ? updater(folder) : folder));
+  };
+
+  const moveDiceMacroFolder = (folderId: string, direction: 'up' | 'down') => {
+    setDiceMacroFolders(prev => {
+      const index = prev.findIndex(folder => folder.id === folderId);
+      if (index < 0) return prev;
+      const parentId = prev[index].parentId ?? null;
+      const siblingIndexes = prev
+        .map((folder, idx) => ({ folder, idx }))
+        .filter(entry => (entry.folder.parentId ?? null) === parentId)
+        .map(entry => entry.idx);
+      const siblingPosition = siblingIndexes.indexOf(index);
+      const targetSiblingPosition = direction === 'up' ? siblingPosition - 1 : siblingPosition + 1;
+      if (siblingPosition < 0 || targetSiblingPosition < 0 || targetSiblingPosition >= siblingIndexes.length) return prev;
+
+      const targetIndex = siblingIndexes[targetSiblingPosition];
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(index < targetIndex ? targetIndex : targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addDiceMacroFolder = (parentId: string | null = null) => {
+    setDiceMacroFolders(prev => [...prev, createFolder('New Macro Folder', parentId)]);
+  };
+
+  const removeDiceMacroFolder = (folderId: string) => {
+    setDiceMacroFolders(prev => {
+      const folder = prev.find(entry => entry.id === folderId);
+      const nextParentId = folder?.parentId ?? null;
+      const descendants = new Set<string>();
+      const collectDescendants = (parent: string) => {
+        prev.forEach(entry => {
+          if ((entry.parentId ?? null) === parent) {
+            descendants.add(entry.id);
+            collectDescendants(entry.id);
+          }
+        });
+      };
+      collectDescendants(folderId);
+
+      if (activeMacroCategoryId === folderId || descendants.has(activeMacroCategoryId)) {
+        setActiveMacroCategoryId('main');
+      }
+
+      setSheetDiceMacros(macros => macros.map(macro => {
+        if (macro.folderId === folderId) return { ...macro, folderId: nextParentId };
+        if (macro.folderId && descendants.has(macro.folderId)) return { ...macro, folderId: nextParentId };
+        return macro;
+      }));
+
+      return prev
+        .filter(entry => entry.id !== folderId)
+        .map(entry => descendants.has(entry.id) ? { ...entry, parentId: nextParentId } : entry);
+    });
+  };
+
+  const removeStatusFolder = (folderId: string) => {
+    setStatusFolders(prev => {
+      const folder = prev.find(entry => entry.id === folderId);
+      const nextParentId = folder?.parentId ?? null;
+      const descendants = new Set<string>();
+      const collectDescendants = (parent: string) => {
+        prev.forEach(entry => {
+          if ((entry.parentId ?? null) === parent) {
+            descendants.add(entry.id);
+            collectDescendants(entry.id);
+          }
+        });
+      };
+      collectDescendants(folderId);
+
+      if (activeStatusCategoryId === folderId || (activeStatusCategoryId && descendants.has(activeStatusCategoryId))) {
+        setActiveStatusCategoryId(null);
+      }
+
+      setCharStatuses(statuses => statuses.map(status => {
+        if (status.folderId === folderId) return { ...status, folderId: nextParentId };
+        if (status.folderId && descendants.has(status.folderId)) return { ...status, folderId: nextParentId };
+        return status;
+      }));
+
+      return prev
+        .filter(entry => entry.id !== folderId)
+        .map(entry => descendants.has(entry.id) ? { ...entry, parentId: nextParentId } : entry);
+    });
+  };
+
   const removeInventoryFolder = (folderId: string) => {
     setInventoryFolders(prev => {
       const folder = prev.find(entry => entry.id === folderId);
@@ -1049,6 +1325,10 @@ export const Characters: React.FC = () => {
         });
       };
       collectDescendants(folderId);
+
+      if (activeInventoryCategoryId === folderId || (activeInventoryCategoryId && descendants.has(activeInventoryCategoryId))) {
+        setActiveInventoryCategoryId(null);
+      }
 
       setCharInventory(items => items.map(item => {
         if (item.folderId === folderId) return { ...item, folderId: nextParentId };
@@ -1107,6 +1387,10 @@ export const Characters: React.FC = () => {
       };
       collectDescendants(folderId);
 
+      if (activeSpellCategoryId === folderId || (activeSpellCategoryId && descendants.has(activeSpellCategoryId))) {
+        setActiveSpellCategoryId(null);
+      }
+
       setCharSpells(items => items.map(item => {
         if (item.folderId === folderId) return { ...item, folderId: nextParentId };
         if (item.folderId && descendants.has(item.folderId)) return { ...item, folderId: nextParentId };
@@ -1119,7 +1403,7 @@ export const Characters: React.FC = () => {
     });
   };
 
-  const addInventoryItem = () => {
+  const addInventoryItem = (folderId: string | null = activeInventoryCategoryId) => {
     setCharInventory(prev => [
       ...prev,
       {
@@ -1134,9 +1418,50 @@ export const Characters: React.FC = () => {
         effects: [],
         actions: [],
         hidden: false,
-        folderId: null,
+        folderId,
       },
     ]);
+  };
+
+  const addStatus = (folderId: string | null = activeStatusCategoryId) => {
+    const categoryColor = folderId
+      ? statusFolders.find(folder => folder.id === getRootFolderId(statusFolders, folderId))?.color
+      : null;
+    setCharStatuses(prev => [
+      ...prev,
+      {
+        id: `st_${uid()}`,
+        name: 'New Status',
+        duration: '1 round',
+        description: '',
+        effects: [],
+        color: categoryColor || '#f59e0b',
+        hidden: false,
+        folderId,
+      },
+    ]);
+  };
+
+  const updateStatus = (statusId: string, updater: (status: CharacterStatus) => CharacterStatus) => {
+    setCharStatuses(prev => prev.map(status => status.id === statusId ? updater(status) : status));
+  };
+
+  const removeStatus = (statusId: string) => {
+    setCharStatuses(prev => prev.filter(status => status.id !== statusId));
+    setExpandedStatusDescriptions(prev => prev.filter(id => id !== statusId));
+  };
+
+  const moveStatus = (statusId: string, direction: 'up' | 'down') => {
+    setCharStatuses(prev => {
+      const index = prev.findIndex(status => status.id === statusId);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
   };
 
   const updateInventoryItem = (itemId: string, updater: (item: CharacterInventoryItem) => CharacterInventoryItem) => {
@@ -1232,20 +1557,91 @@ export const Characters: React.FC = () => {
     ));
   };
 
+  const shareStatus = async (status: CharacterStatus) => {
+    const webhookUrl = mainDiceState.webhookUrl || '';
+    if (!webhookUrl.trim()) {
+      setDiceError('Discord: Add a webhook URL before sharing statuses.');
+      return;
+    }
+
+    const message = [
+      `**${status.name || 'Unnamed Status'}**`,
+      `Duration: ${status.duration || '-'}`,
+      status.description ? `Description: ${status.description}` : '',
+      (status.effects || []).length > 0 ? `Effects: ${(status.effects || []).map(effect => `${effect.targetId || 'unknown'} ${effect.value || '0'}`).join(', ')}` : '',
+    ].filter(Boolean).join('\n');
+
+    const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
+    if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
   const addGeneralItem = () => {
     setCharGeneralItems(prev => [
       ...prev,
-      { id: `gen_${uid()}`, name: 'New General Item', description: '', quantity: 1, rarity: 'common' },
+      normalizeGeneralItem({
+        id: `gen_${uid()}`,
+        name: 'New General Item',
+        description: '',
+        quantity: 1,
+        status: 'unequipped',
+        rarity: 'common',
+        equipped: false,
+        macros: [],
+        effects: [],
+        actions: [],
+        hidden: false,
+      }),
     ]);
   };
 
   const updateGeneralItem = (itemId: string, updater: (item: CharacterGeneralItem) => CharacterGeneralItem) => {
-    setCharGeneralItems(prev => prev.map(item => item.id === itemId ? updater(item) : item));
+    setCharGeneralItems(prev => prev.map(item => item.id === itemId ? normalizeGeneralItem(updater(normalizeGeneralItem(item))) : item));
   };
 
   const removeGeneralItem = (itemId: string) => {
     setCharGeneralItems(prev => prev.filter(item => item.id !== itemId));
     setExpandedGeneralItemDescriptions(prev => prev.filter(id => id !== itemId));
+  };
+
+  const moveGeneralItem = (itemId: string, direction: 'up' | 'down') => {
+    setCharGeneralItems(prev => {
+      const index = prev.findIndex(item => item.id === itemId);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const moveGeneralItemToInventoryFolder = (itemId: string, folderId: string) => {
+    const sourceItem = charGeneralItems.find(item => item.id === itemId);
+    if (!sourceItem || !folderId) return;
+    const normalized = normalizeGeneralItem(sourceItem);
+    const movedItem: CharacterInventoryItem = {
+      ...normalized,
+      id: `inv_${uid()}`,
+      folderId,
+    };
+    setCharInventory(prev => [...prev, movedItem]);
+    setCharGeneralItems(prev => prev.filter(item => item.id !== itemId));
+    setExpandedGeneralItemDescriptions(prev => prev.filter(id => id !== itemId));
+    setActiveInventoryCategoryId(getRootFolderId(inventoryFolders, folderId) || folderId);
+  };
+
+  const moveInventoryItemToGeneralItems = (itemId: string) => {
+    const sourceItem = charInventory.find(item => item.id === itemId);
+    if (!sourceItem) return;
+    const movedItem: CharacterGeneralItem = normalizeGeneralItem({
+      ...sourceItem,
+      id: `gen_${uid()}`,
+    });
+    setCharGeneralItems(prev => [...prev, movedItem]);
+    setCharInventory(prev => prev.filter(item => item.id !== itemId));
+    setCollapsedInventoryItems(prev => prev.filter(id => id !== itemId));
+    setExpandedInventoryDescriptions(prev => prev.filter(id => id !== itemId));
   };
 
   const toggleGeneralItemDescription = (itemId: string) => {
@@ -1260,14 +1656,163 @@ export const Characters: React.FC = () => {
       setDiceError('Discord: Add a webhook URL before sharing general items.');
       return;
     }
+    const itemState = normalizeGeneralItem(item);
     const message = [
-      `**${item.name || 'Unnamed General Item'}**`,
-      `Rarity: ${INVENTORY_RARITY_STYLES[item.rarity || 'common'].label}`,
-      `Quantity: ${item.quantity}`,
-      item.description ? `Description: ${item.description}` : '',
+      `**${itemState.name || 'Unnamed General Item'}**`,
+      `Rarity: ${INVENTORY_RARITY_STYLES[itemState.rarity || 'common'].label}`,
+      `Quantity: ${itemState.quantity}`,
+      `Status: ${itemState.status || (itemState.equipped ? 'equipped' : 'available')}`,
+      `Equipped: ${itemState.equipped ? 'Yes' : 'No'}`,
+      itemState.description ? `Description: ${itemState.description}` : '',
+      (itemState.effects || []).length > 0 ? `Effects: ${(itemState.effects || []).map(effect => `${effect.targetId || 'unknown'} ${effect.value || '0'}`).join(', ')}` : '',
+      (itemState.macros || []).length > 0 ? `Macros: ${(itemState.macros || []).map(macro => `${macro.name} [${macro.formula}]`).join(', ')}` : '',
+      (itemState.actions || []).length > 0 ? `Actions: ${(itemState.actions || []).map(action => action.name || 'Unnamed Action').join(', ')}` : '',
     ].filter(Boolean).join('\n');
     const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
     if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const addGeneralMacro = (itemId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      macros: [...(item.macros || []), { id: `macro_${uid()}`, name: 'New Macro', formula: '1d20' }],
+    }));
+  };
+
+  const updateGeneralMacro = (itemId: string, macroId: string, updater: (macro: CharacterDiceMacro) => CharacterDiceMacro) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      macros: (item.macros || []).map(macro => macro.id === macroId ? updater(macro) : macro),
+    }));
+  };
+
+  const removeGeneralMacro = (itemId: string, macroId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      macros: (item.macros || []).filter(macro => macro.id !== macroId),
+    }));
+  };
+
+  const addGeneralEffect = (itemId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      effects: [...(item.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+    }));
+  };
+
+  const updateGeneralEffect = (itemId: string, effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      effects: (item.effects || []).map((effect, index) => index === effectIndex ? updater(effect) : effect),
+    }));
+  };
+
+  const removeGeneralEffect = (itemId: string, effectIndex: number) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      effects: (item.effects || []).filter((_, index) => index !== effectIndex),
+    }));
+  };
+
+  const addGeneralAction = (itemId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: [
+        ...(item.actions || []),
+        { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] },
+      ],
+    }));
+  };
+
+  const updateGeneralAction = (itemId: string, actionId: string, updater: (action: CharacterAction) => CharacterAction) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId ? updater(action) : action),
+    }));
+  };
+
+  const removeGeneralAction = (itemId: string, actionId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).filter(action => action.id !== actionId),
+    }));
+    setExpandedInventoryActionDescriptions(prev => prev.filter(id => id !== actionId));
+  };
+
+  const addGeneralActionMacro = (itemId: string, actionId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: [...(action.macros || []), { id: `macro_${uid()}`, name: 'New Action Macro', formula: '1d20' }] }
+        : action),
+    }));
+  };
+
+  const updateGeneralActionMacro = (itemId: string, actionId: string, macroId: string, updater: (macro: CharacterDiceMacro) => CharacterDiceMacro) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).map(macro => macro.id === macroId ? updater(macro) : macro) }
+        : action),
+    }));
+  };
+
+  const removeGeneralActionMacro = (itemId: string, actionId: string, macroId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      actions: (item.actions || []).map(action => action.id === actionId
+        ? { ...action, macros: (action.macros || []).filter(macro => macro.id !== macroId) }
+        : action),
+    }));
+  };
+
+  const addGeneralActionEffect = (itemId: string, actionId: string) => {
+    updateGeneralAction(itemId, actionId, current => ({
+      ...current,
+      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+    }));
+  };
+
+  const updateGeneralActionEffect = (itemId: string, actionId: string, effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => {
+    updateGeneralAction(itemId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).map((effect, index) => index === effectIndex ? updater(effect) : effect),
+    }));
+  };
+
+  const removeGeneralActionEffect = (itemId: string, actionId: string, effectIndex: number) => {
+    updateGeneralAction(itemId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).filter((_, index) => index !== effectIndex),
+    }));
+  };
+
+  const rollGeneralMacro = async (item: CharacterGeneralItem, macro: CharacterDiceMacro) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${macro.name}` }, context, ids);
+      result.description = item.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
+    }
+  };
+
+  const rollGeneralActionMacro = async (item: CharacterGeneralItem, action: CharacterAction, macro: CharacterDiceMacro) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${action.name}: ${macro.name}` }, context, ids);
+      result.description = action.description || item.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
+    }
   };
 
   const openHomebrewViewer = (
@@ -1606,11 +2151,16 @@ export const Characters: React.FC = () => {
 
   const exportAttributePreset = () => {
     const payload: CharacterAttributePreset = {
+      schema: 'inoraxium-character-attributes',
+      version: 1,
       mainAttributes: mainAttrs,
       secondaryAttributes: secondaryAttrs,
       skills,
       otherAttributes: otherAttrs,
       bars,
+      displayStats,
+      displaySlotStates,
+      attributeSectionModes,
       modifierFormula: modFormula,
       attributeSectionColumns,
     };
@@ -1624,6 +2174,186 @@ export const Characters: React.FC = () => {
     link.click();
     document.body.removeChild(link);
     URL.revokeObjectURL(url);
+  };
+
+  const downloadJsonFile = (payload: unknown, fileName: string) => {
+    const serialized = JSON.stringify(payload, null, 2);
+    const blob = new Blob([serialized], { type: 'application/json' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = fileName;
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const safeExportFileName = (name: string, suffix: string) => (
+    `${(name || 'entry').replace(/[^a-z0-9-_]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'entry'}-${suffix}.json`
+  );
+
+  const cloneMacroForImport = (macro: Partial<CharacterDiceMacro> = {}): CharacterDiceMacro => ({
+    id: `macro_${uid()}`,
+    name: typeof macro.name === 'string' ? macro.name : 'New Macro',
+    formula: typeof macro.formula === 'string' ? macro.formula : '1d20',
+  });
+
+  const cloneEffectForImport = (effect: Partial<StatusEffect> = {}): StatusEffect => ({
+    id: `eff_${uid()}`,
+    targetId: typeof effect.targetId === 'string' ? effect.targetId : '',
+    value: typeof effect.value === 'string' ? effect.value : '0',
+    active: effect.active ?? true,
+  });
+
+  const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => ({
+    id: `act_${uid()}`,
+    name: typeof action.name === 'string' ? action.name : 'New Action',
+    description: typeof action.description === 'string' ? action.description : '',
+    cost: typeof action.cost === 'string' ? action.cost : '',
+    usageRemaining: typeof action.usageRemaining === 'string' ? action.usageRemaining : '',
+    macros: Array.isArray(action.macros) ? action.macros.map(cloneMacroForImport) : [],
+    effects: Array.isArray(action.effects) ? action.effects.map(cloneEffectForImport) : [],
+  });
+
+  const buildEntryExportPayload = (
+    kind: CharacterEntryExportKind,
+    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro,
+    folderName?: string | null
+  ): CharacterEntryExportPayload => ({
+    schema: 'inoraxium-character-entry',
+    version: 1,
+    kind,
+    exportedAt: new Date().toISOString(),
+    sourceCharacterName: selectedCharacter?.name || editName || undefined,
+    folderName: folderName || null,
+    entry,
+  });
+
+  const exportCharacterEntry = (
+    kind: CharacterEntryExportKind,
+    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro,
+    folderName?: string | null
+  ) => {
+    downloadJsonFile(buildEntryExportPayload(kind, entry, folderName), safeExportFileName(entry.name, kind));
+  };
+
+  const getMatchingFolderIdByName = (folders: CharacterEntryFolder[], folderName?: string | null): string | null => {
+    if (!folderName) return null;
+    const normalizedName = folderName.trim().toLowerCase();
+    return folders.find(folder => (folder.name || '').trim().toLowerCase() === normalizedName)?.id || null;
+  };
+
+  const buildImportedGeneralItem = (entry: Partial<CharacterGeneralItem | CharacterInventoryItem>): CharacterGeneralItem => normalizeGeneralItem({
+    id: `gen_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : 'Imported Item',
+    description: typeof entry.description === 'string' ? entry.description : '',
+    quantity: Number.isFinite(entry.quantity) ? Number(entry.quantity) : 1,
+    status: typeof entry.status === 'string' ? entry.status : (entry.equipped ? 'equipped' : 'unequipped'),
+    rarity: entry.rarity || 'common',
+    equipped: entry.equipped ?? false,
+    macros: Array.isArray(entry.macros) ? entry.macros.map(cloneMacroForImport) : [],
+    effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
+    actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
+    hidden: entry.hidden ?? false,
+  });
+
+  const buildImportedInventoryItem = (entry: Partial<CharacterGeneralItem | CharacterInventoryItem>, folderId: string): CharacterInventoryItem => ({
+    ...buildImportedGeneralItem(entry),
+    id: `inv_${uid()}`,
+    folderId,
+  });
+
+  const buildImportedSpell = (entry: Partial<CharacterSpell>, folderId: string | null): CharacterSpell => ({
+    id: `sp_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : 'Imported Spell',
+    description: typeof entry.description === 'string' ? entry.description : '',
+    level: typeof entry.level === 'string' ? entry.level : '',
+    resourceCost: typeof entry.resourceCost === 'string' ? entry.resourceCost : '',
+    usageRemaining: typeof entry.usageRemaining === 'string' ? entry.usageRemaining : '',
+    totalUsage: typeof entry.totalUsage === 'string' ? entry.totalUsage : '',
+    magicSchool: typeof entry.magicSchool === 'string' ? entry.magicSchool : '',
+    color: typeof entry.color === 'string' ? entry.color : '#7c3aed',
+    macros: Array.isArray(entry.macros) ? entry.macros.map(cloneMacroForImport) : [],
+    actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
+    hidden: entry.hidden ?? false,
+    folderId,
+  });
+
+  const buildImportedStatus = (entry: Partial<CharacterStatus>, folderId: string | null): CharacterStatus => ({
+    id: `st_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : 'Imported Status',
+    duration: typeof entry.duration === 'string' ? entry.duration : '',
+    description: typeof entry.description === 'string' ? entry.description : '',
+    effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
+    color: typeof entry.color === 'string' ? entry.color : '#f59e0b',
+    hidden: entry.hidden ?? false,
+    folderId,
+  });
+
+  const buildImportedDiceMacro = (entry: Partial<CharacterDiceMacro>, folderId: string | null = null): CharacterDiceMacro => ({
+    id: `macro_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : 'Imported Macro',
+    formula: typeof entry.formula === 'string' ? entry.formula : '1d20',
+    folderId,
+  });
+
+  const importSharedEntryPayload = (payload: CharacterEntryExportPayload, expectedKind: CharacterEntryExportKind) => {
+    if (payload.schema !== 'inoraxium-character-entry' || payload.version !== 1 || !payload.entry) {
+      throw new Error('This is not a valid character entry export file.');
+    }
+    if (payload.kind !== expectedKind) {
+      throw new Error(`This file contains a ${payload.kind}, so it cannot be imported into ${expectedKind === 'item' ? 'Inventory' : expectedKind === 'spell' ? 'Spells' : expectedKind === 'status' ? 'Statuses' : 'Macros'}.`);
+    }
+
+    if (payload.kind === 'item') {
+      const folderId = getMatchingFolderIdByName(inventoryFolders, payload.folderName);
+      if (folderId) {
+        setCharInventory(prev => [...prev, buildImportedInventoryItem(payload.entry as Partial<CharacterGeneralItem | CharacterInventoryItem>, folderId)]);
+      } else {
+        setCharGeneralItems(prev => [...prev, buildImportedGeneralItem(payload.entry as Partial<CharacterGeneralItem | CharacterInventoryItem>)]);
+      }
+      return;
+    }
+
+    if (payload.kind === 'spell') {
+      const folderId = getMatchingFolderIdByName(spellFolders, payload.folderName);
+      setCharSpells(prev => [...prev, buildImportedSpell(payload.entry as Partial<CharacterSpell>, folderId)]);
+      return;
+    }
+
+    if (payload.kind === 'status') {
+      const folderId = getMatchingFolderIdByName(statusFolders, payload.folderName);
+      setCharStatuses(prev => [...prev, buildImportedStatus(payload.entry as Partial<CharacterStatus>, folderId)]);
+      return;
+    }
+
+    setSheetDiceMacros(prev => [...prev, buildImportedDiceMacro(payload.entry as Partial<CharacterDiceMacro>, null)]);
+  };
+
+  const importSharedEntry = (expectedKind: CharacterEntryExportKind) => {
+    if (!canEditInventory && !isCharacterOwner) {
+      window.alert('You do not have permission to import entries into this character.');
+      return;
+    }
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
+        importSharedEntryPayload(parsed, expectedKind);
+        setDiceError(null);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Import failed.';
+        setDiceError(message);
+        window.alert(message);
+      }
+    };
+    input.click();
   };
 
   const importAttributePreset = () => {
@@ -1798,7 +2528,10 @@ export const Characters: React.FC = () => {
     }
   };
 
-  const addSpell = () => {
+  const addSpell = (folderId: string | null = activeSpellCategoryId) => {
+    const categoryColor = folderId
+      ? spellFolders.find(folder => folder.id === getRootFolderId(spellFolders, folderId))?.color
+      : null;
     setCharSpells(prev => [
       ...prev,
       {
@@ -1810,10 +2543,10 @@ export const Characters: React.FC = () => {
         usageRemaining: '',
         totalUsage: '',
         magicSchool: '',
-        color: '#7c3aed',
+        color: categoryColor || '#7c3aed',
         macros: [],
         hidden: false,
-        folderId: null,
+        folderId,
       },
     ]);
   };
@@ -2065,9 +2798,9 @@ export const Characters: React.FC = () => {
     }));
   };
 
-  const addMacro = (mode: 'sheet' | 'main') => {
+  const addMacro = (mode: 'sheet' | 'main', folderId: string | null = null) => {
     const id = `macro_${uid()}`;
-    setMacrosForMode(mode, prev => [...prev, { id, name: 'New Macro', formula: '1d20' }]);
+    setMacrosForMode(mode, prev => [...prev, { id, name: 'New Macro', formula: '1d20', folderId: mode === 'sheet' ? folderId : null }]);
   };
 
   const removeMacro = (mode: 'sheet' | 'main', id: string) => {
@@ -2188,13 +2921,14 @@ export const Characters: React.FC = () => {
     }
   };
 
-  const rollAllCharacterMacros = async (mode: 'sheet' | 'main') => {
+  const rollAllCharacterMacros = async (mode: 'sheet' | 'main', macrosOverride?: CharacterDiceMacro[]) => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
       const ids = getCharacterReferenceIds();
       const activeDiceState = getDiceStateForMode(mode);
-      const results = activeDiceState.macros.map((macro) => executeCharacterMacro(macro, context, ids));
+      const macrosToRoll = macrosOverride || activeDiceState.macros;
+      const results = macrosToRoll.map((macro) => executeCharacterMacro(macro, context, ids));
       setRollResults(prev => [...results.reverse(), ...prev]);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
 
@@ -2212,7 +2946,17 @@ export const Characters: React.FC = () => {
     }
   };
 
-  const renderDicePanel = (mode: 'sheet' | 'main') => {
+  const renderDicePanel = (
+    mode: 'sheet' | 'main',
+    options: {
+      showDiscordQuick?: boolean;
+      showMacros?: boolean;
+      showResults?: boolean;
+      macroFolderId?: string | null;
+      macroFolderTitle?: string;
+      showMacroFolders?: boolean;
+    } = {}
+  ) => {
     if (!selectedCharacter) {
       return (
         <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
@@ -2225,6 +2969,15 @@ export const Characters: React.FC = () => {
     }
 
     const activeDiceState = getDiceStateForMode(mode);
+    const showDiscordQuick = options.showDiscordQuick ?? true;
+    const showMacros = options.showMacros ?? true;
+    const showResults = options.showResults ?? true;
+    const visibleMacros = activeDiceState.macros.filter(macro => {
+      if (mode !== 'sheet') return true;
+      if (options.macroFolderId === undefined) return true;
+      if (options.macroFolderId === null) return (macro.folderId ?? null) === null;
+      return isFolderInTree(diceMacroFolders, options.macroFolderId, macro.folderId) && isFolderVisible(diceMacroFolders, macro.folderId);
+    });
 
     return (
       <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
@@ -2239,6 +2992,8 @@ export const Characters: React.FC = () => {
             </div>
           )}
 
+          {showDiscordQuick && (
+          <>
           <div className="mb-6 p-4 bg-indigo-900/20 border border-indigo-700/30 rounded-lg">
             <h3 className="text-lg text-indigo-300 mb-3 flex items-center gap-2" style={{ fontFamily: "'Cinzel', serif" }}>
               🔗 Discord Integration
@@ -2471,28 +3226,44 @@ export const Characters: React.FC = () => {
             </div>
           </div>
 
+          </>
+          )}
+
+          {showMacros && (
           <div className="mb-8">
+            {mode === 'sheet' && options.showMacroFolders && renderFolderTree(diceMacroFolders, {
+              editable: isCharacterOwner,
+              emptyLabel: 'No macro folders yet. Add a folder here and it will become a macro tab.',
+              title: 'Macro Folders',
+              description: 'Root folders appear as macro tabs. Subfolders stay inside their category.',
+              addLabel: '+ Add Folder',
+              onAddRoot: () => addDiceMacroFolder(),
+              onAddChild: (parentId) => addDiceMacroFolder(parentId),
+              onMove: moveDiceMacroFolder,
+              onUpdate: updateDiceMacroFolder,
+              onRemove: removeDiceMacroFolder,
+            })}
             <div className="flex items-center justify-between mb-3">
-              <h3 className="text-xl text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>⚡ Dice Macros</h3>
+              <h3 className="text-xl text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>⚡ {options.macroFolderTitle || 'Dice Macros'}</h3>
               <div className="flex gap-2">
-                {activeDiceState.macros.length > 1 && (
-                  <button onClick={() => rollAllCharacterMacros(mode)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/40 text-purple-300 rounded border border-purple-800/40 hover:bg-purple-900/60 transition-colors text-sm cursor-pointer">
+                {visibleMacros.length > 1 && (
+                  <button onClick={() => rollAllCharacterMacros(mode, visibleMacros)} className="flex items-center gap-1.5 px-3 py-1.5 bg-purple-900/40 text-purple-300 rounded border border-purple-800/40 hover:bg-purple-900/60 transition-colors text-sm cursor-pointer">
                     <Zap size={14} /> Roll All
                   </button>
                 )}
-                <button onClick={() => addMacro(mode)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/40 text-emerald-300 rounded border border-emerald-800/40 hover:bg-emerald-900/60 transition-colors text-sm cursor-pointer">
+                <button onClick={() => addMacro(mode, mode === 'sheet' ? (options.macroFolderId ?? null) : null)} className="flex items-center gap-1.5 px-3 py-1.5 bg-emerald-900/40 text-emerald-300 rounded border border-emerald-800/40 hover:bg-emerald-900/60 transition-colors text-sm cursor-pointer">
                   <Plus size={14} /> Add Macro
                 </button>
               </div>
             </div>
 
-            {activeDiceState.macros.length === 0 ? (
+            {visibleMacros.length === 0 ? (
               <div className="text-stone-500 text-center py-8 border border-dashed border-stone-700 rounded-lg">
                 No macros yet. Add one to get started.
               </div>
             ) : (
               <div className="space-y-2">
-                {activeDiceState.macros.map(macro => {
+                {visibleMacros.map(macro => {
                   const isEditing = editingMacroId === macro.id;
                   return (
                     <div key={macro.id} className="flex items-center gap-3 p-3 bg-stone-900/60 border border-stone-700/50 rounded-lg group">
@@ -2509,9 +3280,28 @@ export const Characters: React.FC = () => {
                         <>
                           <div className="w-40 text-amber-200 font-medium truncate">{macro.name}</div>
                           <code className="flex-1 text-purple-300 text-sm bg-stone-800 px-2 py-0.5 rounded font-mono truncate">{macro.formula}</code>
+                          {mode === 'sheet' && (
+                            <select
+                              value={macro.folderId ?? ''}
+                              onChange={(e) => setMacrosForMode('sheet', prev => prev.map(current => current.id === macro.id ? { ...current, folderId: e.target.value || null } : current))}
+                              className="min-w-[180px] bg-stone-800 border border-stone-600 rounded px-2 py-1 text-amber-100 text-xs focus:outline-none"
+                            >
+                              <option value="">General Macros</option>
+                              {getFolderOptions(diceMacroFolders).map(option => (
+                                <option key={option.id} value={option.id}>
+                                  {option.label}
+                                </option>
+                              ))}
+                            </select>
+                          )}
                           <button onClick={() => rollCharacterMacro(macro, mode)} className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-sm font-bold cursor-pointer">
                             <Dices size={14} /> Roll
                           </button>
+                          {mode === 'sheet' && (
+                            <button onClick={() => exportCharacterEntry('macro', macro, diceMacroFolders.find(folder => folder.id === macro.folderId)?.name || null)} className="px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer">
+                              Export
+                            </button>
+                          )}
                           <button onClick={() => startEditMacro(macro)} className="p-1.5 text-stone-500 hover:text-amber-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"><Edit3 size={14} /></button>
                           <button onClick={() => removeMacro(mode, macro.id)} className="p-1.5 text-stone-500 hover:text-red-400 opacity-0 group-hover:opacity-100 transition-opacity cursor-pointer"><Trash2 size={14} /></button>
                         </>
@@ -2522,7 +3312,9 @@ export const Characters: React.FC = () => {
               </div>
             )}
           </div>
+          )}
 
+          {showResults && (
           <div ref={resultsRef}>
             <div className="flex items-center justify-between mb-3">
               <h3 className="text-xl text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>📜 Roll Results</h3>
@@ -2573,8 +3365,9 @@ export const Characters: React.FC = () => {
                 ))}
               </div>
             )}
-          </div>
         </div>
+          )}
+      </div>
       </div>
     );
   };
@@ -2648,14 +3441,150 @@ export const Characters: React.FC = () => {
     setSelectedCharacter(newChar);
   };
 
+  const cloneEntryFolders = (folders: CharacterEntryFolder[] = []) => {
+    const idMap = new Map<string, string>();
+    const clonedFolders = folders.map((folder) => {
+      const nextId = `folder_${uid()}`;
+      idMap.set(folder.id, nextId);
+      return {
+        ...folder,
+        id: nextId,
+      };
+    });
+
+    return {
+      idMap,
+      folders: clonedFolders.map((folder) => ({
+        ...folder,
+        parentId: folder.parentId ? idMap.get(folder.parentId) || null : null,
+      })),
+    };
+  };
+
+  const cloneDiceMacro = (macro: CharacterDiceMacro, folderMap?: Map<string, string>): CharacterDiceMacro => ({
+    ...macro,
+    id: `macro_${uid()}`,
+    folderId: macro.folderId ? folderMap?.get(macro.folderId) || null : null,
+  });
+
+  const cloneStatusEffect = (effect: StatusEffect): StatusEffect => ({
+    ...effect,
+    id: effect.id ? `eff_${uid()}` : undefined,
+  });
+
+  const cloneAction = (action: CharacterAction): CharacterAction => ({
+    ...action,
+    id: `act_${uid()}`,
+    macros: (action.macros || []).map((macro) => cloneDiceMacro(macro)),
+    effects: (action.effects || []).map(cloneStatusEffect),
+  });
+
+  const handleCreateFromSelected = async () => {
+    if (!selectedCharacter) return;
+
+    const inventoryFolderClone = cloneEntryFolders(selectedCharacter.inventoryFolders || []);
+    const spellFolderClone = cloneEntryFolders(selectedCharacter.spellFolders || []);
+    const statusFolderClone = cloneEntryFolders(selectedCharacter.statusFolders || []);
+    const diceMacroFolderClone = cloneEntryFolders(selectedCharacter.diceMacroFolders || []);
+    const id = `char-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
+
+    const newChar: CharacterData = {
+      id,
+      name: `${selectedCharacter.name || 'Character'} Copy`,
+      race: '',
+      className: '',
+      age: '',
+      bodyAge: '',
+      mentalAge: '',
+      spiritualAge: '',
+      alignment: '',
+      visibility: 'private',
+      sendToSpreadsheet: selectedCharacter.sendToSpreadsheet ?? true,
+      userId: userId || 'guest',
+      bio: '',
+      backstory: '',
+      notes: '',
+      portraitUrl: '',
+      tags: [],
+      displayStats: (selectedCharacter.displayStats || []).map((stat) => ({ ...stat })),
+      displaySlotStates: { ...(selectedCharacter.displaySlotStates || {}) },
+      attributeSectionModes: {
+        ...DEFAULT_ATTRIBUTE_SECTION_MODES,
+        ...(selectedCharacter.attributeSectionModes || {}),
+      },
+      attributeSectionColumns: {
+        ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
+        ...(selectedCharacter.attributeSectionColumns || {}),
+      },
+      mainAttributes: (selectedCharacter.mainAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
+      secondaryAttributes: (selectedCharacter.secondaryAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
+      skills: (selectedCharacter.skills || []).map((skill) => ({ ...skill, valueOptions: skill.valueOptions ? skill.valueOptions.map((option) => ({ ...option })) : undefined })),
+      otherAttributes: (selectedCharacter.otherAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
+      bars: (selectedCharacter.bars || []).map((bar) => ({ ...bar })),
+      diceMacros: (selectedCharacter.diceMacros || []).map((macro) => cloneDiceMacro(macro, diceMacroFolderClone.idMap)),
+      diceMacroFolders: diceMacroFolderClone.folders,
+      collapsedDiceMacroFolderIds: (selectedCharacter.collapsedDiceMacroFolderIds || [])
+        .map((folderId) => diceMacroFolderClone.idMap.get(folderId))
+        .filter((folderId): folderId is string => !!folderId),
+      statuses: (selectedCharacter.statuses || []).map((status) => ({
+        ...status,
+        id: `st_${uid()}`,
+        folderId: status.folderId ? statusFolderClone.idMap.get(status.folderId) || null : null,
+        effects: (status.effects || []).map(cloneStatusEffect),
+      })),
+      statusFolders: statusFolderClone.folders,
+      collapsedStatusFolderIds: (selectedCharacter.collapsedStatusFolderIds || [])
+        .map((folderId) => statusFolderClone.idMap.get(folderId))
+        .filter((folderId): folderId is string => !!folderId),
+      generalItems: (selectedCharacter.generalItems || []).map((item) => normalizeGeneralItem({
+        ...item,
+        id: `gen_${uid()}`,
+        macros: (item.macros || []).map((macro) => cloneDiceMacro(macro)),
+        effects: (item.effects || []).map(cloneStatusEffect),
+        actions: (item.actions || []).map(cloneAction),
+      })),
+      inventory: (selectedCharacter.inventory || []).map((item) => ({
+        ...item,
+        id: `inv_${uid()}`,
+        folderId: item.folderId ? inventoryFolderClone.idMap.get(item.folderId) || null : null,
+        macros: (item.macros || []).map((macro) => cloneDiceMacro(macro)),
+        effects: (item.effects || []).map(cloneStatusEffect),
+        actions: (item.actions || []).map(cloneAction),
+      })),
+      inventoryFolders: inventoryFolderClone.folders,
+      collapsedInventoryFolderIds: (selectedCharacter.collapsedInventoryFolderIds || [])
+        .map((folderId) => inventoryFolderClone.idMap.get(folderId))
+        .filter((folderId): folderId is string => !!folderId),
+      collapsedSheetQuickRoll: selectedCharacter.collapsedSheetQuickRoll ?? false,
+      spells: (selectedCharacter.spells || []).map((spell) => ({
+        ...spell,
+        id: `sp_${uid()}`,
+        folderId: spell.folderId ? spellFolderClone.idMap.get(spell.folderId) || null : null,
+        macros: (spell.macros || []).map((macro) => cloneDiceMacro(macro)),
+        actions: (spell.actions || []).map(cloneAction),
+      })),
+      spellFolders: spellFolderClone.folders,
+      collapsedSpellFolderIds: (selectedCharacter.collapsedSpellFolderIds || [])
+        .map((folderId) => spellFolderClone.idMap.get(folderId))
+        .filter((folderId): folderId is string => !!folderId),
+      modifierFormula: selectedCharacter.modifierFormula || modFormula,
+      createdAt: Date.now(),
+    };
+
+    await saveCharacter(newChar);
+    setCharacters(prev => [...prev, newChar]);
+    setSelectedCharacter(newChar);
+  };
+
   const handleSaveAll = async () => {
     if (!selectedCharacter) return;
 
     if (!isCharacterOwner) {
       if (!canEditInventory) return;
-      await saveCharacterInventory(selectedCharacter.id, charInventory, inventoryFolders, collapsedInventoryFolders, charGeneralItems, userId);
-      const updated = { ...selectedCharacter, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders };
-      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: charGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders } : c)));
+      const normalizedGeneralItems = charGeneralItems.map(normalizeGeneralItem);
+      await saveCharacterInventory(selectedCharacter.id, charInventory, inventoryFolders, collapsedInventoryFolders, normalizedGeneralItems, userId);
+      const updated = { ...selectedCharacter, generalItems: normalizedGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders };
+      setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: normalizedGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders } : c)));
       setSelectedCharacter(updated);
       if (updated.sendToSpreadsheet ?? true) {
         const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
@@ -2708,8 +3637,12 @@ export const Characters: React.FC = () => {
       otherAttributes: otherAttrs,
       bars,
       diceMacros: sheetDiceMacros,
+      diceMacroFolders,
+      collapsedDiceMacroFolderIds: collapsedDiceMacroFolders,
       statuses: charStatuses,
-      generalItems: charGeneralItems,
+      statusFolders,
+      collapsedStatusFolderIds: collapsedStatusFolders,
+      generalItems: charGeneralItems.map(normalizeGeneralItem),
       inventory: charInventory,
       inventoryFolders,
       collapsedInventoryFolderIds: collapsedInventoryFolders,
@@ -2778,6 +3711,33 @@ export const Characters: React.FC = () => {
     if (selectedCharacter?.id === id) setSelectedCharacter(next[0] || null);
   };
 
+  const handleTransferOwner = async () => {
+    if (!isAdmin || !selectedCharacter || !ownerTransferUid.trim()) return;
+
+    const nextOwner = userProfiles.find((profile) => profile.uid === ownerTransferUid);
+    const nextOwnerLabel = nextOwner?.email || nextOwner?.displayName || ownerTransferUid;
+    if (!window.confirm(`Transfer "${selectedCharacter.name}" to ${nextOwnerLabel}?`)) return;
+
+    setOwnerTransferStatus('Transferring owner...');
+    try {
+      await transferCharacterOwner(selectedCharacter.id, ownerTransferUid, nextOwner?.email);
+      const updated: CharacterData = {
+        ...selectedCharacter,
+        userId: ownerTransferUid,
+        ownerEmail: nextOwner?.email || '',
+        ownerTransferredAt: Date.now(),
+      };
+      setCharacters((prev) => prev.map((character) => (
+        character.id === updated.id ? updated : character
+      )));
+      setSelectedCharacter(updated);
+      setOwnerTransferStatus(`Owner changed to ${nextOwnerLabel}.`);
+    } catch (error) {
+      console.error('Failed to transfer owner:', error);
+      setOwnerTransferStatus('Owner transfer failed. Check Firestore rules/permissions.');
+    }
+  };
+
   const handleAddToBattleTracker = (characterName: string) => {
     addCombatantToBattleTracker(characterName);
   };
@@ -2787,6 +3747,10 @@ export const Characters: React.FC = () => {
     options: {
       editable: boolean;
       emptyLabel: string;
+      title?: string;
+      description?: string;
+      addLabel?: string;
+      rootParentId?: string | null;
       onAddRoot: () => void;
       onAddChild: (parentId: string) => void;
       onMove: (folderId: string, direction: 'up' | 'down') => void;
@@ -2794,7 +3758,13 @@ export const Characters: React.FC = () => {
       onRemove: (folderId: string) => void;
     }
   ) => {
-    const renderNodes = (parentId: string | null = null, depth = 0): React.ReactNode => {
+    const rootParentId = options.rootParentId ?? null;
+    const parentOptions = rootParentId
+      ? getFolderOptions(folders, rootParentId)
+      : getFolderOptions(folders);
+    const hasVisibleRootNodes = folders.some(folder => (folder.parentId ?? null) === rootParentId);
+
+    const renderNodes = (parentId: string | null = rootParentId, depth = 0): React.ReactNode => {
       const nodes = folders.filter(folder => (folder.parentId ?? null) === parentId);
       if (nodes.length === 0) return null;
 
@@ -2838,8 +3808,12 @@ export const Characters: React.FC = () => {
                   disabled={!options.editable}
                   className="min-w-[180px] bg-stone-900/70 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
                 >
-                  <option value="">Root</option>
-                  {getFolderOptions(folders)
+                  {rootParentId ? (
+                    <option value={rootParentId}>Category Root</option>
+                  ) : (
+                    <option value="">Root</option>
+                  )}
+                  {parentOptions
                     .filter(option => option.id !== folder.id)
                     .map(option => (
                       <option key={option.id} value={option.id}>
@@ -2895,19 +3869,19 @@ export const Characters: React.FC = () => {
       <div className="mb-6 rounded-xl border border-amber-800/20 bg-black/20 p-4">
         <div className="flex items-center justify-between mb-3">
           <div>
-            <h4 className="text-lg font-bold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>Folders</h4>
-            <p className="text-sm text-stone-500">Nested categories with color and show/hide controls.</p>
+            <h4 className="text-lg font-bold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>{options.title || 'Folders'}</h4>
+            <p className="text-sm text-stone-500">{options.description || 'Nested categories with color and show/hide controls.'}</p>
           </div>
           {options.editable && (
             <button
               onClick={options.onAddRoot}
               className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-sm text-amber-200 hover:bg-amber-900/60 cursor-pointer"
             >
-              + Add Folder
+              {options.addLabel || '+ Add Folder'}
             </button>
           )}
         </div>
-        {folders.length === 0 ? (
+        {!hasVisibleRootNodes ? (
           <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
             {options.emptyLabel}
           </div>
@@ -2920,6 +3894,40 @@ export const Characters: React.FC = () => {
 
     if (isViewingSheet && selectedCharacter) {
       const finalContext = getCharacterContext();
+      const inventoryRootCategories = inventoryFolders.filter(folder => (folder.parentId ?? null) === null);
+      const activeInventoryCategory = activeInventoryCategoryId
+        ? inventoryFolders.find(folder => folder.id === activeInventoryCategoryId) || null
+        : null;
+      const visibleInventoryItems = charInventory
+        .filter(item => isFolderVisible(inventoryFolders, item.folderId))
+        .filter(item => activeInventoryCategoryId
+          ? isFolderInTree(inventoryFolders, activeInventoryCategoryId, item.folderId)
+          : item.folderId === null
+        );
+      const spellRootCategories = spellFolders.filter(folder => (folder.parentId ?? null) === null);
+      const activeSpellCategory = activeSpellCategoryId
+        ? spellFolders.find(folder => folder.id === activeSpellCategoryId) || null
+        : null;
+      const visibleSpellItems = charSpells
+        .filter(spell => isFolderVisible(spellFolders, spell.folderId))
+        .filter(spell => activeSpellCategoryId
+          ? isFolderInTree(spellFolders, activeSpellCategoryId, spell.folderId)
+          : spell.folderId === null
+        );
+      const statusRootCategories = statusFolders.filter(folder => (folder.parentId ?? null) === null);
+      const activeStatusCategory = activeStatusCategoryId
+        ? statusFolders.find(folder => folder.id === activeStatusCategoryId) || null
+        : null;
+      const visibleStatusItems = charStatuses
+        .filter(status => isFolderVisible(statusFolders, status.folderId))
+        .filter(status => activeStatusCategoryId
+          ? isFolderInTree(statusFolders, activeStatusCategoryId, status.folderId)
+          : status.folderId === null
+        );
+      const diceMacroRootCategories = diceMacroFolders.filter(folder => (folder.parentId ?? null) === null);
+      const activeMacroCategory = activeMacroCategoryId !== 'main' && activeMacroCategoryId !== 'rolls'
+        ? diceMacroFolders.find(folder => folder.id === activeMacroCategoryId) || null
+        : null;
       const attributeEffectHistory: Record<string, Array<{ label: string; value: number; sourceAnchorId?: string }>> = {};
       const pushAttributeHistory = (targetId: string, label: string, value: number, sourceAnchorId?: string) => {
         if (!targetId || !Number.isFinite(value) || Math.abs(value) < 0.0001) return;
@@ -3516,7 +4524,245 @@ export const Characters: React.FC = () => {
           </div>
         </div>
 
+        <div className="sticky top-[5.75rem] z-20 mb-4 rounded-2xl border border-amber-800/30 bg-stone-950/86 px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.24)] backdrop-blur-md overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            {[
+              { key: 'bio', label: 'Bio', hint: 'Story and profile' },
+              { key: 'attributes', label: 'Attributes', hint: 'Stats and bars' },
+              { key: 'macros', label: 'Macros', hint: 'Quick rolls and dice macros' },
+              { key: 'inventory', label: 'Inventory', hint: 'Gear and general items' },
+              { key: 'spells', label: 'Spells', hint: 'Magic and abilities' },
+              { key: 'statuses', label: 'Statuses', hint: 'Effects and conditions' },
+            ].map((tab) => {
+              const isActive = activeSheetTab === tab.key;
+              return (
+                <button
+                  key={tab.key}
+                  onClick={() => setActiveSheetTab(tab.key as CharacterSheetTab)}
+                  title={tab.hint}
+                  className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none tracking-wide transition-all cursor-pointer ${
+                    isActive
+                      ? 'border-amber-400/60 bg-amber-900/42 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
+                      : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
+                  }`}
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  {tab.label}
+                </button>
+              );
+            })}
+          </div>
+        </div>
+
+        {activeSheetTab === 'inventory' && (
+        <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-sky-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
+          <div className="flex items-center justify-between gap-3 overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            <button
+              onClick={() => setActiveInventoryCategoryId(null)}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                !activeInventoryCategoryId
+                  ? 'border-sky-300/60 bg-sky-900/45 text-sky-100 shadow-[0_0_16px_rgba(56,189,248,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-sky-700/45 hover:text-sky-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Main
+            </button>
+            {inventoryRootCategories.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => setActiveInventoryCategoryId(folder.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                  activeInventoryCategoryId === folder.id
+                    ? 'text-sky-50 shadow-[0_0_16px_rgba(56,189,248,0.16)]'
+                    : 'bg-stone-900/55 text-stone-300 hover:text-sky-100'
+                }`}
+                style={{
+                  fontFamily: "'Cinzel', serif",
+                  borderColor: activeInventoryCategoryId === folder.id ? `${folder.color || '#0284c7'}cc` : `${folder.color || '#334155'}66`,
+                  background: activeInventoryCategoryId === folder.id
+                    ? `linear-gradient(135deg, ${folder.color || '#0284c7'}66, rgba(12, 10, 9, 0.72))`
+                    : `linear-gradient(135deg, ${folder.color || '#334155'}22, rgba(12, 10, 9, 0.52))`,
+                }}
+              >
+                {folder.name || 'Untitled Category'}
+              </button>
+            ))}
+          </div>
+          {canEditInventory && (
+            <button
+              onClick={() => importSharedEntry('item')}
+              className="shrink-0 rounded-xl border border-sky-700/50 bg-sky-900/35 px-4 py-2 text-sm font-bold leading-none text-sky-100 hover:bg-sky-900/55 cursor-pointer"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Import
+            </button>
+          )}
+          </div>
+        </div>
+        )}
+
+        {activeSheetTab === 'spells' && (
+        <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-violet-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
+          <div className="flex items-center justify-between gap-3 overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            <button
+              onClick={() => setActiveSpellCategoryId(null)}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                !activeSpellCategoryId
+                  ? 'border-violet-300/60 bg-violet-900/45 text-violet-100 shadow-[0_0_16px_rgba(167,139,250,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-violet-700/45 hover:text-violet-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Main
+            </button>
+            {spellRootCategories.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => setActiveSpellCategoryId(folder.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                  activeSpellCategoryId === folder.id
+                    ? 'text-violet-50 shadow-[0_0_16px_rgba(167,139,250,0.16)]'
+                    : 'bg-stone-900/55 text-stone-300 hover:text-violet-100'
+                }`}
+                style={{
+                  fontFamily: "'Cinzel', serif",
+                  borderColor: activeSpellCategoryId === folder.id ? `${folder.color || '#7c3aed'}cc` : `${folder.color || '#334155'}66`,
+                  background: activeSpellCategoryId === folder.id
+                    ? `linear-gradient(135deg, ${folder.color || '#7c3aed'}66, rgba(12, 10, 9, 0.72))`
+                    : `linear-gradient(135deg, ${folder.color || '#334155'}22, rgba(12, 10, 9, 0.52))`,
+                }}
+              >
+                {folder.name || 'Untitled Category'}
+              </button>
+            ))}
+          </div>
+          {isCharacterOwner && (
+            <button
+              onClick={() => importSharedEntry('spell')}
+              className="shrink-0 rounded-xl border border-violet-700/50 bg-violet-900/35 px-4 py-2 text-sm font-bold leading-none text-violet-100 hover:bg-violet-900/55 cursor-pointer"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Import
+            </button>
+          )}
+          </div>
+        </div>
+        )}
+
+        {activeSheetTab === 'statuses' && (
+        <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-orange-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
+          <div className="flex items-center justify-between gap-3 overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            <button
+              onClick={() => setActiveStatusCategoryId(null)}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                !activeStatusCategoryId
+                  ? 'border-orange-300/60 bg-orange-900/45 text-orange-100 shadow-[0_0_16px_rgba(251,146,60,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-orange-700/45 hover:text-orange-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Main
+            </button>
+            {statusRootCategories.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => setActiveStatusCategoryId(folder.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                  activeStatusCategoryId === folder.id
+                    ? 'text-orange-50 shadow-[0_0_16px_rgba(251,146,60,0.16)]'
+                    : 'bg-stone-900/55 text-stone-300 hover:text-orange-100'
+                }`}
+                style={{
+                  fontFamily: "'Cinzel', serif",
+                  borderColor: activeStatusCategoryId === folder.id ? `${folder.color || '#f59e0b'}cc` : `${folder.color || '#334155'}66`,
+                  background: activeStatusCategoryId === folder.id
+                    ? `linear-gradient(135deg, ${folder.color || '#f59e0b'}66, rgba(12, 10, 9, 0.72))`
+                    : `linear-gradient(135deg, ${folder.color || '#334155'}22, rgba(12, 10, 9, 0.52))`,
+                }}
+              >
+                {folder.name || 'Untitled Category'}
+              </button>
+            ))}
+          </div>
+          {isCharacterOwner && (
+            <button
+              onClick={() => importSharedEntry('status')}
+              className="shrink-0 rounded-xl border border-orange-700/50 bg-orange-900/35 px-4 py-2 text-sm font-bold leading-none text-orange-100 hover:bg-orange-900/55 cursor-pointer"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Import
+            </button>
+          )}
+          </div>
+        </div>
+        )}
+
+        {activeSheetTab === 'macros' && (
+        <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-amber-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
+          <div className="flex items-center justify-between gap-3 overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            <button
+              onClick={() => setActiveMacroCategoryId('main')}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                activeMacroCategoryId === 'main'
+                  ? 'border-amber-300/60 bg-amber-900/45 text-amber-100 shadow-[0_0_16px_rgba(251,191,36,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Main
+            </button>
+            <button
+              onClick={() => setActiveMacroCategoryId('rolls')}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                activeMacroCategoryId === 'rolls'
+                  ? 'border-purple-300/60 bg-purple-900/45 text-purple-100 shadow-[0_0_16px_rgba(168,85,247,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-purple-700/45 hover:text-purple-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Rolls
+            </button>
+            {diceMacroRootCategories.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => setActiveMacroCategoryId(folder.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                  activeMacroCategoryId === folder.id
+                    ? 'text-amber-50 shadow-[0_0_16px_rgba(251,191,36,0.16)]'
+                    : 'bg-stone-900/55 text-stone-300 hover:text-amber-100'
+                }`}
+                style={{
+                  fontFamily: "'Cinzel', serif",
+                  borderColor: activeMacroCategoryId === folder.id ? `${folder.color || '#b45309'}cc` : `${folder.color || '#334155'}66`,
+                  background: activeMacroCategoryId === folder.id
+                    ? `linear-gradient(135deg, ${folder.color || '#b45309'}66, rgba(12, 10, 9, 0.72))`
+                    : `linear-gradient(135deg, ${folder.color || '#334155'}22, rgba(12, 10, 9, 0.52))`,
+                }}
+              >
+                {folder.name || 'Untitled Folder'}
+              </button>
+            ))}
+          </div>
+          {isCharacterOwner && (
+            <button
+              onClick={() => importSharedEntry('macro')}
+              className="shrink-0 rounded-xl border border-amber-700/50 bg-amber-900/35 px-4 py-2 text-sm font-bold leading-none text-amber-100 hover:bg-amber-900/55 cursor-pointer"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Import
+            </button>
+          )}
+          </div>
+        </div>
+        )}
+
         <div className="space-y-8">
+          {activeSheetTab === 'bio' && (
           <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
             <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
             <div className="relative z-10">
@@ -3946,7 +5192,9 @@ export const Characters: React.FC = () => {
               </div>
             </div>
           </div>
+          )}
 
+          {activeSheetTab === 'macros' && (
           <div className="rounded-2xl border border-emerald-800/30 bg-gradient-to-br from-emerald-950/26 via-black/20 to-teal-950/16 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(6,78,59,0.16)]">
             <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-emerald-400/80 via-teal-400/45 to-transparent"></div>
             <div className="relative z-10">
@@ -3960,17 +5208,52 @@ export const Characters: React.FC = () => {
                   </h3>
                   <p className="text-xs text-emerald-100/55 mt-1">Fast rolls, macros, and Discord sending for this character sheet.</p>
                 </div>
-                <button
-                  onClick={() => setCollapsedSheetQuickRoll(prev => !prev)}
-                  className="px-3 py-1.5 text-xs text-emerald-100 border border-emerald-700/40 rounded hover:bg-emerald-900/20 cursor-pointer"
-                >
-                  {collapsedSheetQuickRoll ? 'Show' : 'Collapse'}
-                </button>
               </div>
-              {!collapsedSheetQuickRoll && renderDicePanel('sheet')}
+              {activeMacroCategoryId === 'main' && renderDicePanel('sheet', {
+                showDiscordQuick: true,
+                showMacros: true,
+                showResults: false,
+                macroFolderId: null,
+                macroFolderTitle: 'General Macros',
+                showMacroFolders: true,
+              })}
+              {activeMacroCategoryId === 'rolls' && renderDicePanel('sheet', {
+                showDiscordQuick: false,
+                showMacros: false,
+                showResults: true,
+              })}
+              {activeMacroCategoryId !== 'main' && activeMacroCategoryId !== 'rolls' && (
+                <>
+                  <div className="mb-6">
+                    {renderFolderTree(diceMacroFolders, {
+                      editable: isCharacterOwner,
+                      emptyLabel: `No subfolders in ${activeMacroCategory?.name || 'this folder'} yet.`,
+                      title: `${activeMacroCategory?.name || 'Macro Folder'} Subfolders`,
+                      description: 'Subfolders organize this macro category only and do not appear in the macro tab bar.',
+                      addLabel: '+ Add Subfolder',
+                      rootParentId: activeMacroCategoryId,
+                      onAddRoot: () => addDiceMacroFolder(activeMacroCategoryId),
+                      onAddChild: (parentId) => addDiceMacroFolder(parentId),
+                      onMove: moveDiceMacroFolder,
+                      onUpdate: updateDiceMacroFolder,
+                      onRemove: removeDiceMacroFolder,
+                    })}
+                  </div>
+                  {renderDicePanel('sheet', {
+                    showDiscordQuick: false,
+                    showMacros: true,
+                    showResults: false,
+                    macroFolderId: activeMacroCategoryId,
+                    macroFolderTitle: `${activeMacroCategory?.name || 'Folder'} Macros`,
+                  })}
+                </>
+              )}
             </div>
           </div>
+          )}
 
+          {activeSheetTab === 'attributes' && (
+          <>
           <div className="flex flex-col gap-6">
             <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
               <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/parchment.png')] pointer-events-none"></div>
@@ -4362,7 +5645,11 @@ export const Characters: React.FC = () => {
                 </div>
               </div>
             </div>
+          </div>
+          </>
+          )}
 
+            {activeSheetTab === 'statuses' && (
             <div className="border border-orange-700/35 bg-gradient-to-br from-orange-950/30 via-black/25 to-amber-950/20 p-6 rounded-2xl relative overflow-hidden shadow-[0_18px_50px_rgba(120,53,15,0.18)]">
               <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/parchment.png')] pointer-events-none"></div>
               <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-orange-400/80 via-amber-500/50 to-transparent"></div>
@@ -4384,66 +5671,226 @@ export const Characters: React.FC = () => {
                     >
                       <Share2 size={13} /> Share Web
                     </button>
-                    <button
-                      onClick={() => setCharStatuses([...charStatuses, { id: `st_${Date.now().toString(36)}`, name: 'New Status', duration: '1 round', description: '', effects: [], color: '#f59e0b', hidden: false }])}
-                      className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
-                    >
-                      + Add Status
-                    </button>
+                    {activeStatusCategoryId && (
+                      <button
+                        onClick={() => addStatus(activeStatusCategoryId)}
+                        className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                      >
+                        + Add Status to {activeStatusCategory?.name || 'Category'}
+                      </button>
+                    )}
                   </div>
                 </div>
 
+                {!activeStatusCategoryId && renderFolderTree(statusFolders, {
+                  editable: isCharacterOwner,
+                  emptyLabel: 'No status categories yet. Add a folder here and it will become a status tab.',
+                  title: 'Status Categories',
+                  description: 'Root folders appear as status category tabs. Subfolders stay inside their category.',
+                  addLabel: '+ Add Category',
+                  onAddRoot: () => addStatusFolder(),
+                  onAddChild: (parentId) => addStatusFolder(parentId),
+                  onMove: moveStatusFolder,
+                  onUpdate: updateStatusFolder,
+                  onRemove: removeStatusFolder,
+                })}
+
+                {!activeStatusCategoryId && (
+                  <div className="mb-6 rounded-xl border border-orange-800/20 bg-black/20 p-4">
+                    <div className="flex items-center justify-between mb-3">
+                      <div>
+                        <h4 className="text-lg font-bold text-orange-100" style={{ fontFamily: "'Cinzel', serif" }}>General Statuses</h4>
+                        <p className="text-sm text-stone-500">Statuses and effects that are not assigned to a category.</p>
+                      </div>
+                      {isCharacterOwner && (
+                        <button
+                          onClick={() => addStatus(null)}
+                          className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                        >
+                          + Add General Status
+                        </button>
+                      )}
+                    </div>
+                  </div>
+                )}
+
+                {activeStatusCategoryId && (
+                  <div className="mb-6">
+                    {renderFolderTree(statusFolders, {
+                      editable: isCharacterOwner,
+                      emptyLabel: `No subfolders in ${activeStatusCategory?.name || 'this category'} yet.`,
+                      title: `${activeStatusCategory?.name || 'Category'} Subfolders`,
+                      description: 'Subfolders organize this category only and do not appear in the category bar.',
+                      addLabel: '+ Add Subfolder',
+                      rootParentId: activeStatusCategoryId,
+                      onAddRoot: () => addStatusFolder(activeStatusCategoryId),
+                      onAddChild: (parentId) => addStatusFolder(parentId),
+                      onMove: moveStatusFolder,
+                      onUpdate: updateStatusFolder,
+                      onRemove: removeStatusFolder,
+                    })}
+                  </div>
+                )}
+
                 <div className="space-y-4">
-                  {charStatuses.map((status, idx) => (
+                  {visibleStatusItems.length === 0 ? (
+                    <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+                      {activeStatusCategoryId
+                        ? `No statuses in ${activeStatusCategory?.name || 'this category'} yet.`
+                        : 'No general statuses yet.'}
+                    </div>
+                  ) : visibleStatusItems
+                    .sort((a, b) => {
+                      const orderA = getFolderOrderIndex(statusFolders, a.folderId);
+                      const orderB = getFolderOrderIndex(statusFolders, b.folderId);
+                      if (orderA !== orderB) return orderA - orderB;
+                      return charStatuses.findIndex(status => status.id === a.id) - charStatuses.findIndex(status => status.id === b.id);
+                    })
+                    .map((status, idx, visibleStatuses) => {
+                    const actualIndex = charStatuses.findIndex(item => item.id === status.id);
+                    const collapsedAncestorId = getCollapsedFolderAncestor(statusFolders, collapsedStatusFolders, status.folderId);
+                    const effectiveFolderId = collapsedAncestorId ?? status.folderId ?? null;
+                    const previousCollapsedAncestorId = idx > 0 ? getCollapsedFolderAncestor(statusFolders, collapsedStatusFolders, visibleStatuses[idx - 1].folderId) : null;
+                    const previousFolderId = idx > 0 ? (previousCollapsedAncestorId ?? visibleStatuses[idx - 1].folderId ?? null) : null;
+                    const folderLabel = getFolderPathLabel(statusFolders, effectiveFolderId);
+                    const folderDepth = getFolderDepth(statusFolders, effectiveFolderId);
+                    const isFolderSectionCollapsed = !!collapsedAncestorId;
+                    const shouldShowFolderHeader = !!folderLabel && effectiveFolderId !== activeStatusCategoryId;
+                    return (
+                    <React.Fragment key={status.id}>
+                    {shouldShowFolderHeader && previousFolderId !== effectiveFolderId && (
+                      <div
+                        className="relative rounded-lg border px-4 py-2 text-sm font-bold tracking-wide text-amber-100 flex items-center justify-between gap-3"
+                        style={{
+                          marginLeft: `${Math.max(0, folderDepth - 1) * 20}px`,
+                          borderColor: `${statusFolders.find(folder => folder.id === effectiveFolderId)?.color || '#f59e0b'}55`,
+                          background: `${statusFolders.find(folder => folder.id === effectiveFolderId)?.color || '#f59e0b'}18`,
+                        }}
+                      >
+                        {folderDepth > 0 && (
+                          <div
+                            className="absolute -left-4 top-1/2 h-px w-4"
+                            style={{ backgroundColor: `${statusFolders.find(folder => folder.id === effectiveFolderId)?.color || '#f59e0b'}88` }}
+                          />
+                        )}
+                        <span>{folderLabel}</span>
+                        <button
+                          onClick={() => effectiveFolderId && setCollapsedStatusFolders(prev => prev.includes(effectiveFolderId) ? prev.filter(id => id !== effectiveFolderId) : [...prev, effectiveFolderId])}
+                          className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer shrink-0"
+                        >
+                          {isFolderSectionCollapsed ? 'Show' : 'Collapse'}
+                        </button>
+                      </div>
+                    )}
+                    {!isFolderSectionCollapsed && (
+                    <div className="relative" style={{ marginLeft: `${folderDepth * 20}px` }}>
+                    {effectiveFolderId && (
+                      <div
+                        className="absolute -left-4 top-0 bottom-0 w-px"
+                        style={{ background: `linear-gradient(to bottom, ${statusFolders.find(folder => folder.id === effectiveFolderId)?.color || '#f59e0b'}aa, ${statusFolders.find(folder => folder.id === effectiveFolderId)?.color || '#f59e0b'}22)` }}
+                      />
+                    )}
+                    {actualIndex >= 0 && (
                     <div id={`status-${status.id}`} key={status.id} className="rounded-xl p-4 shadow-lg flex flex-col gap-3 border" style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
-                      <div className="flex items-center justify-between gap-3">
+                      <div className="flex items-start justify-between gap-3">
+                        <div className="flex items-center gap-2">
+                          <span
+                            className="inline-block h-3 w-3 rounded-full border border-white/30"
+                            style={{ backgroundColor: status.color || '#f59e0b' }}
+                          />
+                          <span className="text-xs uppercase tracking-[0.22em] text-stone-300">Status Card</span>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          <button
+                            onClick={() => updateStatus(status.id, current => ({ ...current, hidden: !current.hidden }))}
+                            className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                          >
+                            {status.hidden ? 'Show' : 'Hide'}
+                          </button>
+                          <button
+                            onClick={() => shareStatus(status)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-sky-300 hover:text-sky-200 border border-sky-800/30 rounded hover:bg-sky-900/20 cursor-pointer"
+                          >
+                            <Share2 size={12} /> Share
+                          </button>
+                          <button
+                            onClick={() => openHomebrewViewer('status', status.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
+                          >
+                            <Share2 size={12} /> Share Web
+                          </button>
+                          <button
+                            onClick={() => exportCharacterEntry('status', status, statusFolders.find(folder => folder.id === status.folderId)?.name || null)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
+                          >
+                            Export
+                          </button>
+                          {isCharacterOwner && (
+                            <>
+                              <button
+                                onClick={() => moveStatus(status.id, 'up')}
+                                disabled={idx === 0}
+                                className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowUp size={15} />
+                              </button>
+                              <button
+                                onClick={() => moveStatus(status.id, 'down')}
+                                disabled={idx === visibleStatuses.length - 1}
+                                className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                              >
+                                <ArrowDown size={15} />
+                              </button>
+                              <button
+                                onClick={() => removeStatus(status.id)}
+                                className="p-1 text-stone-500 hover:text-red-400 cursor-pointer"
+                              >
+                                <Trash2 size={16} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-3 items-start">
                         <input
                           type="text"
                           value={status.name}
-                          onChange={(e) => {
-                            const next = [...charStatuses];
-                            next[idx].name = e.target.value;
-                            setCharStatuses(next);
-                          }}
-                          className="bg-transparent text-base font-bold text-amber-200 focus:outline-none border-b border-transparent focus:border-amber-600/50 w-40"
+                          onChange={(e) => updateStatus(status.id, current => ({ ...current, name: e.target.value }))}
+                          disabled={!isCharacterOwner}
+                          className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                          placeholder="Status name"
                         />
                         <input
                           type="text"
                           value={status.duration}
-                          onChange={(e) => {
-                            const next = [...charStatuses];
-                            next[idx].duration = e.target.value;
-                            setCharStatuses(next);
-                          }}
-                          className="bg-stone-900/40 border border-stone-800/40 rounded px-2 py-1 text-xs text-amber-500 w-24 focus:outline-none"
+                          onChange={(e) => updateStatus(status.id, current => ({ ...current, duration: e.target.value }))}
+                          disabled={!isCharacterOwner}
+                          className="min-w-[140px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                           placeholder="Duration"
                         />
-                        <input
-                          type="color"
-                          value={status.color || '#f59e0b'}
-                          onChange={(e) => {
-                            const next = [...charStatuses];
-                            next[idx].color = e.target.value;
-                            setCharStatuses(next);
-                          }}
-                          className="h-9 w-12 rounded border border-stone-700 bg-stone-900/60 px-1 py-1 cursor-pointer"
-                        />
-                        <button
-                          onClick={() => {
-                            const next = [...charStatuses];
-                            next[idx].hidden = !next[idx].hidden;
-                            setCharStatuses(next);
-                          }}
-                          className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                        <div className="flex items-center gap-2 min-w-[150px]">
+                          <label className="text-xs text-stone-300 whitespace-nowrap">Color</label>
+                          <input
+                            type="color"
+                            value={status.color || '#f59e0b'}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, color: e.target.value }))}
+                            disabled={!isCharacterOwner}
+                            className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
+                          />
+                        </div>
+                        <select
+                          value={status.folderId ?? ''}
+                          onChange={(e) => updateStatus(status.id, current => ({ ...current, folderId: e.target.value || null }))}
+                          disabled={!isCharacterOwner}
+                          className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                         >
-                          {status.hidden ? 'Show' : 'Hide'}
-                        </button>
-                        <button
-                          onClick={() => setCharStatuses(charStatuses.filter((_, i) => i !== idx))}
-                          className="text-stone-600 hover:text-red-400 cursor-pointer ml-auto"
-                        >
-                          <Trash2 size={16} />
-                        </button>
+                          <option value="">General Statuses</option>
+                          {getFolderOptions(statusFolders).map((option) => (
+                            <option key={option.id} value={option.id}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
                       </div>
                       {!status.hidden && (
                       <>
@@ -4452,7 +5899,7 @@ export const Characters: React.FC = () => {
                         value={status.description}
                         onChange={(e) => {
                           const next = [...charStatuses];
-                          next[idx].description = e.target.value;
+                          next[actualIndex].description = e.target.value;
                           setCharStatuses(next);
                         }}
                         placeholder="Description of the status"
@@ -4465,12 +5912,6 @@ export const Characters: React.FC = () => {
                       >
                         {expandedStatusDescriptions.includes(status.id) ? 'Hide' : 'Show More'}
                       </button>
-                      <button
-                        onClick={() => openHomebrewViewer('status', status.id)}
-                        className="inline-flex items-center gap-1 text-sm text-sky-300 hover:text-sky-200 cursor-pointer self-start"
-                      >
-                        <Share2 size={14} /> Share Web
-                      </button>
 
                       {/* Effects area */}
                       <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
@@ -4479,7 +5920,7 @@ export const Characters: React.FC = () => {
                           <button
                             onClick={() => {
                               const next = [...charStatuses];
-                              next[idx].effects = [...(next[idx].effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }];
+                              next[actualIndex].effects = [...(next[actualIndex].effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }];
                               setCharStatuses(next);
                             }}
                             className="text-sm bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300"
@@ -4493,7 +5934,7 @@ export const Characters: React.FC = () => {
                               <button
                                 onClick={() => {
                                   const next = [...charStatuses];
-                                  next[idx].effects[effIdx].active = !(next[idx].effects[effIdx].active ?? true);
+                                  next[actualIndex].effects[effIdx].active = !(next[actualIndex].effects[effIdx].active ?? true);
                                   setCharStatuses(next);
                                 }}
                                 className={`px-2 py-1 rounded border text-sm cursor-pointer ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
@@ -4505,7 +5946,7 @@ export const Characters: React.FC = () => {
                                 value={effect.targetId}
                                 onChange={(e) => {
                                   const next = [...charStatuses];
-                                  next[idx].effects[effIdx].targetId = e.target.value;
+                                  next[actualIndex].effects[effIdx].targetId = e.target.value;
                                   setCharStatuses(next);
                                 }}
                                 placeholder="Target ID (e.g. wis_mod)"
@@ -4516,7 +5957,7 @@ export const Characters: React.FC = () => {
                                 value={effect.value}
                                 onChange={(e) => {
                                   const next = [...charStatuses];
-                                  next[idx].effects[effIdx].value = e.target.value;
+                                  next[actualIndex].effects[effIdx].value = e.target.value;
                                   setCharStatuses(next);
                                 }}
                                 placeholder="Value (e.g. -2)"
@@ -4525,7 +5966,7 @@ export const Characters: React.FC = () => {
                               <button
                                 onClick={() => {
                                   const next = [...charStatuses];
-                                  next[idx].effects = next[idx].effects.filter((_, i) => i !== effIdx);
+                                  next[actualIndex].effects = next[actualIndex].effects.filter((_, i) => i !== effIdx);
                                   setCharStatuses(next);
                                 }}
                                 className="text-stone-600 hover:text-red-400 cursor-pointer ml-auto"
@@ -4540,11 +5981,17 @@ export const Characters: React.FC = () => {
                       </>
                       )}
                     </div>
-                  ))}
+                    )}
+                    </div>
+                    )}
+                    </React.Fragment>
+                  )})}
                 </div>
               </div>
             </div>
+            )}
 
+                {activeSheetTab === 'inventory' && (
                 <div className="rounded-2xl border border-sky-800/30 bg-gradient-to-br from-sky-950/28 via-black/20 to-cyan-950/18 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(8,47,73,0.16)]">
                   <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-sky-400/80 via-cyan-500/45 to-transparent"></div>
                   <div className="flex items-center justify-between border-b border-sky-800/30 pb-3 mb-4 relative z-10">
@@ -4566,12 +6013,12 @@ export const Characters: React.FC = () => {
                       >
                         <Share2 size={13} /> Share Web
                       </button>
-                      {canEditInventory && (
+                      {canEditInventory && activeInventoryCategoryId && (
                         <button
-                          onClick={addInventoryItem}
+                          onClick={() => addInventoryItem(activeInventoryCategoryId)}
                           className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
                         >
-                          + Add Item
+                          + Add Item to {activeInventoryCategory?.name || 'Category'}
                         </button>
                       )}
                     </div>
@@ -4583,9 +6030,12 @@ export const Characters: React.FC = () => {
                     </div>
                   )}
 
-                  {renderFolderTree(inventoryFolders, {
+                  {!activeInventoryCategoryId && renderFolderTree(inventoryFolders, {
                     editable: canEditInventory,
-                    emptyLabel: 'No inventory folders yet.',
+                    emptyLabel: 'No inventory categories yet. Add a folder here and it will become an inventory tab.',
+                    title: 'Inventory Categories',
+                    description: 'Root folders appear as inventory category tabs. Subfolders stay inside their category.',
+                    addLabel: '+ Add Category',
                     onAddRoot: () => addInventoryFolder(),
                     onAddChild: (parentId) => addInventoryFolder(parentId),
                     onMove: moveInventoryFolder,
@@ -4593,6 +6043,7 @@ export const Characters: React.FC = () => {
                     onRemove: removeInventoryFolder,
                   })}
 
+                  {!activeInventoryCategoryId && (
                   <div className="mb-6 rounded-xl border border-amber-800/20 bg-black/20 p-4">
                     <div className="flex items-center justify-between mb-3">
                       <div>
@@ -4622,34 +6073,109 @@ export const Characters: React.FC = () => {
                       </div>
                     ) : (
                       <div className="space-y-2">
-                        {charGeneralItems.map((item) => {
+                        {charGeneralItems.map((item, itemIndex) => {
+                          const itemState = normalizeGeneralItem(item);
                           const isExpanded = expandedGeneralItemDescriptions.includes(item.id);
-                          const rarityKey = item.rarity || 'common';
+                          const rarityKey = itemState.rarity || 'common';
                           const rarityStyle = INVENTORY_RARITY_STYLES[rarityKey];
                           return (
-                            <div key={item.id} className={`rounded-lg border p-3 flex flex-col gap-2 ${rarityStyle.card}`}>
-                              <div className="flex flex-wrap items-center gap-2">
+                            <div key={item.id} className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${itemState.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
+                              <div className="flex items-start justify-between gap-3">
+                                <div className="flex flex-wrap items-center gap-2">
+                                  <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] border rounded-full ${rarityStyle.badge}`}>
+                                    {rarityStyle.label}
+                                  </span>
+                                  {itemState.equipped && (
+                                    <span className="px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] border rounded-full bg-amber-400/20 text-amber-100 border-amber-300/40">
+                                      Equipped
+                                    </span>
+                                  )}
+                                </div>
+                                <div className="flex items-center gap-1">
+                                  <button
+                                    onClick={() => updateGeneralItem(item.id, current => ({ ...current, hidden: !current.hidden }))}
+                                    className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                                  >
+                                    {itemState.hidden ? 'Show' : 'Hide'}
+                                  </button>
+                                  <button
+                                    onClick={() => shareGeneralItem(itemState)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-sky-300 hover:text-sky-200 border border-sky-800/30 rounded hover:bg-sky-900/20 cursor-pointer"
+                                  >
+                                    <Share2 size={12} /> Share
+                                  </button>
+                                  <button
+                                    onClick={() => openHomebrewViewer('general-item', item.id)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
+                                  >
+                                    <Share2 size={12} /> Share Web
+                                  </button>
+                                  <button
+                                    onClick={() => exportCharacterEntry('item', itemState, null)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
+                                  >
+                                    Export
+                                  </button>
+                                  {canEditInventory ? (
+                                    <>
+                                      <button
+                                        onClick={() => moveGeneralItem(item.id, 'up')}
+                                        disabled={itemIndex === 0}
+                                        className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                      >
+                                        <ArrowUp size={15} />
+                                      </button>
+                                      <button
+                                        onClick={() => moveGeneralItem(item.id, 'down')}
+                                        disabled={itemIndex === charGeneralItems.length - 1}
+                                        className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
+                                      >
+                                        <ArrowDown size={15} />
+                                      </button>
+                                      <button
+                                        onClick={() => removeGeneralItem(item.id)}
+                                        className="p-1 text-stone-600 hover:text-red-400 cursor-pointer"
+                                      >
+                                        <Trash2 size={16} />
+                                      </button>
+                                    </>
+                                  ) : null}
+                                </div>
+                              </div>
+
+                              <div className="flex flex-wrap gap-3 items-start">
                                 <input
                                   type="text"
-                                  value={item.name}
+                                  value={itemState.name}
                                   onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, name: e.target.value }))}
                                   disabled={!canEditInventory}
-                                  className="min-w-[180px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                  placeholder="Potion of Healing"
+                                  className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                  placeholder="Item name"
                                 />
+                                <div className="min-w-[170px] flex-1 sm:flex-none grid grid-cols-[1fr_auto] gap-2">
                                 <input
                                   type="number"
                                   min={0}
-                                  value={item.quantity}
+                                  value={itemState.quantity}
                                   onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, quantity: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
                                   disabled={!canEditInventory}
-                                  className="w-24 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
-                                />
+                                  className="min-w-0 w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60 font-mono"
+                                  placeholder="Qty"
+                                  />
+                                  <button
+                                    onClick={() => canEditInventory && updateGeneralItem(item.id, current => ({ ...current, equipped: !current.equipped, status: !current.equipped ? 'equipped' : (current.status === 'equipped' ? 'unequipped' : current.status) }))}
+                                    disabled={!canEditInventory}
+                                    className={`px-2 rounded border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${itemState.equipped ? 'bg-amber-400/20 border-amber-300/60 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.35)]' : 'bg-stone-900/60 border-stone-700 text-stone-400 hover:text-amber-200'}`}
+                                    title={itemState.equipped ? 'Unequip item' : 'Equip item'}
+                                  >
+                                    <Shield size={15} />
+                                  </button>
+                                </div>
                                 <select
                                   value={rarityKey}
                                   onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterGeneralItem['rarity'] }))}
                                   disabled={!canEditInventory}
-                                  className="min-w-[140px] bg-stone-900/60 border border-stone-800 rounded px-2 py-2 text-xs text-amber-100 focus:outline-none disabled:opacity-60"
+                                  className="min-w-[180px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                                 >
                                   {INVENTORY_RARITIES.map((rarity) => (
                                     <option key={rarity} value={rarity}>
@@ -4657,43 +6183,208 @@ export const Characters: React.FC = () => {
                                     </option>
                                   ))}
                                 </select>
-                                <button
-                                  onClick={() => toggleGeneralItemDescription(item.id)}
-                                  className="px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded cursor-pointer"
-                                >
-                                  {isExpanded ? 'Hide' : 'Show'}
-                                </button>
-                                <button
-                                  onClick={() => shareGeneralItem(item)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-sky-900/30 border border-sky-800/40 rounded text-xs text-sky-200 hover:bg-sky-900/50 cursor-pointer"
-                                >
-                                  <Share2 size={13} /> Share
-                                </button>
-                                <button
-                                  onClick={() => openHomebrewViewer('general-item', item.id)}
-                                  className="inline-flex items-center gap-1 px-2.5 py-1.5 bg-indigo-900/30 border border-indigo-800/40 rounded text-xs text-indigo-200 hover:bg-indigo-900/50 cursor-pointer"
-                                >
-                                  <Share2 size={13} /> Share Web
-                                </button>
-                                {canEditInventory && (
-                                  <button
-                                    onClick={() => removeGeneralItem(item.id)}
-                                    className="p-1.5 text-stone-500 hover:text-red-400 cursor-pointer"
-                                  >
-                                    <Trash2 size={14} />
-                                  </button>
-                                )}
-                              </div>
-                              {isExpanded && (
-                                <textarea
-                                  ref={(el) => { generalItemDescriptionRefs.current[item.id] = el; }}
-                                  value={item.description}
-                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, description: e.target.value }))}
+                                <select
+                                  value="general"
+                                  onChange={(e) => {
+                                    if (e.target.value !== 'general') {
+                                      moveGeneralItemToInventoryFolder(item.id, e.target.value);
+                                    }
+                                  }}
                                   disabled={!canEditInventory}
-                                  rows={4}
-                                  placeholder="Description"
-                                  className="w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none resize-none disabled:opacity-60"
-                                />
+                                  className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                >
+                                  <option value="general">General Items</option>
+                                  {getFolderOptions(inventoryFolders).map(option => (
+                                    <option key={option.id} value={option.id}>
+                                      {option.label}
+                                    </option>
+                                  ))}
+                                </select>
+                              </div>
+                              {!itemState.hidden && (
+                              <>
+                                <div className="space-y-2">
+                                  <textarea
+                                    ref={(el) => { generalItemDescriptionRefs.current[item.id] = el; }}
+                                    value={itemState.description}
+                                    onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, description: e.target.value }))}
+                                    disabled={!canEditInventory}
+                                    rows={isExpanded ? 6 : 2}
+                                    placeholder="Description, lore, notes..."
+                                    className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
+                                  />
+                                  <div className="flex items-center gap-3">
+                                    <button onClick={() => toggleGeneralItemDescription(item.id)} className="text-base text-amber-300 hover:text-amber-200 cursor-pointer">
+                                      {isExpanded ? 'Hide' : 'Show More'}
+                                    </button>
+                                  </div>
+                                </div>
+                                <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <label className="text-sm font-bold text-stone-300">Item Macros</label>
+                                    {canEditInventory && (
+                                      <button onClick={() => addGeneralMacro(item.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                        + Add Macro
+                                      </button>
+                                    )}
+                                  </div>
+                                  {(itemState.macros || []).length === 0 ? (
+                                    <span className="text-[10px] text-stone-600 italic">No macros added.</span>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {(itemState.macros || []).map((macro) => (
+                                        <div key={macro.id} className="grid grid-cols-1 md:grid-cols-[140px_1fr_auto_auto] gap-2 items-center">
+                                          <input value={macro.name} onChange={(e) => updateGeneralMacro(item.id, macro.id, current => ({ ...current, name: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60" />
+                                          <input value={macro.formula} onChange={(e) => updateGeneralMacro(item.id, macro.id, current => ({ ...current, formula: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60" />
+                                          <button onClick={() => rollGeneralMacro(itemState, macro)} className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer">
+                                            <Dices size={12} /> Roll
+                                          </button>
+                                          {canEditInventory && (
+                                            <button onClick={() => removeGeneralMacro(item.id, macro.id)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                              <Trash2 size={14} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <label className="text-sm font-bold text-stone-300">Actions</label>
+                                    {canEditInventory && (
+                                      <button onClick={() => addGeneralAction(item.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                        + Add Action
+                                      </button>
+                                    )}
+                                  </div>
+                                  {(itemState.actions || []).length === 0 ? (
+                                    <span className="text-[10px] text-stone-600 italic">No actions added.</span>
+                                  ) : (
+                                    <div className="space-y-3">
+                                      {(itemState.actions || []).map((action) => {
+                                        const isActionExpanded = expandedInventoryActionDescriptions.includes(action.id);
+                                        return (
+                                          <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
+                                            <div className="flex flex-wrap gap-2 items-start mb-2">
+                                              <input value={action.name} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, name: e.target.value }))} disabled={!canEditInventory} className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Action name" />
+                                              <input value={action.cost} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))} disabled={!canEditInventory} className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Cost" />
+                                              <input value={action.usageRemaining} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))} disabled={!canEditInventory} className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Remaining usage" />
+                                              {canEditInventory && (
+                                                <button onClick={() => removeGeneralAction(item.id, action.id)} className="p-2 text-stone-500 hover:text-red-400 cursor-pointer">
+                                                  <Trash2 size={14} />
+                                                </button>
+                                              )}
+                                            </div>
+                                            <textarea
+                                              ref={(el) => { inventoryActionDescriptionRefs.current[action.id] = el; }}
+                                              value={action.description}
+                                              onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, description: e.target.value }))}
+                                              disabled={!canEditInventory}
+                                              rows={isActionExpanded ? 6 : 2}
+                                              className="w-full bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none resize-none disabled:opacity-60"
+                                              placeholder="Action description"
+                                            />
+                                            <button onClick={() => toggleInventoryActionDescription(action.id)} className="mt-2 text-sm text-amber-300 hover:text-amber-200 cursor-pointer">
+                                              {isActionExpanded ? 'Hide' : 'Show More'}
+                                            </button>
+                                            <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                              <div className="flex items-center justify-between mb-2">
+                                                <label className="text-sm font-bold text-stone-300">Action Macros</label>
+                                                {canEditInventory && (
+                                                  <button onClick={() => addGeneralActionMacro(item.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                                    + Add Macro
+                                                  </button>
+                                                )}
+                                              </div>
+                                              {(action.macros || []).length === 0 ? (
+                                                <span className="text-xs text-stone-600 italic">No macros added.</span>
+                                              ) : (
+                                                <div className="space-y-2">
+                                                  {(action.macros || []).map((macro) => (
+                                                    <div key={macro.id} className="grid grid-cols-1 md:grid-cols-[140px_1fr_auto_auto] gap-2 items-center">
+                                                      <input value={macro.name} onChange={(e) => updateGeneralActionMacro(item.id, action.id, macro.id, current => ({ ...current, name: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60" />
+                                                      <input value={macro.formula} onChange={(e) => updateGeneralActionMacro(item.id, action.id, macro.id, current => ({ ...current, formula: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60" />
+                                                      <button onClick={() => rollGeneralActionMacro(itemState, action, macro)} className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer">
+                                                        <Dices size={12} /> Roll
+                                                      </button>
+                                                      {canEditInventory && (
+                                                        <button onClick={() => removeGeneralActionMacro(item.id, action.id, macro.id)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                                          <Trash2 size={14} />
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                            <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                                              <div className="flex items-center justify-between mb-2">
+                                                <label className="text-sm font-bold text-stone-300">Action Effects</label>
+                                                {canEditInventory && (
+                                                  <button onClick={() => addGeneralActionEffect(item.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                                    + Add Effect
+                                                  </button>
+                                                )}
+                                              </div>
+                                              {(action.effects || []).length === 0 ? (
+                                                <span className="text-[10px] text-stone-600 italic">No effects added.</span>
+                                              ) : (
+                                                <div className="space-y-2">
+                                                  {(action.effects || []).map((effect, effectIndex) => (
+                                                    <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
+                                                      <button onClick={() => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))} className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}>
+                                                        {(effect.active ?? true) ? 'On' : 'Off'}
+                                                      </button>
+                                                      <input value={effect.targetId} onChange={(e) => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))} disabled={!canEditInventory} placeholder="Target ID (e.g. str_mod)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60" />
+                                                      <input value={effect.value} onChange={(e) => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))} disabled={!canEditInventory} placeholder="Value (e.g. +2)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60" />
+                                                      {canEditInventory && (
+                                                        <button onClick={() => removeGeneralActionEffect(item.id, action.id, effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                                          <Trash2 size={14} />
+                                                        </button>
+                                                      )}
+                                                    </div>
+                                                  ))}
+                                                </div>
+                                              )}
+                                            </div>
+                                          </div>
+                                        );
+                                      })}
+                                    </div>
+                                  )}
+                                </div>
+                                <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+                                  <div className="flex items-center justify-between mb-2">
+                                    <label className="text-sm font-bold text-stone-300">Effects {itemState.equipped ? '(Active)' : '(Inactive until equipped)'}</label>
+                                    {canEditInventory && (
+                                      <button onClick={() => addGeneralEffect(item.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                        + Add Effect
+                                      </button>
+                                    )}
+                                  </div>
+                                  {(itemState.effects || []).length === 0 ? (
+                                    <span className="text-[10px] text-stone-600 italic">No effects added.</span>
+                                  ) : (
+                                    <div className="space-y-2">
+                                      {(itemState.effects || []).map((effect, effectIndex) => (
+                                        <div key={`${item.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
+                                          <button onClick={() => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))} className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}>
+                                            {(effect.active ?? true) ? 'On' : 'Off'}
+                                          </button>
+                                          <input value={effect.targetId} onChange={(e) => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, targetId: e.target.value }))} disabled={!canEditInventory} placeholder="Target ID (e.g. str_mod)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60" />
+                                          <input value={effect.value} onChange={(e) => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, value: e.target.value }))} disabled={!canEditInventory} placeholder="Value (e.g. +2)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60" />
+                                          {canEditInventory && (
+                                            <button onClick={() => removeGeneralEffect(item.id, effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                              <Trash2 size={14} />
+                                            </button>
+                                          )}
+                                        </div>
+                                      ))}
+                                    </div>
+                                  )}
+                                </div>
+                              </>
                               )}
                             </div>
                           );
@@ -4701,15 +6392,33 @@ export const Characters: React.FC = () => {
                       </div>
                     )}
                   </div>
+                  )}
 
-                  {charInventory.length === 0 ? (
+                  {activeInventoryCategoryId && (
+                  <div className="mb-6">
+                    {renderFolderTree(inventoryFolders, {
+                      editable: canEditInventory,
+                      emptyLabel: `No subfolders in ${activeInventoryCategory?.name || 'this category'} yet.`,
+                      title: `${activeInventoryCategory?.name || 'Category'} Subfolders`,
+                      description: 'Subfolders organize this category only and do not appear in the category bar.',
+                      addLabel: '+ Add Subfolder',
+                      rootParentId: activeInventoryCategoryId,
+                      onAddRoot: () => addInventoryFolder(activeInventoryCategoryId),
+                      onAddChild: (parentId) => addInventoryFolder(parentId),
+                      onMove: moveInventoryFolder,
+                      onUpdate: updateInventoryFolder,
+                      onRemove: removeInventoryFolder,
+                    })}
+                  </div>
+                  )}
+
+                  {activeInventoryCategoryId && visibleInventoryItems.length === 0 ? (
                     <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
-                      No inventory items yet.
+                      No items in {activeInventoryCategory?.name || 'this category'} yet.
                     </div>
-                  ) : (
+                  ) : activeInventoryCategoryId ? (
                     <div className="space-y-4">
-                      {charInventory
-                        .filter(item => isFolderVisible(inventoryFolders, item.folderId))
+                      {visibleInventoryItems
                         .sort((a, b) => {
                           const orderA = getFolderOrderIndex(inventoryFolders, a.folderId);
                           const orderB = getFolderOrderIndex(inventoryFolders, b.folderId);
@@ -4728,9 +6437,10 @@ export const Characters: React.FC = () => {
                         const folderLabel = getFolderPathLabel(inventoryFolders, effectiveFolderId);
                         const folderDepth = getFolderDepth(inventoryFolders, effectiveFolderId);
                         const isFolderSectionCollapsed = !!collapsedAncestorId;
+                        const shouldShowFolderHeader = !!folderLabel && effectiveFolderId !== activeInventoryCategoryId;
                         return (
                         <React.Fragment key={item.id}>
-                        {folderLabel && previousFolderId !== effectiveFolderId && (
+                        {shouldShowFolderHeader && previousFolderId !== effectiveFolderId && (
                           <div
                             className="relative rounded-lg border px-4 py-2 text-sm font-bold tracking-wide text-amber-100 flex items-center justify-between gap-3"
                             style={{
@@ -4787,6 +6497,24 @@ export const Characters: React.FC = () => {
                               >
                                 {isCollapsed ? 'Show' : 'Hide'}
                               </button>
+                              <button
+                                onClick={() => shareInventoryItem(item)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-sky-300 hover:text-sky-200 border border-sky-800/30 rounded hover:bg-sky-900/20 cursor-pointer"
+                              >
+                                <Share2 size={12} /> Share
+                              </button>
+                              <button
+                                onClick={() => openHomebrewViewer('inventory-item', item.id)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
+                              >
+                                <Share2 size={12} /> Share Web
+                              </button>
+                              <button
+                                onClick={() => exportCharacterEntry('item', item, inventoryFolders.find(folder => folder.id === item.folderId)?.name || null)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
+                              >
+                                Export
+                              </button>
                               {canEditInventory ? (
                                 <>
                                   <button
@@ -4842,14 +6570,6 @@ export const Characters: React.FC = () => {
                                 <Shield size={15} />
                               </button>
                             </div>
-                            <input
-                              type="text"
-                              value={item.status}
-                              onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, status: e.target.value }))}
-                              disabled={!canEditInventory}
-                              className="min-w-[180px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="unequipped"
-                            />
                             <select
                               value={rarityKey}
                               onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterInventoryItem['rarity'] }))}
@@ -4863,12 +6583,18 @@ export const Characters: React.FC = () => {
                               ))}
                             </select>
                             <select
-                              value={item.folderId ?? ''}
-                              onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, folderId: e.target.value || null }))}
+                              value={item.folderId ?? 'general'}
+                              onChange={(e) => {
+                                if (e.target.value === 'general') {
+                                  moveInventoryItemToGeneralItems(item.id);
+                                  return;
+                                }
+                                updateInventoryItem(item.id, current => ({ ...current, folderId: e.target.value }));
+                              }}
                               disabled={!canEditInventory}
                               className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                             >
-                              <option value="">No folder</option>
+                              <option value="general">General Items</option>
                               {getFolderOptions(inventoryFolders).map(option => (
                                 <option key={option.id} value={option.id}>
                                   {option.label}
@@ -4895,18 +6621,6 @@ export const Characters: React.FC = () => {
                                 className="text-base text-amber-300 hover:text-amber-200 cursor-pointer"
                               >
                                 {isDescriptionExpanded ? 'Hide' : 'Show More'}
-                              </button>
-                              <button
-                                onClick={() => shareInventoryItem(item)}
-                                className="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 cursor-pointer"
-                              >
-                                <Share2 size={12} /> Share
-                              </button>
-                              <button
-                                onClick={() => openHomebrewViewer('inventory-item', item.id)}
-                                className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:text-indigo-200 cursor-pointer"
-                              >
-                                <Share2 size={12} /> Share Web
                               </button>
                             </div>
                           </div>
@@ -5218,9 +6932,15 @@ export const Characters: React.FC = () => {
                         </React.Fragment>
                       )})}
                     </div>
+                  ) : (
+                    <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
+                      Select an inventory category to view or add items.
+                    </div>
                   )}
                 </div>
+                )}
 
+                {activeSheetTab === 'spells' && (
                 <div className="rounded-2xl border border-violet-800/30 bg-gradient-to-br from-violet-950/30 via-black/22 to-fuchsia-950/16 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(76,29,149,0.18)]">
                   <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-violet-400/85 via-fuchsia-500/45 to-transparent"></div>
                   <div className="flex items-center justify-between border-b border-violet-800/30 pb-3 mb-4 relative z-10">
@@ -5242,12 +6962,12 @@ export const Characters: React.FC = () => {
                       >
                         <Share2 size={13} /> Share Web
                       </button>
-                      {isCharacterOwner && (
+                      {isCharacterOwner && activeSpellCategoryId && (
                         <button
-                          onClick={addSpell}
+                          onClick={() => addSpell(activeSpellCategoryId)}
                           className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
                         >
-                          + Add Spell
+                          + Add Spell to {activeSpellCategory?.name || 'Category'}
                         </button>
                       )}
                     </div>
@@ -5259,9 +6979,12 @@ export const Characters: React.FC = () => {
                     </div>
                   )}
 
-                  {renderFolderTree(spellFolders, {
+                  {!activeSpellCategoryId && renderFolderTree(spellFolders, {
                     editable: isCharacterOwner,
-                    emptyLabel: 'No spell folders yet.',
+                    emptyLabel: 'No spell categories yet. Add a folder here and it will become a spell tab.',
+                    title: 'Spell Categories',
+                    description: 'Root folders appear as spell category tabs. Subfolders stay inside their category.',
+                    addLabel: '+ Add Category',
                     onAddRoot: () => addSpellFolder(),
                     onAddChild: (parentId) => addSpellFolder(parentId),
                     onMove: moveSpellFolder,
@@ -5269,14 +6992,52 @@ export const Characters: React.FC = () => {
                     onRemove: removeSpellFolder,
                   })}
 
-                  {charSpells.length === 0 ? (
+                  {!activeSpellCategoryId && (
+                    <div className="mb-6 rounded-xl border border-violet-800/20 bg-black/20 p-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <div>
+                          <h4 className="text-lg font-bold text-violet-100" style={{ fontFamily: "'Cinzel', serif" }}>General Spells</h4>
+                          <p className="text-sm text-stone-500">Spells and abilities that are not assigned to a category.</p>
+                        </div>
+                        {isCharacterOwner && (
+                          <button
+                            onClick={() => addSpell(null)}
+                            className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
+                          >
+                            + Add General Spell
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+
+                  {activeSpellCategoryId && (
+                  <div className="mb-6">
+                    {renderFolderTree(spellFolders, {
+                      editable: isCharacterOwner,
+                      emptyLabel: `No subfolders in ${activeSpellCategory?.name || 'this category'} yet.`,
+                      title: `${activeSpellCategory?.name || 'Category'} Subfolders`,
+                      description: 'Subfolders organize this category only and do not appear in the category bar.',
+                      addLabel: '+ Add Subfolder',
+                      rootParentId: activeSpellCategoryId,
+                      onAddRoot: () => addSpellFolder(activeSpellCategoryId),
+                      onAddChild: (parentId) => addSpellFolder(parentId),
+                      onMove: moveSpellFolder,
+                      onUpdate: updateSpellFolder,
+                      onRemove: removeSpellFolder,
+                    })}
+                  </div>
+                  )}
+
+                  {visibleSpellItems.length === 0 ? (
                     <div className="text-sm text-stone-500 italic border border-dashed border-stone-700 rounded-lg px-3 py-4 text-center">
-                      No spells or abilities yet.
+                      {activeSpellCategoryId
+                        ? `No spells in ${activeSpellCategory?.name || 'this category'} yet.`
+                        : 'No general spells or abilities yet.'}
                     </div>
                   ) : (
                     <div className="space-y-4">
-                      {charSpells
-                        .filter(spell => isFolderVisible(spellFolders, spell.folderId))
+                      {visibleSpellItems
                         .sort((a, b) => {
                           const orderA = getFolderOrderIndex(spellFolders, a.folderId);
                           const orderB = getFolderOrderIndex(spellFolders, b.folderId);
@@ -5288,25 +7049,28 @@ export const Characters: React.FC = () => {
                         const effectiveFolderId = collapsedAncestorId ?? spell.folderId ?? null;
                         const previousCollapsedAncestorId = spellIndex > 0 ? getCollapsedFolderAncestor(spellFolders, collapsedSpellFolders, visibleSpells[spellIndex - 1].folderId) : null;
                         const previousFolderId = spellIndex > 0 ? (previousCollapsedAncestorId ?? visibleSpells[spellIndex - 1].folderId ?? null) : null;
+                        const folderLabel = getFolderPathLabel(spellFolders, effectiveFolderId);
+                        const folderDepth = getFolderDepth(spellFolders, effectiveFolderId);
                         const isFolderSectionCollapsed = !!collapsedAncestorId;
+                        const shouldShowFolderHeader = !!folderLabel && effectiveFolderId !== activeSpellCategoryId;
                         return (
                         <React.Fragment key={spell.id}>
-                        {getFolderPathLabel(spellFolders, effectiveFolderId) && previousFolderId !== effectiveFolderId && (
+                        {shouldShowFolderHeader && previousFolderId !== effectiveFolderId && (
                           <div
                             className="relative rounded-lg border px-4 py-2 text-sm font-bold tracking-wide text-amber-100 flex items-center justify-between gap-3"
                             style={{
-                              marginLeft: `${Math.max(0, getFolderDepth(spellFolders, effectiveFolderId) - 1) * 20}px`,
+                              marginLeft: `${Math.max(0, folderDepth - 1) * 20}px`,
                               borderColor: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}55`,
                               background: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}18`,
                             }}
                           >
-                            {getFolderDepth(spellFolders, effectiveFolderId) > 0 && (
+                            {folderDepth > 0 && (
                               <div
                                 className="absolute -left-4 top-1/2 h-px w-4"
                                 style={{ backgroundColor: `${spellFolders.find(folder => folder.id === effectiveFolderId)?.color || '#7c3aed'}88` }}
                               />
                             )}
-                            <span>{getFolderPathLabel(spellFolders, effectiveFolderId)}</span>
+                            <span>{folderLabel}</span>
                             <button
                               onClick={() => effectiveFolderId && setCollapsedSpellFolders(prev => prev.includes(effectiveFolderId) ? prev.filter(id => id !== effectiveFolderId) : [...prev, effectiveFolderId])}
                               className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer shrink-0"
@@ -5345,11 +7109,36 @@ export const Characters: React.FC = () => {
                               />
                               <span className="text-xs uppercase tracking-[0.22em] text-stone-300">Spell Card</span>
                             </div>
-                            {isCharacterOwner && (
-                              <div className="flex items-center gap-1">
-                                <button
-                                  onClick={() => moveSpell(spell.id, 'up')}
-                                  disabled={spellIndex === 0}
+                            <div className="flex items-center gap-1">
+                              <button
+                                onClick={() => updateSpell(spell.id, current => ({ ...current, hidden: !current.hidden }))}
+                                className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
+                              >
+                                {spell.hidden ? 'Show' : 'Hide'}
+                              </button>
+                              <button
+                                onClick={() => shareSpell(spell)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-sky-300 hover:text-sky-200 border border-sky-800/30 rounded hover:bg-sky-900/20 cursor-pointer"
+                              >
+                                <Share2 size={12} /> Share
+                              </button>
+                              <button
+                                onClick={() => openHomebrewViewer('spell', spell.id)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
+                              >
+                                <Share2 size={12} /> Share Web
+                              </button>
+                              <button
+                                onClick={() => exportCharacterEntry('spell', spell, spellFolders.find(folder => folder.id === spell.folderId)?.name || null)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
+                              >
+                                Export
+                              </button>
+                              {isCharacterOwner && (
+                                <>
+                                  <button
+                                    onClick={() => moveSpell(spell.id, 'up')}
+                                    disabled={spellIndex === 0}
                                   className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
                                 >
                                   <ArrowUp size={15} />
@@ -5364,11 +7153,12 @@ export const Characters: React.FC = () => {
                                 <button
                                   onClick={() => removeSpell(spell.id)}
                                   className="p-1 text-stone-500 hover:text-red-400 cursor-pointer"
-                                >
-                                  <Trash2 size={16} />
-                                </button>
-                              </div>
-                            )}
+                                  >
+                                    <Trash2 size={16} />
+                                  </button>
+                                </>
+                              )}
+                            </div>
                           </div>
 
                           <div className="flex flex-wrap gap-3 items-start">
@@ -5388,14 +7178,6 @@ export const Characters: React.FC = () => {
                               className="min-w-[140px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
                               placeholder="Level"
                             />
-                            <input
-                              type="text"
-                              value={spell.magicSchool}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, magicSchool: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[180px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Magic school"
-                            />
                             <div className="flex items-center gap-2 min-w-[150px]">
                               <label className="text-xs text-stone-300 whitespace-nowrap">Color</label>
                               <input
@@ -5406,12 +7188,6 @@ export const Characters: React.FC = () => {
                                 className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
                               />
                             </div>
-                            <button
-                              onClick={() => updateSpell(spell.id, current => ({ ...current, hidden: !current.hidden }))}
-                              className="px-2 py-1 text-xs text-amber-200 border border-amber-800/40 rounded hover:bg-amber-900/20 cursor-pointer"
-                            >
-                              {spell.hidden ? 'Show' : 'Hide'}
-                            </button>
                             <select
                               value={spell.folderId ?? ''}
                               onChange={(e) => updateSpell(spell.id, current => ({ ...current, folderId: e.target.value || null }))}
@@ -5443,18 +7219,6 @@ export const Characters: React.FC = () => {
                               className="text-sm text-amber-300 hover:text-amber-200 cursor-pointer"
                             >
                               {expandedSpellDescriptions.includes(spell.id) ? 'Hide' : 'Show More'}
-                            </button>
-                            <button
-                              onClick={() => shareSpell(spell)}
-                              className="inline-flex items-center gap-1 text-xs text-sky-300 hover:text-sky-200 cursor-pointer"
-                            >
-                              <Share2 size={12} /> Share
-                            </button>
-                            <button
-                              onClick={() => openHomebrewViewer('spell', spell.id)}
-                              className="inline-flex items-center gap-1 text-xs text-indigo-300 hover:text-indigo-200 cursor-pointer"
-                            >
-                              <Share2 size={12} /> Share Web
                             </button>
                           </div>
 
@@ -5737,9 +7501,9 @@ export const Characters: React.FC = () => {
                     </div>
                   )}
                 </div>
+                )}
           </div>
         </div>
-      </div>
     );
   }
 
@@ -5809,13 +7573,21 @@ export const Characters: React.FC = () => {
         {/* Character List */}
         <div className="flex flex-col gap-6">
           <div className="rounded-xl border border-amber-800/40 bg-stone-950/40 p-5 h-[720px] flex flex-col overflow-hidden">
-            <h3 className="text-lg text-amber-300 font-bold mb-4 flex items-center justify-between" style={{ fontFamily: "'Cinzel', serif" }}>
-              <span>📜 Character List</span>
-              <div className="flex items-center gap-2">
+            <h3 className="text-lg text-amber-300 font-bold mb-4 flex flex-wrap items-center justify-between gap-2" style={{ fontFamily: "'Cinzel', serif" }}>
+              <span className="min-w-0">📜 Character List</span>
+              <div className="flex min-w-0 flex-wrap items-center justify-end gap-2">
+                {isAdmin && (
+                  <span
+                    className="text-[10px] bg-emerald-950/40 border border-emerald-700/50 text-emerald-200 px-2 py-0.5 rounded font-mono"
+                    title={adminSource || 'Admin access'}
+                  >
+                    Admin
+                  </span>
+                )}
                 <button
                   onClick={() => selectedCharacter && handleAddToBattleTracker(selectedCharacter.name)}
                   disabled={!selectedCharacter}
-                  className="px-2.5 py-1 text-[10px] rounded border border-blue-800/40 bg-blue-950/30 text-blue-200 hover:bg-blue-900/40 hover:border-blue-500/60 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                  className="max-w-full px-2.5 py-1 text-[10px] rounded border border-blue-800/40 bg-blue-950/30 text-blue-200 hover:bg-blue-900/40 hover:border-blue-500/60 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed truncate"
                   title={selectedCharacter ? `Add ${selectedCharacter.name} to Battle Tracker` : 'Select a character first'}
                 >
                   Add Selected to Battle Tracker
@@ -5830,7 +7602,7 @@ export const Characters: React.FC = () => {
                 No adventurers match your filters.
               </div>
             ) : (
-              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 flex-1 overflow-y-auto pr-1 auto-rows-min">
+              <div className="grid grid-cols-1 xl:grid-cols-2 gap-3 flex-1 overflow-y-auto overflow-x-hidden pr-1 auto-rows-min">
                 {filteredCharacters.map((char) => {
                   const isSelected = selectedCharacter?.id === char.id;
                   const isFav = favoriteIds.includes(char.id);
@@ -5838,9 +7610,9 @@ export const Characters: React.FC = () => {
                     <div
                       key={char.id}
                       onClick={() => setSelectedCharacter(char)}
-                      className={`flex items-center justify-between p-3 rounded-lg border cursor-pointer transition-all select-none group min-h-[88px] ${isSelected ? 'bg-amber-900/30 border-amber-500/50 shadow-md ring-1 ring-inset ring-amber-500/30' : 'bg-black/20 border-stone-800/50 hover:bg-amber-950/10 hover:border-stone-700/60'}`}
+                      className={`grid grid-cols-[minmax(0,1fr)_auto] items-center gap-3 p-3 rounded-lg border cursor-pointer transition-all select-none group min-h-[88px] overflow-hidden ${isSelected ? 'bg-amber-900/30 border-amber-500/50 shadow-md ring-1 ring-inset ring-amber-500/30' : 'bg-black/20 border-stone-800/50 hover:bg-amber-950/10 hover:border-stone-700/60'}`}
                     >
-                      <div className="flex items-center gap-4">
+                      <div className="flex min-w-0 items-center gap-4">
                         <div className={`w-11 h-11 rounded-lg border-2 flex items-center justify-center font-bold text-sm shrink-0 font-mono transition-all overflow-hidden ${isSelected ? 'border-amber-400 bg-amber-900/50 text-amber-200' : 'border-amber-700/30 bg-stone-900/60 text-amber-300/80'}`}>
                           {char.portraitUrl ? (
                             <img
@@ -5862,7 +7634,7 @@ export const Characters: React.FC = () => {
                             {(char.name || '?').slice(0, 2).toUpperCase()}
                           </span>
                         </div>
-                        <div className="min-w-0">
+                        <div className="min-w-0 flex-1">
                           <h4 className={`text-base font-bold truncate ${isSelected ? 'text-amber-100' : 'text-amber-200/80 group-hover:text-amber-200'}`} style={{ fontFamily: "'Cinzel', serif" }}>
                             {char.name}
                             {char.visibility === 'public' && char.userId !== userId && (
@@ -5872,20 +7644,25 @@ export const Characters: React.FC = () => {
                           <p className="text-xs text-amber-600/70 italic truncate">
                             {char.race} • {char.className}
                           </p>
+                          {isAdmin && (
+                            <p className="text-[10px] text-stone-500 truncate">
+                              Owner: {char.ownerEmail || char.userId || 'unclaimed'}
+                            </p>
+                          )}
                         </div>
                       </div>
-                      <div className="flex items-center gap-1.5 shrink-0">
+                      <div className="flex items-center justify-end gap-1 shrink-0 self-start">
                         <button
                           onClick={(e) => handleToggleFav(e, char.id)}
-                          className={`p-1.5 rounded-full hover:bg-amber-800/20 transition-colors cursor-pointer ${isFav ? 'text-amber-400' : 'text-stone-600 hover:text-stone-400'}`}
+                          className={`grid h-8 w-8 place-items-center rounded-full hover:bg-amber-800/20 transition-colors cursor-pointer ${isFav ? 'text-amber-400' : 'text-stone-600 hover:text-stone-400'}`}
                           title={isFav ? 'Remove from favorites' : 'Add to favorites'}
                         >
                           <Star size={16} fill={isFav ? 'currentColor' : 'none'} />
                         </button>
-                        {(char.userId === userId || !char.userId) && (
+                        {(isAdmin || char.userId === userId || !char.userId) && (
                           <button
                             onClick={(e) => handleDelete(e, char.id)}
-                            className="p-1.5 text-stone-700 hover:text-red-400 opacity-0 group-hover:opacity-100 rounded-full hover:bg-red-950/20 transition-all cursor-pointer"
+                            className="grid h-8 w-8 place-items-center text-stone-700 hover:text-red-400 opacity-0 group-hover:opacity-100 rounded-full hover:bg-red-950/20 transition-all cursor-pointer"
                             title="Delete"
                           >
                             <Trash2 size={16} />
@@ -5908,7 +7685,7 @@ export const Characters: React.FC = () => {
               <h3 className="text-lg text-amber-300 font-bold" style={{ fontFamily: "'Cinzel', serif" }}>⚔️ Quick Editor</h3>
               {selectedCharacter && (
                 <span className="text-xs font-mono text-amber-500/70">
-                  ID: {selectedCharacter.id.slice(0, 8)} • {selectedCharacter.userId === userId ? 'Owner' : 'Viewer'}
+                  ID: {selectedCharacter.id.slice(0, 8)} • {isSelectedCharacterOwnedByUser ? 'Owner' : isAdmin ? 'Admin' : 'Viewer'}
                 </span>
               )}
             </div>
@@ -5951,7 +7728,65 @@ export const Characters: React.FC = () => {
                   )}
                 </div>
 
+                {isAdmin && (
+                  <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/10 p-4">
+                    <div className="flex items-center justify-between gap-3 mb-3">
+                      <div>
+                        <h4 className="text-sm font-bold text-emerald-200" style={{ fontFamily: "'Cinzel', serif" }}>Admin Owner Transfer</h4>
+                        <p className="text-xs text-stone-500">
+                          Current owner: {selectedCharacter.ownerEmail || selectedCharacter.userId || 'unclaimed'}
+                        </p>
+                      </div>
+                      <span className="text-[10px] text-emerald-300/70 font-mono">{userProfiles.length} users</span>
+                    </div>
+                    <div className="flex flex-col gap-2">
+                      <select
+                        value={ownerTransferUid}
+                        onChange={(e) => setOwnerTransferUid(e.target.value)}
+                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-emerald-500/50 cursor-pointer"
+                      >
+                        <option value="">Choose a Google user...</option>
+                        {selectedCharacter.userId && !userProfiles.some((profile) => profile.uid === selectedCharacter.userId) && (
+                          <option value={selectedCharacter.userId}>
+                            Current unknown user ({selectedCharacter.userId})
+                          </option>
+                        )}
+                        {userProfiles.map((profile) => (
+                          <option key={profile.uid} value={profile.uid}>
+                            {profile.email || profile.displayName || profile.uid} ({profile.uid.slice(0, 8)})
+                          </option>
+                        ))}
+                      </select>
+                      <input
+                        value={ownerTransferUid}
+                        onChange={(e) => setOwnerTransferUid(e.target.value)}
+                        placeholder="Or paste Firebase UID manually..."
+                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-xs text-amber-100 focus:outline-none focus:border-emerald-500/50 font-mono"
+                      />
+                      <button
+                        onClick={handleTransferOwner}
+                        disabled={!ownerTransferUid.trim() || ownerTransferUid === selectedCharacter.userId}
+                        className="px-4 py-2 bg-emerald-900/40 border border-emerald-700/50 rounded-lg text-sm text-emerald-100 hover:bg-emerald-800/50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                        style={{ fontFamily: "'Cinzel', serif" }}
+                      >
+                        Change Owner
+                      </button>
+                      {ownerTransferStatus && (
+                        <p className="text-xs text-emerald-200/80">{ownerTransferStatus}</p>
+                      )}
+                    </div>
+                  </div>
+                )}
+
                 <div className="mt-2 flex gap-2">
+                  <button
+                    onClick={handleCreateFromSelected}
+                    disabled={!selectedCharacter || (!isCharacterOwner && !canEditInventory)}
+                    className="flex-1 px-4 py-2 bg-emerald-900/35 border border-emerald-800/40 rounded hover:bg-emerald-900/55 hover:border-emerald-500/70 text-emerald-200 transition-colors text-sm font-bold tracking-wider cursor-pointer flex items-center justify-center gap-2 disabled:opacity-40 disabled:cursor-not-allowed"
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    <Plus size={16} /> Create From This
+                  </button>
                   <button
                     onClick={handleSaveAll}
                     disabled={!canEditInventory && !isCharacterOwner}

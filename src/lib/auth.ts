@@ -5,6 +5,7 @@
 export interface AuthState {
   uid: string | null;
   displayName: string | null;
+  email: string | null;
 }
 
 export interface AuthProvider {
@@ -12,6 +13,8 @@ export interface AuthProvider {
   onAuthChange: (setter: (state: AuthState) => void) => () => void;
   /** Log in with email + password */
   signIn: (email: string, password: string) => Promise<AuthState>;
+  /** Log in with Google popup */
+  signInWithGoogle: () => Promise<AuthState>;
   /** Log out */
   signOut: () => Promise<void>;
   /** Update display name */
@@ -26,7 +29,7 @@ export interface AuthProvider {
   signInAsGuest: () => Promise<AuthState>;
 }
 
-let currentAuthState: AuthState = { uid: null, displayName: null };
+let currentAuthState: AuthState = { uid: null, displayName: null, email: null };
 let changeListeners: Array<(state: AuthState) => void> = [];
 
 const notify = (state: AuthState) => {
@@ -37,6 +40,40 @@ const notify = (state: AuthState) => {
 // ─── Firebase Initialization ───────────────────────────────────────────────────
 
 let firebaseAuth: any = null;
+
+const toAuthState = (user: any): AuthState => ({
+  uid: user.uid,
+  displayName: user.displayName || user.email,
+  email: user.email || null,
+});
+
+async function saveUserProfile(user: any): Promise<void> {
+  if (!user?.uid || user.isAnonymous) return;
+
+  try {
+    const { getApps, getApp, initializeApp } = await import('firebase/app');
+    const { getFirestore, doc, setDoc, serverTimestamp } = await import('firebase/firestore');
+    const app = getApps().length > 0 ? getApp() : initializeApp({
+      apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+      authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+      projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+      storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+      messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+      appId: import.meta.env.VITE_FIREBASE_APP_ID,
+    });
+    const db = getFirestore(app);
+    await setDoc(doc(db, 'users', user.uid), {
+      uid: user.uid,
+      email: user.email || '',
+      displayName: user.displayName || user.email || 'Google User',
+      photoURL: user.photoURL || '',
+      provider: 'google',
+      lastLoginAt: serverTimestamp(),
+    }, { merge: true });
+  } catch (error) {
+    console.error('Failed to save auth user profile:', error);
+  }
+}
 
 async function getFirebase() {
   if (firebaseAuth) return firebaseAuth;
@@ -53,6 +90,8 @@ async function getFirebase() {
   const updateProfile = authMod.updateProfile;
   const fbUpdatePassword = authMod.updatePassword;
   const signInAnonymously = authMod.signInAnonymously;
+  const GoogleAuthProvider = authMod.GoogleAuthProvider;
+  const signInWithPopup = authMod.signInWithPopup;
 
  const app = initializeApp({
   apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -67,9 +106,10 @@ async function getFirebase() {
   await setPersistence(auth, browserLocalPersistence);
   onAuthStateChanged(auth, (user: any) => {
     if (user) {
-      notify({ uid: user.uid, displayName: user.displayName || user.email });
+      notify(toAuthState(user));
+      saveUserProfile(user);
     } else {
-      notify({ uid: null, displayName: null });
+      notify({ uid: null, displayName: null, email: null });
     }
   });
 
@@ -80,6 +120,8 @@ async function getFirebase() {
     updateProfile,
     fbUpdatePassword,
     signInAnonymously,
+    GoogleAuthProvider,
+    signInWithPopup,
   };
 
   return firebaseAuth;
@@ -100,8 +142,17 @@ export const authProvider: AuthProvider = {
   signIn: async (email: string, password: string): Promise<AuthState> => {
     const fb = await getFirebase();
     const cred = await fb.signInWithEmailAndPassword(fb.auth, email, password);
-    const user = cred.user;
-    return { uid: user.uid, displayName: user.displayName || user.email };
+    await saveUserProfile(cred.user);
+    return toAuthState(cred.user);
+  },
+
+  signInWithGoogle: async (): Promise<AuthState> => {
+    const fb = await getFirebase();
+    const provider = new fb.GoogleAuthProvider();
+    provider.setCustomParameters({ prompt: 'select_account' });
+    const cred = await fb.signInWithPopup(fb.auth, provider);
+    await saveUserProfile(cred.user);
+    return toAuthState(cred.user);
   },
 
   signOut: async () => {
@@ -115,7 +166,8 @@ export const authProvider: AuthProvider = {
     if (auth.currentUser) {
       await fb.updateProfile(auth.currentUser, { displayName: newName });
       // Re-notify
-      notify({ uid: auth.currentUser.uid, displayName: newName });
+      notify({ uid: auth.currentUser.uid, displayName: newName, email: auth.currentUser.email || null });
+      await saveUserProfile(auth.currentUser);
     }
   },
 
@@ -134,6 +186,6 @@ export const authProvider: AuthProvider = {
     const fb = await getFirebase();
     const cred = await fb.signInAnonymously(fb.auth);
     const user = cred.user;
-    return { uid: user.uid, displayName: 'Guest' };
+    return { uid: user.uid, displayName: 'Guest', email: null };
   },
 };

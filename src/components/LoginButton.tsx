@@ -7,14 +7,11 @@ interface LoginButtonProps {
 }
 
 export const LoginButton: React.FC<LoginButtonProps> = ({ onStateChange }) => {
-  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null });
+  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null, email: null });
   const [showLoginModal, setShowLoginModal] = useState(false);
   const [showMenu, setShowMenu] = useState(false);
   const [showSettings, setShowSettings] = useState(false);
-  const [email, setEmail] = useState('');
-  const [password, setPassword] = useState('');
   const [newDisplayName, setNewDisplayName] = useState('');
-  const [newPassword, setNewPassword] = useState('');
   const [error, setError] = useState('');
   const [successMsg, setSuccessMsg] = useState('');
 
@@ -35,12 +32,10 @@ export const LoginButton: React.FC<LoginButtonProps> = ({ onStateChange }) => {
     });
   }, []);
 
-  const handleLogin = async () => {
+  const handleGoogleLogin = async () => {
     setError('');
     try {
-      await authProvider.signIn(email, password);
-      setEmail('');
-      setPassword('');
+      await authProvider.signInWithGoogle();
       setShowLoginModal(false);
     } catch (err: any) {
       setError(err.message || 'Login failed');
@@ -62,22 +57,6 @@ export const LoginButton: React.FC<LoginButtonProps> = ({ onStateChange }) => {
       setTimeout(() => setSuccessMsg(''), 2000);
     } catch (err: any) {
       setError(err.message || 'Update failed');
-    }
-  };
-
-  const handleUpdatePassword = async () => {
-    if (newPassword.length < 6) {
-      setError('Password must be at least 6 characters.');
-      return;
-    }
-    try {
-      setError('');
-      await authProvider.updatePassword(newPassword);
-      setSuccessMsg('Password updated.');
-      setTimeout(() => setSuccessMsg(''), 2000);
-      setNewPassword('');
-    } catch (err: any) {
-      setError(err.message || 'Password update failed');
     }
   };
 
@@ -139,10 +118,11 @@ export const LoginButton: React.FC<LoginButtonProps> = ({ onStateChange }) => {
             </div>
             {error && <p className="text-red-400 text-sm mb-3">{error}</p>}
             <div className="space-y-3">
-              <input value={email} onChange={(e) => setEmail(e.target.value)} placeholder="Email" type="email" className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" />
-              <input value={password} onChange={(e) => setPassword(e.target.value)} placeholder="Password" type="password" className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" />
-              <button onClick={handleLogin} className="w-full rounded-lg bg-amber-800/50 border border-amber-700/50 px-4 py-2 text-sm font-bold text-amber-200 hover:bg-amber-800/70 transition-colors cursor-pointer" style={{ fontFamily: "'Cinzel', serif" }}>
-                <LogIn size={14} className="inline mr-1" /> Sign In
+              <p className="text-sm text-stone-400">
+                Sign in with a Google account. If it is your first time, Firebase will create the account automatically.
+              </p>
+              <button onClick={handleGoogleLogin} className="w-full rounded-lg bg-amber-800/50 border border-amber-700/50 px-4 py-2 text-sm font-bold text-amber-200 hover:bg-amber-800/70 transition-colors cursor-pointer" style={{ fontFamily: "'Cinzel', serif" }}>
+                <LogIn size={14} className="inline mr-1" /> Continue with Google
               </button>
             </div>
           </div>
@@ -165,11 +145,9 @@ export const LoginButton: React.FC<LoginButtonProps> = ({ onStateChange }) => {
                 <input value={newDisplayName} onChange={(e) => setNewDisplayName(e.target.value)} placeholder="Display Name" className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" />
                 <button onClick={handleUpdateDisplayName} className="mt-2 w-full rounded-lg bg-emerald-900/40 border border-emerald-700/50 px-3 py-1.5 text-sm text-emerald-200 hover:bg-emerald-800/50 cursor-pointer transition-colors" style={{ fontFamily: "'Cinzel', serif" }}><User size={13} className="inline mr-1" /> Update Name</button>
               </div>
-              <div className="border-t border-stone-700/50 pt-4">
-                <label className="block text-xs text-stone-400 mb-1">New Password</label>
-                <input value={newPassword} onChange={(e) => setNewPassword(e.target.value)} placeholder="New password (min 6)" type="password" className="w-full rounded-lg bg-stone-800 border border-stone-700 px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" />
-                <button onClick={handleUpdatePassword} className="mt-2 w-full rounded-lg bg-amber-800/40 border border-amber-700/50 px-3 py-1.5 text-sm text-amber-200 hover:bg-amber-800/60 cursor-pointer transition-colors" style={{ fontFamily: "'Cinzel', serif" }}>Update Password</button>
-              </div>
+              <p className="border-t border-stone-700/50 pt-4 text-xs text-stone-500">
+                Password changes are managed by your Google account.
+              </p>
             </div>
           </div>
         </div>

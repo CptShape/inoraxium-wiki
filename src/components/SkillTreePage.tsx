@@ -495,7 +495,7 @@ const defaultTransformForBounds = (
 const cloneTreeData = (tree: SkillTreeData): SkillTreeData => structuredClone(tree);
 
 export const SkillTreePage: React.FC<{ system: GameSystemId }> = ({ system }) => {
-  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null });
+  const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null, email: null });
   const [canEdit, setCanEdit] = useState(false);
   const [savedTrees, setSavedTrees] = useState<SavedSkillTreeRecord[]>([]);
   const [selectedRecordId, setSelectedRecordId] = useState<string>('');
