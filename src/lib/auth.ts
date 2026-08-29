@@ -80,6 +80,8 @@ async function getFirebase() {
 
   const initMod = await import('firebase/app');
   const initializeApp = initMod.initializeApp;
+  const getApps = initMod.getApps;
+  const getApp = initMod.getApp;
   const authMod = await import('firebase/auth');
   const getAuth = authMod.getAuth;
   const onAuthStateChanged = authMod.onAuthStateChanged;
@@ -93,14 +95,14 @@ async function getFirebase() {
   const GoogleAuthProvider = authMod.GoogleAuthProvider;
   const signInWithPopup = authMod.signInWithPopup;
 
- const app = initializeApp({
-  apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
-  authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
-  projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
-  storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
-  messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
-  appId: import.meta.env.VITE_FIREBASE_APP_ID,
-});
+ const app = getApps().length > 0 ? getApp() : initializeApp({
+    apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
+    authDomain: import.meta.env.VITE_FIREBASE_AUTH_DOMAIN,
+    projectId: import.meta.env.VITE_FIREBASE_PROJECT_ID,
+    storageBucket: import.meta.env.VITE_FIREBASE_STORAGE_BUCKET,
+    messagingSenderId: import.meta.env.VITE_FIREBASE_MESSAGING_SENDER_ID,
+    appId: import.meta.env.VITE_FIREBASE_APP_ID,
+  });
 
   const auth = getAuth(app);
   await setPersistence(auth, browserLocalPersistence);
@@ -134,6 +136,9 @@ export const authProvider: AuthProvider = {
     changeListeners.push(setter);
     // Immediately call with current state
     setter(currentAuthState);
+    getFirebase().catch((error) => {
+      console.error('Failed to initialize Firebase Auth:', error);
+    });
     return () => {
       changeListeners = changeListeners.filter((fn) => fn !== setter);
     };
@@ -156,8 +161,8 @@ export const authProvider: AuthProvider = {
   },
 
   signOut: async () => {
-    await getFirebase();
-    await (await getFirebase()).fbSignOut((await getFirebase()).auth);
+    const fb = await getFirebase();
+    await fb.fbSignOut(fb.auth);
   },
 
   updateDisplayName: async (newName: string) => {
