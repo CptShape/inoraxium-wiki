@@ -64,6 +64,7 @@ interface CharacterAttributePreset {
   secondaryAttributes: CustomAttribute[];
   skills: SkillAttribute[];
   otherAttributes: CustomAttribute[];
+  resistances?: CustomAttribute[];
   bars: CharacterBar[];
   displayStats?: CharacterDisplayStat[];
   displaySlotStates?: Record<string, 'unlocked' | 'locked' | 'blocked'>;
@@ -86,6 +87,7 @@ interface CharacterEntryExportPayload {
 
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
 type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'inventory' | 'spells' | 'statuses';
+type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' | 'resistances' | 'unassigned';
 type MacroSheetSubTab = 'main' | 'rolls' | string;
 
 interface AttributeResolvedOption {
@@ -111,6 +113,7 @@ const DEFAULT_ATTRIBUTE_SECTION_MODES: Required<CharacterAttributeSectionModes> 
   secondary: 'all',
   skills: 'all',
   other: 'all',
+  resistances: 'all',
   bars: 'all',
 };
 
@@ -120,6 +123,7 @@ const DEFAULT_ATTRIBUTE_SECTION_COLUMNS: Required<CharacterAttributeSectionColum
   secondary: 2,
   skills: 2,
   other: 2,
+  resistances: 2,
   bars: 2,
 };
 
@@ -404,6 +408,7 @@ export const Characters: React.FC = () => {
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterData | null>(null);
   const [isViewingSheet, setIsViewingSheet] = useState(false);
   const [activeSheetTab, setActiveSheetTab] = useState<CharacterSheetTab>('bio');
+  const [activeAttributeSubTab, setActiveAttributeSubTab] = useState<AttributeSheetSubTab>('bars');
 
   // Filtering
   const [searchName, setSearchName] = useState('');
@@ -436,6 +441,18 @@ export const Characters: React.FC = () => {
   const [openAttributeOptionsId, setOpenAttributeOptionsId] = useState<string | null>(null);
   const [displayLayoutMode, setDisplayLayoutMode] = useState(false);
   const [draggingDisplayStatId, setDraggingDisplayStatId] = useState<string | null>(null);
+  const [attributeSearches, setAttributeSearches] = useState<Record<AttributeSheetSubTab, string>>({
+    bars: '',
+    main: '',
+    secondary: '',
+    skills: '',
+    other: '',
+    resistances: '',
+    unassigned: '',
+  });
+  const [unassignedAttributeSearch, setUnassignedAttributeSearch] = useState('');
+  const [pendingUnassignedAttributeId, setPendingUnassignedAttributeId] = useState<string | null>(null);
+  const [resistancePreviewBase, setResistancePreviewBase] = useState('100');
   const [sheetSyncStatus, setSheetSyncStatus] = useState<{ tone: 'idle' | 'success' | 'error'; message: string } | null>(null);
   const [isSheetSyncing, setIsSheetSyncing] = useState(false);
   const [charTags, setCharTags] = useState<string[]>([]);
@@ -445,6 +462,7 @@ export const Characters: React.FC = () => {
   const [secondaryAttrs, setSecondaryAttrs] = useState<CustomAttribute[]>([]);
   const [skills, setSkills] = useState<SkillAttribute[]>([]);
   const [otherAttrs, setOtherAttrs] = useState<CustomAttribute[]>([]);
+  const [resistances, setResistances] = useState<CustomAttribute[]>([]);
   const [bars, setBars] = useState<CharacterBar[]>([]);
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
   const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
@@ -585,6 +603,7 @@ export const Characters: React.FC = () => {
       setSecondaryAttrs(selectedCharacter.secondaryAttributes || []);
       setSkills(selectedCharacter.skills || []);
       setOtherAttrs(selectedCharacter.otherAttributes || []);
+      setResistances(selectedCharacter.resistances || []);
       setBars(selectedCharacter.bars || []);
       setSheetDiceMacros(selectedCharacter.diceMacros || DEFAULT_CHARACTER_DICE_STATE.macros);
       setDiceMacroFolders(selectedCharacter.diceMacroFolders || []);
@@ -791,6 +810,7 @@ export const Characters: React.FC = () => {
       setSecondaryAttrs(Array.isArray(parsed.secondaryAttributes) ? parsed.secondaryAttributes : []);
       setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
       setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
+      setResistances(Array.isArray(parsed.resistances) ? parsed.resistances : []);
       setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
       setDisplayStats(Array.isArray(parsed.displayStats) ? parsed.displayStats : []);
       setDisplaySlotStates(parsed.displaySlotStates || {});
@@ -812,7 +832,7 @@ export const Characters: React.FC = () => {
 
   const getCharacterContext = () => {
     const context: Record<string, number> = {};
-    const baseAttrs = [...(mainAttrs || []), ...(secondaryAttrs || []), ...(otherAttrs || [])];
+    const baseAttrs = [...(mainAttrs || []), ...(secondaryAttrs || []), ...(otherAttrs || []), ...(resistances || [])];
     const skillAttrs = skills || [];
     const allAttrs = [...baseAttrs, ...skillAttrs];
     const mainAttrIds = (mainAttrs || []).map(a => a.id).filter(Boolean);
@@ -977,10 +997,14 @@ export const Characters: React.FC = () => {
 
       skillAttrs.forEach((skill) => {
         if (!skill.id) return;
-        const baseValue = evalCharFormula(skill.value || '0', {
+        const legacyBaseValue = evalCharFormula(skill.value || '0', {
           ...previousContext,
           ...withModItemEffects,
         });
+        const linkedModifierValue = skill.linkedMainAttributeId
+          ? withModItemEffects[`${skill.linkedMainAttributeId}_mod`] ?? 0
+          : 0;
+        const baseValue = legacyBaseValue + linkedModifierValue;
         const proficiencyValue = withModItemEffects.proficiency ?? 0;
         const mode = skill.proficiencyMode || 'none';
         const proficiencyBonus = mode === 'half'
@@ -1044,7 +1068,7 @@ export const Characters: React.FC = () => {
 
   const getCharacterReferenceIds = () => {
     const ids = new Set<string>();
-    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
+    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].forEach((attr) => {
       if (attr.id) ids.add(attr.id);
     });
     mainAttrs.forEach((attr) => {
@@ -2067,7 +2091,7 @@ export const Characters: React.FC = () => {
     )));
   };
 
-  const getAllSheetAttributes = () => [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs];
+  const getAllSheetAttributes = () => [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs, ...resistances];
 
   const getAttributeDefinitionById = (attributeId: string) => (
     getAllSheetAttributes().find((attr) => attr.id === attributeId)
@@ -2093,6 +2117,7 @@ export const Characters: React.FC = () => {
     if (secondaryAttrs.some((attr) => attr.id === normalizedId)) return `sheet-attr-secondary-${normalizedId}`;
     if (skills.some((attr) => attr.id === normalizedId)) return `sheet-attr-skill-${normalizedId}`;
     if (otherAttrs.some((attr) => attr.id === normalizedId)) return `sheet-attr-other-${normalizedId}`;
+    if (resistances.some((attr) => attr.id === normalizedId)) return `sheet-attr-resistance-${normalizedId}`;
     if (bars.some((bar) => bar.id === normalizedId)) return `sheet-bar-${normalizedId}`;
     return '';
   };
@@ -2115,7 +2140,7 @@ export const Characters: React.FC = () => {
   const buildCharacterSheetSyncValues = (context: Record<string, number>) => {
     const values: Record<string, string | number> = {};
 
-    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
+    [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].forEach((attr) => {
       if (!attr.id) return;
       const rawValue = context[attr.id];
       if (Number.isFinite(rawValue)) {
@@ -2157,6 +2182,7 @@ export const Characters: React.FC = () => {
       secondaryAttributes: secondaryAttrs,
       skills,
       otherAttributes: otherAttrs,
+      resistances,
       bars,
       displayStats,
       displaySlotStates,
@@ -3441,6 +3467,7 @@ export const Characters: React.FC = () => {
       secondaryAttributes: [],
       skills: [],
       otherAttributes: [],
+      resistances: [],
       bars: [],
       diceMacros: DEFAULT_CHARACTER_DICE_STATE.macros.map((macro) => ({ ...macro })),
       diceMacroFolders: [],
@@ -3558,6 +3585,7 @@ export const Characters: React.FC = () => {
       secondaryAttributes: (selectedCharacter.secondaryAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
       skills: (selectedCharacter.skills || []).map((skill) => ({ ...skill, valueOptions: skill.valueOptions ? skill.valueOptions.map((option) => ({ ...option })) : undefined })),
       otherAttributes: (selectedCharacter.otherAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
+      resistances: (selectedCharacter.resistances || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
       bars: (selectedCharacter.bars || []).map((bar) => ({ ...bar })),
       diceMacros: (selectedCharacter.diceMacros || []).map((macro) => cloneDiceMacro(macro, diceMacroFolderClone.idMap)),
       diceMacroFolders: diceMacroFolderClone.folders,
@@ -3682,6 +3710,7 @@ export const Characters: React.FC = () => {
       secondaryAttributes: secondaryAttrs,
       skills,
       otherAttributes: otherAttrs,
+      resistances,
       bars,
       diceMacros: sheetDiceMacros,
       diceMacroFolders,
@@ -3998,7 +4027,7 @@ export const Characters: React.FC = () => {
         attributeEffectHistory[targetId].push({ label, value, sourceAnchorId });
       };
 
-      [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs].forEach((attr) => {
+      [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].forEach((attr) => {
         if (!attr.id) return;
         const baseValue = evalCharFormula(attr.value || '0', finalContext);
         pushAttributeHistory(attr.id, `${attr.name || attr.id} base`, baseValue);
@@ -4014,6 +4043,17 @@ export const Characters: React.FC = () => {
 
       skills.forEach((skill) => {
         if (!skill.id) return;
+        const linkedMainAttribute = skill.linkedMainAttributeId
+          ? mainAttrs.find((attr) => attr.id === skill.linkedMainAttributeId)
+          : null;
+        if (linkedMainAttribute?.id) {
+          pushAttributeHistory(
+            skill.id,
+            `${linkedMainAttribute.name || linkedMainAttribute.id} modifier`,
+            finalContext[`${linkedMainAttribute.id}_mod`] ?? 0,
+            `sheet-attr-main-${linkedMainAttribute.id}`
+          );
+        }
         const proficiencyValue = finalContext.proficiency ?? 0;
         const mode = skill.proficiencyMode || 'none';
         const proficiencyBonus = mode === 'half'
@@ -4052,6 +4092,48 @@ export const Characters: React.FC = () => {
         });
       });
 
+      (charGeneralItems || []).map(normalizeGeneralItem).forEach((item) => {
+        if (!item.equipped) return;
+        (item.effects || []).forEach((effect) => {
+          if (!(effect.active ?? true) || !effect.targetId) return;
+          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          pushAttributeHistory(effect.targetId, `${item.name || 'General Item'} effect`, effectValue, `general-item-${item.id}`);
+        });
+        (item.actions || []).forEach((action) => {
+          (action.effects || []).forEach((effect) => {
+            if (!(effect.active ?? true) || !effect.targetId) return;
+            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            pushAttributeHistory(effect.targetId, `${item.name || 'General Item'} / ${action.name || 'Action'}`, effectValue, `general-item-${item.id}`);
+          });
+        });
+      });
+
+      (charSpells || []).forEach((spell) => {
+        (spell.actions || []).forEach((action) => {
+          (action.effects || []).forEach((effect) => {
+            if (!(effect.active ?? true) || !effect.targetId) return;
+            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            pushAttributeHistory(effect.targetId, `${spell.name || 'Spell'} / ${action.name || 'Action'}`, effectValue, `spell-${spell.id}`);
+          });
+        });
+      });
+
+      const knownAttributeReferenceIds = getCharacterReferenceIds();
+      const unassignedAttributeEntries = Object.entries(attributeEffectHistory)
+        .filter(([referenceId, entries]) => !knownAttributeReferenceIds.has(referenceId) && entries.length > 0)
+        .map(([referenceId, entries]) => ({
+          referenceId,
+          value: entries.reduce((sum, entry) => sum + entry.value, 0),
+          entries,
+        }))
+        .filter((entry) => {
+          const query = unassignedAttributeSearch.trim().toLowerCase();
+          if (!query) return true;
+          return entry.referenceId.toLowerCase().includes(query)
+            || entry.entries.some((historyEntry) => historyEntry.label.toLowerCase().includes(query));
+        })
+        .sort((left, right) => left.referenceId.localeCompare(right.referenceId));
+
       const favoriteDisplayMap = new Map<string, { id: string; name: string; value: string }>();
       mainAttrs.filter(attr => attr.favorite).forEach((attr) => {
         const baseValue = finalContext[attr.id] ?? 0;
@@ -4081,6 +4163,14 @@ export const Characters: React.FC = () => {
         id: attr.id,
         name: attr.name || getReferenceDisplayName(attr.id),
         value: formatAttributeOutput(attr.id, finalContext[attr.id] ?? 0),
+      });
+    });
+    resistances.filter(attr => attr.favorite).forEach((attr) => {
+      const value = finalContext[attr.id] ?? 0;
+      favoriteDisplayMap.set(attr.id, {
+        id: attr.id,
+        name: attr.name || getReferenceDisplayName(attr.id),
+        value: `${value >= 0 ? '%' : '-%'}${Math.abs(value)}`,
       });
     });
       bars.filter(bar => bar.favorite).forEach((bar) => {
@@ -4341,17 +4431,77 @@ export const Characters: React.FC = () => {
         );
       };
 
+      const getAttributeSearchValue = (tab: AttributeSheetSubTab) => (
+        tab === 'unassigned' ? unassignedAttributeSearch : attributeSearches[tab]
+      );
+
+      const setAttributeSearchValue = (tab: AttributeSheetSubTab, value: string) => {
+        if (tab === 'unassigned') {
+          setUnassignedAttributeSearch(value);
+          return;
+        }
+        setAttributeSearches(prev => ({ ...prev, [tab]: value }));
+      };
+
+      const matchesAttributeSearch = (
+        item: { id?: string; name?: string },
+        tab: AttributeSheetSubTab,
+      ) => {
+        const query = getAttributeSearchValue(tab).trim().toLowerCase();
+        if (!query) return true;
+        return (item.id || '').toLowerCase().includes(query)
+          || (item.name || '').toLowerCase().includes(query);
+      };
+
+      const renderAttributeSearch = (tab: AttributeSheetSubTab, placeholder = 'Search attributes...') => (
+        <div className="relative w-full md:w-72">
+          <Search size={14} className="absolute left-3 top-1/2 -translate-y-1/2 text-amber-500/65" />
+          <input
+            value={getAttributeSearchValue(tab)}
+            onChange={(e) => setAttributeSearchValue(tab, e.target.value)}
+            placeholder={placeholder}
+            className="w-full rounded-lg border border-amber-800/30 bg-stone-950/65 py-1.5 pl-8 pr-3 text-xs text-amber-100 placeholder:text-stone-600 focus:border-amber-500/50 focus:outline-none"
+          />
+        </div>
+      );
+
+      const addUnassignedAttributeToTab = (
+        referenceId: string,
+        targetTab: 'main' | 'secondary' | 'skills' | 'other' | 'resistances',
+      ) => {
+        const newAttribute = { id: referenceId, name: referenceId, value: '0' };
+        if (targetTab === 'main') setMainAttrs(prev => [...prev, newAttribute]);
+        if (targetTab === 'secondary') setSecondaryAttrs(prev => [...prev, newAttribute]);
+        if (targetTab === 'skills') setSkills(prev => [...prev, { ...newAttribute, proficiencyMode: 'none', linkedMainAttributeId: '' }]);
+        if (targetTab === 'other') setOtherAttrs(prev => [...prev, newAttribute]);
+        if (targetTab === 'resistances') setResistances(prev => [...prev, newAttribute]);
+        setPendingUnassignedAttributeId(null);
+        setActiveAttributeSubTab(targetTab);
+      };
+
     const renderAttributeSection = (
       title: string,
       items: (CustomAttribute | SkillAttribute)[],
       setItems: React.Dispatch<React.SetStateAction<any[]>>,
       idPrefix: string,
-      options?: { skillMode?: boolean; sectionKey: keyof CharacterAttributeSectionModes }
+      options?: { skillMode?: boolean; sectionKey: keyof CharacterAttributeSectionModes; subTab: AttributeSheetSubTab; resistanceMode?: boolean }
     ) => (
       <div className="mb-8">
         <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
           <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>{title}</h3>
           <div className="flex items-center gap-2">
+            {options?.resistanceMode && (
+              <div className="flex items-center gap-2 rounded-lg border border-emerald-800/25 bg-emerald-950/10 px-2 py-1">
+                <label className="text-[11px] text-emerald-300 uppercase tracking-[0.16em]">Base</label>
+                <input
+                  type="number"
+                  value={resistancePreviewBase}
+                  onChange={(e) => setResistancePreviewBase(e.target.value)}
+                  className="w-24 bg-stone-950/70 border border-emerald-800/30 rounded px-2 py-1 text-xs font-mono text-emerald-100 focus:outline-none focus:border-emerald-500/50"
+                />
+              </div>
+            )}
+            {options?.subTab && renderAttributeSearch(options.subTab)}
             <div className="flex items-center gap-2">
               <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
               <input
@@ -4382,7 +4532,7 @@ export const Characters: React.FC = () => {
               onClick={() => setItems([
                 ...items,
                 options?.skillMode
-                  ? { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Skill', value: '0', proficiencyMode: 'none' }
+                  ? { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Skill', value: '0', proficiencyMode: 'none', linkedMainAttributeId: '' }
                   : { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Attribute', value: '10' },
               ])}
               className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
@@ -4399,10 +4549,19 @@ export const Characters: React.FC = () => {
         >
           {items
             .filter(attr => attributeSectionModes[options?.sectionKey || 'main'] === 'all' || attr.favorite)
+            .filter(attr => matchesAttributeSearch(attr, options?.subTab || 'main'))
             .map((attr, idx, filteredItems) => {
             const actualIndex = items.findIndex(item => item.id === attr.id);
             const evalVal = finalContext[attr.id] || 0;
             const displayValue = formatAttributeOutput(attr.id, evalVal);
+            const resistanceMode = !!options?.resistanceMode;
+            const resistanceValueClass = evalVal >= 0 ? 'text-emerald-300' : 'text-rose-300';
+            const resistanceDisplayValue = `${evalVal >= 0 ? '%' : '-%'}${Math.abs(evalVal)}`;
+            const resistanceBaseValue = evalCharFormula(resistancePreviewBase || '0', finalContext);
+            const resistanceAppliedValue = resistanceBaseValue * (1 - (evalVal / 100));
+            const resistanceAppliedDisplayValue = Number.isInteger(resistanceAppliedValue)
+              ? resistanceAppliedValue.toString()
+              : resistanceAppliedValue.toFixed(2).replace(/\.?0+$/, '');
             const skillMode = options?.skillMode;
             const proficiencyMode = skillMode ? ((attr as SkillAttribute).proficiencyMode || 'none') : 'none';
             const proficiencyStyle = PROFICIENCY_STYLES[proficiencyMode as NonNullable<SkillAttribute['proficiencyMode']>];
@@ -4480,16 +4639,46 @@ export const Characters: React.FC = () => {
                     {attr.id && renderAttributeHistory(attr.id)}
                   </div>
                   <div className="flex items-center justify-end">
+                  {skillMode ? (
+                    <select
+                      value={(attr as SkillAttribute).linkedMainAttributeId || ''}
+                      onChange={(e) => {
+                        const next = [...items] as SkillAttribute[];
+                        next[actualIndex] = {
+                          ...next[actualIndex],
+                          linkedMainAttributeId: e.target.value,
+                          value: next[actualIndex].value || '0',
+                        };
+                        setItems(next);
+                      }}
+                      className="mr-auto min-w-36 bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm text-amber-100 focus:outline-none"
+                    >
+                      <option value="">No Main Attribute</option>
+                      {mainAttrs.map((mainAttr) => (
+                        <option key={mainAttr.id} value={mainAttr.id}>
+                          {mainAttr.name || mainAttr.id} ({mainAttr.id}_mod)
+                        </option>
+                      ))}
+                    </select>
+                  ) : resistanceMode ? (
+                    <div className="mr-auto flex flex-col rounded-lg border border-emerald-800/25 bg-black/25 px-3 py-2">
+                      <span className="text-[10px] uppercase tracking-[0.16em] text-stone-500">After Resistance</span>
+                      <span className={`font-mono text-lg font-bold ${resistanceAppliedValue <= resistanceBaseValue ? 'text-emerald-300' : 'text-rose-300'}`}>
+                        {resistanceAppliedDisplayValue}
+                      </span>
+                    </div>
+                  ) : (
                     <input
                       type="text"
                       value={attr.value}
-                    onChange={(e) => {
-                      const next = [...items];
-                      next[actualIndex].value = e.target.value;
-                      setItems(next);
-                    }}
-                    className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 w-24 focus:outline-none mr-auto"
-                  />
+                      onChange={(e) => {
+                        const next = [...items];
+                        next[actualIndex].value = e.target.value;
+                        setItems(next);
+                      }}
+                      className="bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 w-24 focus:outline-none mr-auto"
+                    />
+                  )}
                   {skillMode && (
                     <button
                       onClick={() => rollAttributeCheck(`${attr.name || 'Skill'} Check`, `1d20 + @${attr.id}`, `${attr.name || 'Skill'} skill check`)}
@@ -4512,7 +4701,9 @@ export const Characters: React.FC = () => {
                       <span className="hidden sm:inline">{proficiencyStyle.label}</span>
                     </button>
                   )}
-                  <span className="text-lg font-bold font-mono text-amber-200">{displayValue}</span>
+                  <span className={`text-lg font-bold font-mono ${resistanceMode ? resistanceValueClass : 'text-amber-200'}`}>
+                    {resistanceMode ? resistanceDisplayValue : displayValue}
+                  </span>
                 </div>
               </div>
             );
@@ -4616,6 +4807,38 @@ export const Characters: React.FC = () => {
             })}
           </div>
         </div>
+
+        {activeSheetTab === 'attributes' && (
+          <div className="sticky top-[9.6rem] z-20 mb-4 rounded-2xl border border-amber-800/30 bg-stone-950/86 px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.24)] backdrop-blur-md overflow-visible">
+            <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+              {[
+                { key: 'bars', label: 'Bars' },
+                { key: 'main', label: 'Main' },
+                { key: 'secondary', label: 'Secondary' },
+                { key: 'skills', label: 'Skills' },
+                { key: 'other', label: 'Other' },
+                { key: 'resistances', label: 'Resistances' },
+                { key: 'unassigned', label: `Unassigned${unassignedAttributeEntries.length ? ` (${unassignedAttributeEntries.length})` : ''}` },
+              ].map((tab) => {
+                const isActive = activeAttributeSubTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActiveAttributeSubTab(tab.key as AttributeSheetSubTab)}
+                    className={`shrink-0 rounded-xl border px-4 py-2 text-xs font-bold uppercase tracking-[0.14em] transition-all cursor-pointer ${
+                      isActive
+                        ? 'border-amber-400/60 bg-amber-900/42 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
+                        : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
+                    }`}
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {activeSheetTab === 'inventory' && (
         <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-sky-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
@@ -5345,6 +5568,8 @@ export const Characters: React.FC = () => {
                   </button>
                 </div>
               </div>
+              {activeAttributeSubTab === 'main' && (
+              <>
               {/* 1. Main Attributes */}
               <div className="mb-8">
                 <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
@@ -5352,6 +5577,7 @@ export const Characters: React.FC = () => {
                     ✦ Main Attributes
                   </h3>
                   <div className="flex items-center gap-2">
+                    {renderAttributeSearch('main')}
                     <div className="flex items-center gap-2">
                       <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
                       <input
@@ -5411,7 +5637,10 @@ export const Characters: React.FC = () => {
                   className="grid gap-3 mb-4"
                   style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.main}, minmax(0, 1fr))` }}
                 >
-                  {mainAttrs.filter(attr => attributeSectionModes.main === 'all' || attr.favorite).map((attr, idx, filteredMainAttrs) => {
+                  {mainAttrs
+                    .filter(attr => attributeSectionModes.main === 'all' || attr.favorite)
+                    .filter(attr => matchesAttributeSearch(attr, 'main'))
+                    .map((attr, idx, filteredMainAttrs) => {
                     const actualIndex = mainAttrs.findIndex(item => item.id === attr.id);
                     const evalVal = finalContext[attr.id] || 0;
                     const displayValue = formatAttributeOutput(attr.id, evalVal);
@@ -5519,17 +5748,22 @@ export const Characters: React.FC = () => {
                 </div>
                 )}
               </div>
+              </>
+              )}
 
-                {renderAttributeSection('✦ Secondary Attributes', secondaryAttrs, setSecondaryAttrs, 'sec', { sectionKey: 'secondary' })}
-                {renderAttributeSection('✦ Skills', skills, setSkills, 'skill', { skillMode: true, sectionKey: 'skills' })}
-                {renderAttributeSection('✦ Other Attributes', otherAttrs, setOtherAttrs, 'other', { sectionKey: 'other' })}
+                {activeAttributeSubTab === 'secondary' && renderAttributeSection('✦ Secondary Attributes', secondaryAttrs, setSecondaryAttrs, 'sec', { sectionKey: 'secondary', subTab: 'secondary' })}
+                {activeAttributeSubTab === 'skills' && renderAttributeSection('✦ Skills', skills, setSkills, 'skill', { skillMode: true, sectionKey: 'skills', subTab: 'skills' })}
+                {activeAttributeSubTab === 'other' && renderAttributeSection('✦ Other Attributes', otherAttrs, setOtherAttrs, 'other', { sectionKey: 'other', subTab: 'other' })}
+                {activeAttributeSubTab === 'resistances' && renderAttributeSection('✦ Resistances', resistances, setResistances, 'resistance', { sectionKey: 'resistances', subTab: 'resistances', resistanceMode: true })}
 
+                {activeAttributeSubTab === 'bars' && (
                 <div className="mb-4">
                   <div className="flex items-center justify-between border-b border-amber-800/30 pb-2 mb-4">
                     <h3 className="text-xl font-bold text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
                       ✦ Bars
                     </h3>
                     <div className="flex items-center gap-2">
+                      {renderAttributeSearch('bars', 'Search bars...')}
                       <div className="flex items-center gap-2">
                         <label className="text-[11px] text-stone-400 uppercase tracking-[0.18em]">Cols</label>
                         <input
@@ -5570,7 +5804,10 @@ export const Characters: React.FC = () => {
                     className="grid gap-4"
                     style={{ gridTemplateColumns: `repeat(${attributeSectionColumns.bars}, minmax(0, 1fr))` }}
                   >
-                    {bars.filter(bar => attributeSectionModes.bars === 'all' || bar.favorite).map((bar, idx, filteredBars) => {
+                    {bars
+                      .filter(bar => attributeSectionModes.bars === 'all' || bar.favorite)
+                      .filter(bar => matchesAttributeSearch(bar, 'bars'))
+                      .map((bar, idx, filteredBars) => {
                       const actualIndex = bars.findIndex(item => item.id === bar.id);
                       const rawMax = finalContext[`${bar.id}_max`] || 0;
                       const rawCurrent = finalContext[`${bar.id}_current`] || 0;
@@ -5706,6 +5943,117 @@ export const Characters: React.FC = () => {
                   </div>
                   )}
                 </div>
+                )}
+
+                {activeAttributeSubTab === 'unassigned' && (
+                  <div className="mb-4 rounded-2xl border border-sky-800/30 bg-sky-950/10 p-5 shadow-lg">
+                    <div className="mb-4 flex flex-col gap-3 border-b border-sky-800/25 pb-4 md:flex-row md:items-end md:justify-between">
+                      <div>
+                        <h3 className="text-xl font-bold text-sky-200" style={{ fontFamily: "'Cinzel', serif" }}>
+                          ✦ Unassigned Values
+                        </h3>
+                        <p className="mt-1 text-sm text-stone-500">
+                          Active effects targeting ids that do not exist in Bars, Main, Secondary, Skills, Other, or Resistances yet.
+                        </p>
+                      </div>
+                      <div className="relative w-full md:w-80">
+                        <Search size={15} className="absolute left-3 top-1/2 -translate-y-1/2 text-sky-400/70" />
+                        <input
+                          value={unassignedAttributeSearch}
+                          onChange={(e) => setUnassignedAttributeSearch(e.target.value)}
+                          placeholder="Search id or source..."
+                          className="w-full rounded-lg border border-sky-800/35 bg-stone-950/70 py-2 pl-9 pr-3 text-sm text-sky-100 placeholder:text-stone-600 focus:border-sky-500/60 focus:outline-none"
+                        />
+                      </div>
+                    </div>
+
+                    {unassignedAttributeEntries.length === 0 ? (
+                      <div className="rounded-xl border border-dashed border-stone-700/60 bg-black/20 px-4 py-8 text-center text-sm italic text-stone-500">
+                        No unassigned active effect values found.
+                      </div>
+                    ) : (
+                      <div className="grid gap-3 md:grid-cols-2">
+                        {unassignedAttributeEntries.map((entry) => (
+                          <div
+                            key={entry.referenceId}
+                            onClick={() => setPendingUnassignedAttributeId(current => current === entry.referenceId ? null : entry.referenceId)}
+                            className="rounded-xl border border-sky-800/25 bg-black/25 p-4 transition-colors hover:border-sky-500/50 hover:bg-sky-950/15 cursor-pointer"
+                          >
+                            <div className="mb-3 flex items-center justify-between gap-3">
+                              <div>
+                                <h4 className="font-mono text-sm font-bold text-sky-200">{entry.referenceId}</h4>
+                                <p className="text-[11px] uppercase tracking-[0.16em] text-stone-500">Click to register this target id</p>
+                              </div>
+                              <span className={`rounded-lg border px-3 py-1 font-mono text-lg font-bold ${
+                                entry.value >= 0
+                                  ? 'border-emerald-700/40 bg-emerald-950/25 text-emerald-200'
+                                  : 'border-rose-700/40 bg-rose-950/25 text-rose-200'
+                              }`}>
+                                {entry.value >= 0 ? '+' : ''}{entry.value}
+                              </span>
+                            </div>
+                            {pendingUnassignedAttributeId === entry.referenceId && (
+                              <div
+                                className="mb-3 rounded-xl border border-sky-700/35 bg-stone-950/75 p-3"
+                                onClick={(e) => e.stopPropagation()}
+                              >
+                                <p className="mb-2 text-xs font-bold uppercase tracking-[0.16em] text-sky-300">
+                                  Add `{entry.referenceId}` to:
+                                </p>
+                                <div className="flex flex-wrap gap-2">
+                                  {[
+                                    { key: 'main', label: 'Main' },
+                                    { key: 'secondary', label: 'Secondary' },
+                                    { key: 'skills', label: 'Skills' },
+                                    { key: 'other', label: 'Other' },
+                                    { key: 'resistances', label: 'Resistances' },
+                                  ].map((target) => (
+                                    <button
+                                      key={target.key}
+                                      onClick={() => addUnassignedAttributeToTab(entry.referenceId, target.key as 'main' | 'secondary' | 'skills' | 'other' | 'resistances')}
+                                      className="rounded-lg border border-sky-700/35 bg-sky-900/20 px-3 py-1.5 text-xs font-bold text-sky-100 hover:bg-sky-800/35 cursor-pointer"
+                                      style={{ fontFamily: "'Cinzel', serif" }}
+                                    >
+                                      {target.label}
+                                    </button>
+                                  ))}
+                                  <button
+                                    onClick={() => setPendingUnassignedAttributeId(null)}
+                                    className="rounded-lg border border-stone-700/50 bg-stone-900/50 px-3 py-1.5 text-xs text-stone-300 hover:text-stone-100 cursor-pointer"
+                                  >
+                                    Cancel
+                                  </button>
+                                </div>
+                              </div>
+                            )}
+                            <div className="space-y-1.5">
+                              {entry.entries.map((historyEntry, index) => (
+                                <div key={`${entry.referenceId}-unassigned-${index}`} className="flex items-center justify-between gap-3 text-xs">
+                                  {historyEntry.sourceAnchorId ? (
+                                    <button
+                                      onClick={(e) => {
+                                        e.stopPropagation();
+                                        jumpToHistorySource(historyEntry.sourceAnchorId!);
+                                      }}
+                                      className="text-left text-sky-100/85 underline decoration-sky-500/40 underline-offset-2 hover:text-sky-300 cursor-pointer"
+                                    >
+                                      {historyEntry.label}
+                                    </button>
+                                  ) : (
+                                    <span className="text-sky-100/85">{historyEntry.label}</span>
+                                  )}
+                                  <span className={`font-mono ${historyEntry.value >= 0 ? 'text-emerald-300' : 'text-rose-300'}`}>
+                                    {historyEntry.value >= 0 ? '+' : ''}{historyEntry.value}
+                                  </span>
+                                </div>
+                              ))}
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                )}
               </div>
             </div>
           </div>
@@ -6142,7 +6490,7 @@ export const Characters: React.FC = () => {
                           const rarityKey = itemState.rarity || 'common';
                           const rarityStyle = INVENTORY_RARITY_STYLES[rarityKey];
                           return (
-                            <div key={item.id} className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${itemState.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
+                            <div id={`general-item-${item.id}`} key={item.id} className={`relative border rounded-xl p-4 shadow-lg flex flex-col gap-3 transition-all ${rarityStyle.card} ${itemState.equipped ? 'ring-1 ring-amber-300/40 shadow-amber-300/10' : ''}`}>
                               <div className="flex items-start justify-between gap-3">
                                 <div className="flex flex-wrap items-center gap-2">
                                   <span className={`px-2 py-0.5 text-[10px] font-bold uppercase tracking-[0.2em] border rounded-full ${rarityStyle.badge}`}>
@@ -7151,6 +7499,7 @@ export const Characters: React.FC = () => {
                           />
                         )}
                         <div
+                          id={`spell-${spell.id}`}
                           className="relative rounded-xl border p-4 shadow-lg flex flex-col gap-3"
                           style={{
                             borderColor: `${spell.color || '#7c3aed'}88`,

@@ -21,6 +21,7 @@ export interface CharacterBar {
 
 export interface SkillAttribute extends CustomAttribute {
   proficiencyMode?: 'none' | 'half' | 'proficient' | 'expertise';
+  linkedMainAttributeId?: string;
 }
 
 export interface CharacterDiceMacro {
@@ -65,6 +66,7 @@ export interface CharacterAttributeSectionModes {
   secondary?: 'all' | 'favorites' | 'hidden';
   skills?: 'all' | 'favorites' | 'hidden';
   other?: 'all' | 'favorites' | 'hidden';
+  resistances?: 'all' | 'favorites' | 'hidden';
   bars?: 'all' | 'favorites' | 'hidden';
 }
 
@@ -74,6 +76,7 @@ export interface CharacterAttributeSectionColumns {
   secondary?: number;
   skills?: number;
   other?: number;
+  resistances?: number;
   bars?: number;
 }
 
@@ -169,6 +172,7 @@ export interface CharacterData {
   secondaryAttributes?: CustomAttribute[];
   skills?: SkillAttribute[];
   otherAttributes?: CustomAttribute[];
+  resistances?: CustomAttribute[];
   bars?: CharacterBar[];
   diceMacros?: CharacterDiceMacro[];
   diceMacroFolders?: CharacterEntryFolder[];
