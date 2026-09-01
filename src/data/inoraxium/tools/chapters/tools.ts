@@ -1,9 +1,8 @@
 import { Chapter } from '../../../../types';
+import { assetCreatorChapter } from './asset-creator';
 import { battleTrackerChapter } from './battle-tracker';
 import { charactersChapter } from './characters';
-import { diceMacrosChapter } from './dice-macros';
-import { messageSenderChapter } from './message-sender';
-import { skillTreeChapter } from './skill-tree';
+import { sessionChapter } from './session';
 
 export const toolsChapter: Chapter = {
   id: 'tools',
@@ -11,7 +10,7 @@ export const toolsChapter: Chapter = {
   subtitle: 'Instruments and Utilities for the Game Master',
   icon: '🛠️',
   content: 'src/data/inoraxium/tools/chapters/tools.md',
-  subChapters: [battleTrackerChapter, diceMacrosChapter, messageSenderChapter, charactersChapter, skillTreeChapter],
+  subChapters: [battleTrackerChapter, charactersChapter, sessionChapter, assetCreatorChapter],
 };
 
-export { battleTrackerChapter, diceMacrosChapter, messageSenderChapter, charactersChapter, skillTreeChapter };
+export { assetCreatorChapter, battleTrackerChapter, charactersChapter, sessionChapter };

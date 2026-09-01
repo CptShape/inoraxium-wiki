@@ -20,6 +20,22 @@ interface FolderGroup<T> {
   entries: T[];
 }
 
+const statusDurationLabels: Record<string, string> = {
+  custom: 'Custom',
+  round: 'Round',
+  'short-rest': 'Short Rest',
+  'long-rest': 'Long Rest',
+  minute: 'Minute',
+};
+
+const formatStatusDuration = (status: Partial<CharacterStatus>): string => {
+  const duration = status.duration || '';
+  const type = status.durationType || 'custom';
+  if (type === 'custom') return duration || 'No duration';
+  const label = statusDurationLabels[type] || 'Duration';
+  return `${duration || '0'} ${label}${duration === '1' ? '' : 's'}`;
+};
+
 const parchmentBackground = {
   backgroundImage:
     "radial-gradient(circle at top left, rgba(120,53,15,0.12), transparent 35%), linear-gradient(180deg, rgba(245,232,197,0.98) 0%, rgba(235,219,184,0.98) 100%)",
@@ -261,7 +277,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
         <div className="flex items-center justify-between gap-3">
           <h3 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>{status.name || 'Unnamed Status'}</h3>
           <span className="rounded-full border border-amber-900/15 bg-amber-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-900">
-            {status.duration || 'No duration'}
+            {formatStatusDuration(status)}
           </span>
         </div>
       </button>

@@ -1,13 +1,17 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2 } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
+import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown } from 'lucide-react';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 
-function evalCharFormula(formula: string, context: Record<string, number>): number {
+function evalCharFormula(formula: string, context: Record<string, number>, localContext: Record<string, number> = {}): number {
   if (!formula) return 0;
   
-  let expr = formula.replace(/@([a-zA-Z0-9_-]+)/g, (match, refId) => {
-    return (context[refId] ?? 0).toString();
+  let expr = formula.replace(/@@([a-zA-Z0-9_-]+)/g, (_match, refId) => {
+    return (localContext[refId] ?? 0).toString();
+  });
+
+  expr = expr.replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, refId) => {
+    return `${prefix}${(context[refId] ?? 0).toString()}`;
   });
 
   expr = expr.replace(/roundup/g, 'Math.ceil')
@@ -73,7 +77,7 @@ interface CharacterAttributePreset {
   attributeSectionColumns: Required<CharacterAttributeSectionColumns>;
 }
 
-type CharacterEntryExportKind = 'item' | 'spell' | 'status' | 'macro';
+type CharacterEntryExportKind = 'item' | 'spell' | 'status' | 'macro' | 'script';
 
 interface CharacterEntryExportPayload {
   schema: 'inoraxium-character-entry';
@@ -86,9 +90,107 @@ interface CharacterEntryExportPayload {
 }
 
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
-type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'inventory' | 'spells' | 'statuses';
+type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'scripts' | 'inventory' | 'spells' | 'statuses';
 type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' | 'resistances' | 'unassigned';
 type MacroSheetSubTab = 'main' | 'rolls' | string;
+type ScriptSheetSubTab = 'main' | string;
+
+const STATUS_DURATION_OPTIONS: Array<{ value: CharacterStatusDurationType; label: string }> = [
+  { value: 'custom', label: 'Custom' },
+  { value: 'round', label: 'Round' },
+  { value: 'battle', label: 'Battle' },
+  { value: 'short-rest', label: 'Short Rest' },
+  { value: 'long-rest', label: 'Long Rest' },
+  { value: 'minute', label: 'Minute' },
+];
+
+const STATUS_DURATION_END_BEHAVIOR_OPTIONS: Array<{ value: CharacterStatusDurationEndBehavior; label: string }> = [
+  { value: 'delete', label: 'Delete at 0' },
+  { value: 'deactivate', label: 'Deactivate at 0' },
+];
+
+const REPLENISH_TRIGGER_OPTIONS: Array<{ value: CharacterReplenishTrigger; label: string }> = [
+  { value: 'custom', label: 'Custom' },
+  { value: 'short-rest', label: 'Short Rest' },
+  { value: 'long-rest', label: 'Long Rest' },
+  { value: 'battle', label: 'Battle' },
+  { value: 'round', label: 'Round' },
+];
+
+const BAR_RESET_TRIGGER_OPTIONS: Array<{ value: NonNullable<CharacterBar['resetTrigger']>; label: string }> = [
+  { value: 'short-rest', label: 'Short Rest' },
+  { value: 'long-rest', label: 'Long Rest' },
+  { value: 'turn-end', label: 'Turn End' },
+  { value: 'battle-end', label: 'Battle End' },
+];
+
+const getBarMode = (bar: Partial<CharacterBar>): NonNullable<CharacterBar['mode']> => bar.mode || 'default';
+
+const getStatusDurationType = (status: Partial<CharacterStatus>): CharacterStatusDurationType => (
+  status.durationType || 'custom'
+);
+
+const getStatusDurationEndBehavior = (status: Partial<CharacterStatus>): CharacterStatusDurationEndBehavior => (
+  status.durationEndBehavior || 'delete'
+);
+
+const formatStatusDuration = (status: Partial<CharacterStatus>): string => {
+  const duration = status.duration || '';
+  const type = getStatusDurationType(status);
+  if (type === 'custom') return duration || '-';
+  const label = STATUS_DURATION_OPTIONS.find(option => option.value === type)?.label || 'Duration';
+  return `${duration || '0'} ${label}${duration === '1' ? '' : 's'}`;
+};
+
+const parseStatusDurationAmount = (duration: string): number => {
+  const parsed = Number.parseFloat(duration || '0');
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const formatStatusDurationAmount = (amount: number): string => (
+  Number.isInteger(amount) ? `${amount}` : `${Math.round(amount * 100) / 100}`
+);
+
+const parseReplenishAmount = (value?: string): number => {
+  const parsed = Number.parseFloat(value || '0');
+  return Number.isFinite(parsed) ? parsed : 0;
+};
+
+const sanitizeWholeNumberInput = (value: string): string => value.replace(/\D/g, '');
+
+const parseWholeNumberInput = (value: string): number => Number.parseInt(sanitizeWholeNumberInput(value) || '0', 10);
+
+const replenishValue = (currentValue: string | undefined, maxValue: string | undefined, amountValue: string | undefined): string => {
+  const current = parseReplenishAmount(currentValue);
+  const max = parseReplenishAmount(maxValue);
+  const amount = parseReplenishAmount(amountValue);
+  if (amount <= 0) return currentValue || '';
+
+  const next = max > 0 ? Math.min(current + amount, max) : current + amount;
+  return formatStatusDurationAmount(next);
+};
+
+const createCharacterAction = (): CharacterAction => ({
+  id: `act_${uid()}`,
+  name: 'New Action',
+  description: '',
+  cost: '',
+  usageRemaining: '',
+  maxUsage: '',
+  replenishTrigger: 'custom',
+  replenishAmount: '',
+  macros: [],
+  effects: [],
+});
+
+const createAttributeEffect = (): StatusEffect => ({
+  id: `eff_${uid()}`,
+  effectType: 'attribute',
+  targetId: '',
+  value: '0',
+  active: true,
+  useTargetPicker: true,
+});
 
 interface AttributeResolvedOption {
   value: number;
@@ -201,6 +303,16 @@ const CHARACTER_PORTRAIT_OPTIONS = Object.entries(PORTRAIT_IMAGE_MODULES)
   }))
   .sort((a, b) => a.name.localeCompare(b.name));
 
+const normalizeLocalVariables = (variables?: CharacterLocalVariable[]): CharacterLocalVariable[] => (
+  Array.isArray(variables)
+    ? variables.map(variable => ({
+      id: variable.id || '',
+      description: variable.description || '',
+      value: variable.value || '0',
+    }))
+    : []
+);
+
 const normalizeGeneralItem = (item: CharacterGeneralItem): CharacterGeneralItem => ({
   ...item,
   description: item.description || '',
@@ -211,6 +323,7 @@ const normalizeGeneralItem = (item: CharacterGeneralItem): CharacterGeneralItem 
   macros: item.macros || [],
   effects: item.effects || [],
   actions: item.actions || [],
+  localVariables: normalizeLocalVariables(item.localVariables),
   hidden: item.hidden ?? false,
 });
 
@@ -296,11 +409,12 @@ function rollDice(notation: string): DiceRoll {
 function executeCharacterMacro(
   macro: CharacterDiceMacro,
   context: Record<string, number>,
-  existingIds: Set<string>
+  existingIds: Set<string>,
+  localContext: Record<string, number> = {}
 ): RollResult {
   const steps: RollStep[] = [];
   const formula = macro.formula.trim();
-  const parts = formula.split(/(\d*d\d+(?:kh|kl)?\d*|@[a-zA-Z0-9_-]+)/gi);
+  const parts = formula.split(/(\d*d\d+(?:kh|kl)?\d*|@@[a-zA-Z0-9_-]+|@[a-zA-Z0-9_-]+)/gi);
   const resolvedParts: string[] = [];
 
   for (const part of parts) {
@@ -314,6 +428,20 @@ function executeCharacterMacro(
         : `${dice.sum}`;
       steps.push({ label: `🎲 ${trimmed}`, value: dice.sum, detail });
       resolvedParts.push(dice.sum.toString());
+      continue;
+    }
+
+    const localRefMatch = trimmed.match(/^@@([a-zA-Z0-9_-]+)$/);
+    if (localRefMatch) {
+      const refId = localRefMatch[1];
+      const found = Object.prototype.hasOwnProperty.call(localContext, refId);
+      const value = found ? (localContext[refId] ?? 0) : 0;
+      steps.push({
+        label: found ? `@@${refId}` : `@@${refId}`,
+        value,
+        detail: found ? `${refId} = ${value}` : `${refId} local variable not found, using 0`,
+      });
+      resolvedParts.push(value.toString());
       continue;
     }
 
@@ -394,7 +522,12 @@ async function sendMessageToDiscord(webhookUrl: string, username: string, messag
   }
 }
 
-export const Characters: React.FC = () => {
+interface CharactersProps {
+  embeddedCharacterId?: string | null;
+  embeddedMode?: boolean;
+}
+
+export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = null, embeddedMode = false }) => {
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
@@ -402,10 +535,14 @@ export const Characters: React.FC = () => {
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
   const [ownerTransferUid, setOwnerTransferUid] = useState('');
   const [ownerTransferStatus, setOwnerTransferStatus] = useState<string | null>(null);
+  const [controlAccessUid, setControlAccessUid] = useState('');
+  const [viewAccessUid, setViewAccessUid] = useState('');
+  const [accessStatus, setAccessStatus] = useState<string | null>(null);
   const [characters, setCharacters] = useState<CharacterData[]>([]);
   const [favoriteIds, setFavoriteIds] = useState<string[]>([]);
   const [filteredCharacters, setFilteredCharacters] = useState<CharacterData[]>([]);
   const [selectedCharacter, setSelectedCharacter] = useState<CharacterData | null>(null);
+  const previousSelectedCharacterIdRef = useRef<string | null>(null);
   const [isViewingSheet, setIsViewingSheet] = useState(false);
   const [activeSheetTab, setActiveSheetTab] = useState<CharacterSheetTab>('bio');
   const [activeAttributeSubTab, setActiveAttributeSubTab] = useState<AttributeSheetSubTab>('bars');
@@ -464,11 +601,17 @@ export const Characters: React.FC = () => {
   const [otherAttrs, setOtherAttrs] = useState<CustomAttribute[]>([]);
   const [resistances, setResistances] = useState<CustomAttribute[]>([]);
   const [bars, setBars] = useState<CharacterBar[]>([]);
+  const [openBarSettingsId, setOpenBarSettingsId] = useState<string | null>(null);
+  const [barTargetRequest, setBarTargetRequest] = useState<{ description: string; resolve: (barId: string | null) => void } | null>(null);
+  const [barTargetDraft, setBarTargetDraft] = useState('');
+  const [effectTargetRequest, setEffectTargetRequest] = useState<{ label: string; resolve: (targetId: string | null) => void } | null>(null);
+  const [effectTargetDraft, setEffectTargetDraft] = useState('');
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
   const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeStatusCategoryId, setActiveStatusCategoryId] = useState<string | null>(null);
   const [collapsedStatusFolders, setCollapsedStatusFolders] = useState<string[]>([]);
   const [expandedStatusDescriptions, setExpandedStatusDescriptions] = useState<string[]>([]);
+  const [expandedStatusActionDescriptions, setExpandedStatusActionDescriptions] = useState<string[]>([]);
   const [charGeneralItems, setCharGeneralItems] = useState<CharacterGeneralItem[]>([]);
   const [expandedGeneralItemDescriptions, setExpandedGeneralItemDescriptions] = useState<string[]>([]);
   const [charInventory, setCharInventory] = useState<CharacterInventoryItem[]>([]);
@@ -494,6 +637,10 @@ export const Characters: React.FC = () => {
   const [diceMacroFolders, setDiceMacroFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeMacroCategoryId, setActiveMacroCategoryId] = useState<MacroSheetSubTab>('main');
   const [collapsedDiceMacroFolders, setCollapsedDiceMacroFolders] = useState<string[]>([]);
+  const [charScripts, setCharScripts] = useState<CharacterScript[]>([]);
+  const [scriptFolders, setScriptFolders] = useState<CharacterEntryFolder[]>([]);
+  const [activeScriptCategoryId, setActiveScriptCategoryId] = useState<ScriptSheetSubTab>('main');
+  const [collapsedScriptFolders, setCollapsedScriptFolders] = useState<string[]>([]);
   const [mainDiceState, setMainDiceState] = useState<UserDiceSettings>(DEFAULT_CHARACTER_DICE_STATE);
   const [rollResults, setRollResults] = useState<RollResult[]>([]);
   const [editingMacroId, setEditingMacroId] = useState<string | null>(null);
@@ -540,7 +687,7 @@ export const Characters: React.FC = () => {
   }, [userId, userEmail]);
 
   useEffect(() => {
-    if (!isAdmin) {
+    if (!userId || userId === 'guest') {
       setUserProfiles([]);
       return;
     }
@@ -552,17 +699,33 @@ export const Characters: React.FC = () => {
     return () => {
       cancelled = true;
     };
-  }, [isAdmin]);
+  }, [userId]);
 
   const fetchAll = async () => {
     const chars = await loadCharacters(userId, isAdmin);
     setCharacters(chars);
     const favs = await loadFavorites(userId);
     setFavoriteIds(favs);
-    if (chars.length > 0 && !selectedCharacter) setSelectedCharacter(chars[0]);
+    if (embeddedMode && embeddedCharacterId) {
+      setSelectedCharacter(chars.find(character => character.id === embeddedCharacterId) || null);
+      setIsViewingSheet(true);
+    } else if (chars.length > 0 && !selectedCharacter) {
+      setSelectedCharacter(chars[0]);
+    }
   };
 
   useEffect(() => { fetchAll(); }, [userId, isAdmin]);
+
+  useEffect(() => {
+    if (!embeddedMode) return;
+    setIsViewingSheet(true);
+    if (!embeddedCharacterId) {
+      setSelectedCharacter(null);
+      return;
+    }
+    const nextCharacter = characters.find(character => character.id === embeddedCharacterId) || null;
+    setSelectedCharacter(nextCharacter);
+  }, [embeddedMode, embeddedCharacterId, characters]);
 
   useEffect(() => {
     let next = [...characters];
@@ -609,6 +772,10 @@ export const Characters: React.FC = () => {
       setDiceMacroFolders(selectedCharacter.diceMacroFolders || []);
       setActiveMacroCategoryId('main');
       setCollapsedDiceMacroFolders(selectedCharacter.collapsedDiceMacroFolderIds || []);
+      setCharScripts(selectedCharacter.scripts || []);
+      setScriptFolders(selectedCharacter.scriptFolders || []);
+      setActiveScriptCategoryId('main');
+      setCollapsedScriptFolders(selectedCharacter.collapsedScriptFolderIds || []);
       setCharStatuses(selectedCharacter.statuses || []);
       setStatusFolders(selectedCharacter.statusFolders || []);
       setActiveStatusCategoryId(null);
@@ -627,6 +794,9 @@ export const Characters: React.FC = () => {
       setModFormula(selectedCharacter.modifierFormula || 'Math.floor((@value - 10) / 2)');
       setOwnerTransferUid(selectedCharacter.userId || '');
       setOwnerTransferStatus(null);
+      setControlAccessUid('');
+      setViewAccessUid('');
+      setAccessStatus(null);
     }
   }, [selectedCharacter]);
 
@@ -655,7 +825,17 @@ export const Characters: React.FC = () => {
   }, [activeMacroCategoryId, diceMacroFolders]);
 
   useEffect(() => {
-    if (!selectedCharacter) return;
+    if (activeScriptCategoryId !== 'main' && !scriptFolders.some(folder => folder.id === activeScriptCategoryId)) {
+      setActiveScriptCategoryId('main');
+    }
+  }, [activeScriptCategoryId, scriptFolders]);
+
+  useEffect(() => {
+    const previousCharacterId = previousSelectedCharacterIdRef.current;
+    const currentCharacterId = selectedCharacter?.id || null;
+    previousSelectedCharacterIdRef.current = currentCharacterId;
+
+    if (!selectedCharacter || previousCharacterId === currentCharacterId) return;
     setRollResults([]);
     setEditingMacroId(null);
     setMacroEditBuffer({});
@@ -669,6 +849,7 @@ export const Characters: React.FC = () => {
     setActiveSheetTab('bio');
     setActiveMacroCategoryId('main');
     setExpandedStatusDescriptions([]);
+    setExpandedStatusActionDescriptions([]);
     setExpandedGeneralItemDescriptions([]);
     setExpandedInventoryDescriptions([]);
     setExpandedInventoryActionDescriptions([]);
@@ -830,6 +1011,24 @@ export const Characters: React.FC = () => {
     }
   };
 
+  const createLocalVariable = (): CharacterLocalVariable => ({
+    id: `local_${uid()}`,
+    description: '',
+    value: '0',
+  });
+
+  const getLocalVariableContext = (
+    variables: CharacterLocalVariable[] | undefined,
+    globalContext: Record<string, number>
+  ): Record<string, number> => {
+    const localContext: Record<string, number> = {};
+    normalizeLocalVariables(variables).forEach((variable) => {
+      if (!variable.id) return;
+      localContext[variable.id] = evalCharFormula(variable.value || '0', globalContext, localContext);
+    });
+    return localContext;
+  };
+
   const getCharacterContext = () => {
     const context: Record<string, number> = {};
     const baseAttrs = [...(mainAttrs || []), ...(secondaryAttrs || []), ...(otherAttrs || []), ...(resistances || [])];
@@ -850,12 +1049,26 @@ export const Characters: React.FC = () => {
       const effectBuckets: Record<string, number[]> = {};
 
       (charStatuses || []).forEach(status => {
+        if ((status.active ?? true) === false) return;
+        const statusLocalContext = getLocalVariableContext(status.localVariables, sourceContext);
         (status.effects || []).forEach(effect => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-            const effVal = evalCharFormula(effect.value || '0', sourceContext);
+            const effVal = evalCharFormula(effect.value || '0', sourceContext, statusLocalContext);
             if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
             effectBuckets[effect.targetId].push(effVal);
           }
+        });
+
+        (status.actions || []).forEach(action => {
+          (action.effects || []).forEach(effect => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
+            if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
+              const effVal = evalCharFormula(effect.value || '0', sourceContext, statusLocalContext);
+              if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
+              effectBuckets[effect.targetId].push(effVal);
+            }
+          });
         });
       });
 
@@ -876,10 +1089,12 @@ export const Characters: React.FC = () => {
 
       (charInventory || []).forEach(item => {
         if (!item.equipped) return;
+        const itemLocalContext = getLocalVariableContext(item.localVariables, sourceContext);
 
         (item.effects || []).forEach(effect => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-            const effVal = evalCharFormula(effect.value || '0', sourceContext);
+            const effVal = evalCharFormula(effect.value || '0', sourceContext, itemLocalContext);
             if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
             effectBuckets[effect.targetId].push(effVal);
           }
@@ -887,8 +1102,9 @@ export const Characters: React.FC = () => {
 
         (item.actions || []).forEach(action => {
           (action.effects || []).forEach(effect => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              const effVal = evalCharFormula(effect.value || '0', sourceContext, itemLocalContext);
               if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
               effectBuckets[effect.targetId].push(effVal);
             }
@@ -898,10 +1114,12 @@ export const Characters: React.FC = () => {
 
       (charGeneralItems || []).map(normalizeGeneralItem).forEach(item => {
         if (!item.equipped) return;
+        const itemLocalContext = getLocalVariableContext(item.localVariables, sourceContext);
 
         (item.effects || []).forEach(effect => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-            const effVal = evalCharFormula(effect.value || '0', sourceContext);
+            const effVal = evalCharFormula(effect.value || '0', sourceContext, itemLocalContext);
             if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
             effectBuckets[effect.targetId].push(effVal);
           }
@@ -909,8 +1127,9 @@ export const Characters: React.FC = () => {
 
         (item.actions || []).forEach(action => {
           (action.effects || []).forEach(effect => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              const effVal = evalCharFormula(effect.value || '0', sourceContext, itemLocalContext);
               if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
               effectBuckets[effect.targetId].push(effVal);
             }
@@ -919,10 +1138,12 @@ export const Characters: React.FC = () => {
       });
 
       (charSpells || []).forEach(spell => {
+        const spellLocalContext = getLocalVariableContext(spell.localVariables, sourceContext);
         (spell.actions || []).forEach(action => {
           (action.effects || []).forEach(effect => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if ((effect.active ?? true) && effect.targetId && targetIds.includes(effect.targetId)) {
-              const effVal = evalCharFormula(effect.value || '0', sourceContext);
+              const effVal = evalCharFormula(effect.value || '0', sourceContext, spellLocalContext);
               if (!effectBuckets[effect.targetId]) effectBuckets[effect.targetId] = [];
               effectBuckets[effect.targetId].push(effVal);
             }
@@ -947,8 +1168,12 @@ export const Characters: React.FC = () => {
     });
     (bars || []).forEach((bar) => {
       if (bar.id) {
-        context[`${bar.id}_max`] = 0;
         context[`${bar.id}_current`] = 0;
+        if (getBarMode(bar) === 'resource') {
+          context[`${bar.id}_reset`] = 0;
+        } else {
+          context[`${bar.id}_max`] = 0;
+        }
       }
     });
 
@@ -1035,16 +1260,41 @@ export const Characters: React.FC = () => {
 
       (bars || []).forEach(bar => {
         if (bar.id) {
-          allValuesWithEffects[`${bar.id}_max`] = evalCharFormula(bar.maxValue || '0', {
+          const barMode = getBarMode(bar);
+          const baseCurrentId = `${bar.id}_current`;
+          allValuesWithEffects[baseCurrentId] = evalCharFormula(bar.currentValue || '0', {
             ...previousContext,
             ...allValuesWithEffects,
           });
-          allValuesWithEffects[`${bar.id}_current`] = evalCharFormula(bar.currentValue || '0', {
-            ...previousContext,
-            ...allValuesWithEffects,
-          });
+          if (barMode === 'resource') {
+            allValuesWithEffects[`${bar.id}_reset`] = evalCharFormula(bar.resetValue || '0', {
+              ...previousContext,
+              ...allValuesWithEffects,
+            });
+          } else {
+            allValuesWithEffects[`${bar.id}_max`] = evalCharFormula(bar.maxValue || '0', {
+              ...previousContext,
+              ...allValuesWithEffects,
+            });
+          }
         }
       });
+
+      const resourceBarCurrentIds = (bars || [])
+        .filter(bar => bar.id && getBarMode(bar) === 'resource')
+        .map(bar => `${bar.id}_current`);
+      if (resourceBarCurrentIds.length > 0) {
+        const resourceValuesWithStatuses = applyStatusEffects(
+          resourceBarCurrentIds,
+          allValuesWithEffects,
+          { ...previousContext, ...allValuesWithEffects }
+        );
+        Object.assign(allValuesWithEffects, applyInventoryEffects(
+          resourceBarCurrentIds,
+          resourceValuesWithStatuses,
+          { ...previousContext, ...resourceValuesWithStatuses }
+        ));
+      }
 
       const nextKeys = new Set([...Object.keys(context), ...Object.keys(allValuesWithEffects)]);
       let hasChanged = false;
@@ -1076,16 +1326,51 @@ export const Characters: React.FC = () => {
     });
     bars.forEach((bar) => {
       if (bar.id) {
-        ids.add(`${bar.id}_max`);
         ids.add(`${bar.id}_current`);
+        if (getBarMode(bar) === 'resource') {
+          ids.add(`${bar.id}_reset`);
+        } else {
+          ids.add(`${bar.id}_max`);
+        }
       }
     });
     return ids;
   };
 
-  const isSelectedCharacterOwnedByUser = !!selectedCharacter && (selectedCharacter.userId === userId || !selectedCharacter.userId);
-  const isCharacterOwner = !!selectedCharacter && (isAdmin || isSelectedCharacterOwnedByUser);
-  const canEditInventory = !!selectedCharacter && (isCharacterOwner || selectedCharacter.visibility === 'public');
+  const getProfileLabel = (uid: string) => {
+    const profile = userProfiles.find((item) => item.uid === uid);
+    return profile?.email || profile?.displayName || uid;
+  };
+
+  const canOwnCharacter = (character: CharacterData | null | undefined) => (
+    !!character && !!userId && (character.userId === userId || !character.userId)
+  );
+
+  const canControlCharacter = (character: CharacterData | null | undefined) => (
+    !!character && !!userId && (character.controlUserIds || []).includes(userId)
+  );
+
+  const canViewPrivateCharacter = (character: CharacterData | null | undefined) => (
+    !!character && !!userId && (character.viewUserIds || []).includes(userId)
+  );
+
+  const isSelectedCharacterOwnedByUser = canOwnCharacter(selectedCharacter);
+  const isSelectedCharacterControlledByUser = canControlCharacter(selectedCharacter);
+  const isSelectedCharacterViewedByUser = canViewPrivateCharacter(selectedCharacter);
+  const canTransferCharacterOwner = !!selectedCharacter && (isAdmin || isSelectedCharacterOwnedByUser);
+  const canManageControlAccess = canTransferCharacterOwner;
+  const canManageViewAccess = !!selectedCharacter && (isAdmin || isSelectedCharacterOwnedByUser || isSelectedCharacterControlledByUser);
+  const isCharacterOwner = !!selectedCharacter && (isAdmin || isSelectedCharacterOwnedByUser || isSelectedCharacterControlledByUser);
+  const canEditInventory = isCharacterOwner;
+  const selectedAccessRole = isAdmin
+    ? 'Admin'
+    : isSelectedCharacterOwnedByUser
+      ? 'Owner'
+      : isSelectedCharacterControlledByUser
+        ? 'Control'
+        : isSelectedCharacterViewedByUser
+          ? 'View'
+          : 'Viewer';
 
   const createFolder = (name: string, parentId?: string | null): CharacterEntryFolder => ({
     id: `folder_${uid()}`,
@@ -1273,6 +1558,66 @@ export const Characters: React.FC = () => {
     setDiceMacroFolders(prev => [...prev, createFolder('New Macro Folder', parentId)]);
   };
 
+  const updateScriptFolder = (folderId: string, updater: (folder: CharacterEntryFolder) => CharacterEntryFolder) => {
+    setScriptFolders(prev => prev.map(folder => folder.id === folderId ? updater(folder) : folder));
+  };
+
+  const moveScriptFolder = (folderId: string, direction: 'up' | 'down') => {
+    setScriptFolders(prev => {
+      const index = prev.findIndex(folder => folder.id === folderId);
+      if (index < 0) return prev;
+      const parentId = prev[index].parentId ?? null;
+      const siblingIndexes = prev
+        .map((folder, idx) => ({ folder, idx }))
+        .filter(entry => (entry.folder.parentId ?? null) === parentId)
+        .map(entry => entry.idx);
+      const siblingPosition = siblingIndexes.indexOf(index);
+      const targetSiblingPosition = direction === 'up' ? siblingPosition - 1 : siblingPosition + 1;
+      if (siblingPosition < 0 || targetSiblingPosition < 0 || targetSiblingPosition >= siblingIndexes.length) return prev;
+
+      const targetIndex = siblingIndexes[targetSiblingPosition];
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(index < targetIndex ? targetIndex : targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addScriptFolder = (parentId: string | null = null) => {
+    setScriptFolders(prev => [...prev, createFolder('New Script Folder', parentId)]);
+  };
+
+  const removeScriptFolder = (folderId: string) => {
+    setScriptFolders(prev => {
+      const folder = prev.find(entry => entry.id === folderId);
+      const nextParentId = folder?.parentId ?? null;
+      const descendants = new Set<string>();
+      const collectDescendants = (parent: string) => {
+        prev.forEach(entry => {
+          if ((entry.parentId ?? null) === parent) {
+            descendants.add(entry.id);
+            collectDescendants(entry.id);
+          }
+        });
+      };
+      collectDescendants(folderId);
+
+      if (activeScriptCategoryId === folderId || descendants.has(activeScriptCategoryId)) {
+        setActiveScriptCategoryId('main');
+      }
+
+      setCharScripts(scripts => scripts.map(script => {
+        if (script.folderId === folderId) return { ...script, folderId: nextParentId };
+        if (script.folderId && descendants.has(script.folderId)) return { ...script, folderId: nextParentId };
+        return script;
+      }));
+
+      return prev
+        .filter(entry => entry.id !== folderId)
+        .map(entry => descendants.has(entry.id) ? { ...entry, parentId: nextParentId } : entry);
+    });
+  };
+
   const removeDiceMacroFolder = (folderId: string) => {
     setDiceMacroFolders(prev => {
       const folder = prev.find(entry => entry.id === folderId);
@@ -1441,6 +1786,7 @@ export const Characters: React.FC = () => {
         macros: [],
         effects: [],
         actions: [],
+        localVariables: [],
         hidden: false,
         folderId,
       },
@@ -1457,8 +1803,16 @@ export const Characters: React.FC = () => {
         id: `st_${uid()}`,
         name: 'New Status',
         duration: '1 round',
+        durationType: 'custom',
+        durationEndBehavior: 'delete',
+        maxDuration: '',
+        replenishTrigger: 'custom',
+        replenishAmount: '',
         description: '',
         effects: [],
+        actions: [],
+        localVariables: [],
+        active: true,
         color: categoryColor || '#f59e0b',
         hidden: false,
         folderId,
@@ -1470,9 +1824,169 @@ export const Characters: React.FC = () => {
     setCharStatuses(prev => prev.map(status => status.id === statusId ? updater(status) : status));
   };
 
+  const addStatusLocalVariable = (statusId: string) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      localVariables: [...(status.localVariables || []), createLocalVariable()],
+    }));
+  };
+
+  const updateStatusLocalVariable = (statusId: string, variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      localVariables: (status.localVariables || []).map((variable, index) => index === variableIndex ? updater(variable) : variable),
+    }));
+  };
+
+  const removeStatusLocalVariable = (statusId: string, variableIndex: number) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      localVariables: (status.localVariables || []).filter((_, index) => index !== variableIndex),
+    }));
+  };
+
   const removeStatus = (statusId: string) => {
     setCharStatuses(prev => prev.filter(status => status.id !== statusId));
     setExpandedStatusDescriptions(prev => prev.filter(id => id !== statusId));
+    setExpandedStatusActionDescriptions(prev => prev.filter(id => !id.startsWith(`${statusId}:`)));
+  };
+
+  const applyStatusTimePassage = (changes: Partial<Record<CharacterStatusDurationType, number | 'deactivate'>>) => {
+    setCharStatuses(prev => prev
+      .map((status) => {
+        const durationType = getStatusDurationType(status);
+        const change = changes[durationType];
+        if (!change || durationType === 'custom') return status;
+
+        if (change === 'deactivate') {
+          return { ...status, active: false };
+        }
+
+        const nextAmount = parseStatusDurationAmount(status.duration) - change;
+        if (nextAmount <= 0) {
+          return getStatusDurationEndBehavior(status) === 'deactivate'
+            ? { ...status, duration: '0', active: false }
+            : null;
+        }
+
+        return {
+          ...status,
+          duration: formatStatusDurationAmount(nextAmount),
+        };
+      })
+      .filter((status): status is CharacterStatus => Boolean(status)));
+  };
+
+  const replenishActions = (actions: CharacterAction[] | undefined, triggers: CharacterReplenishTrigger[]): CharacterAction[] => (
+    (actions || []).map(action => (
+      action.replenishTrigger && triggers.includes(action.replenishTrigger)
+        ? { ...action, usageRemaining: replenishValue(action.usageRemaining, action.maxUsage, action.replenishAmount) }
+        : action
+    ))
+  );
+
+  const replenishSpellUsage = (spell: CharacterSpell, triggers: CharacterReplenishTrigger[]): CharacterSpell => (
+    spell.replenishTrigger && triggers.includes(spell.replenishTrigger)
+      ? { ...spell, usageRemaining: replenishValue(spell.usageRemaining, spell.totalUsage, spell.replenishAmount) }
+      : spell
+  );
+
+  const applyActionReplenish = (triggers: CharacterReplenishTrigger[]) => {
+    setCharGeneralItems(prev => prev.map(item => ({
+      ...item,
+      actions: replenishActions(item.actions, triggers),
+    })));
+    setCharInventory(prev => prev.map(item => ({
+      ...item,
+      actions: replenishActions(item.actions, triggers),
+    })));
+    setCharSpells(prev => prev.map(spell => ({
+      ...replenishSpellUsage(spell, triggers),
+      actions: replenishActions(spell.actions, triggers),
+    })));
+    setCharStatuses(prev => prev.map(status => ({
+      ...status,
+      duration: status.replenishTrigger && triggers.includes(status.replenishTrigger)
+        ? replenishValue(status.duration, status.maxDuration, status.replenishAmount)
+        : status.duration,
+      active: status.replenishTrigger && triggers.includes(status.replenishTrigger) && parseReplenishAmount(status.replenishAmount) > 0
+        ? true
+        : status.active,
+      actions: replenishActions(status.actions, triggers),
+    })));
+  };
+
+  const resetResourceBars = (trigger: NonNullable<CharacterBar['resetTrigger']>) => {
+    const context = getCharacterContext();
+    setBars(prev => prev.map((bar) => {
+      if (getBarMode(bar) !== 'resource' || bar.resetTrigger !== trigger) return bar;
+      const resetValue = evalCharFormula(bar.resetValue || '0', context);
+      return {
+        ...bar,
+        currentValue: `${Math.round(resetValue * 100) / 100}`,
+      };
+    }));
+  };
+
+  const handleShortRest = () => {
+    applyStatusTimePassage({
+      'short-rest': 1,
+      minute: 60,
+      round: 'deactivate',
+    });
+    applyActionReplenish(['short-rest']);
+    resetResourceBars('short-rest');
+  };
+
+  const handleLongRest = () => {
+    const rawMinutes = window.prompt('How many minutes did the character sleep?', '480');
+    if (rawMinutes === null) return;
+    const minutes = Number.parseFloat(rawMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      window.alert('Please enter a valid minute amount.');
+      return;
+    }
+
+    applyStatusTimePassage({
+      'short-rest': 2,
+      'long-rest': 1,
+      minute: minutes,
+      round: 'deactivate',
+    });
+    applyActionReplenish(['short-rest', 'long-rest']);
+    resetResourceBars('long-rest');
+  };
+
+  const handleEndTurn = () => {
+    applyStatusTimePassage({
+      round: 1,
+      minute: 0.2,
+    });
+    applyActionReplenish(['round']);
+    resetResourceBars('turn-end');
+  };
+
+  const handleEndBattle = () => {
+    applyStatusTimePassage({
+      battle: 1,
+    });
+    applyActionReplenish(['battle']);
+    resetResourceBars('battle-end');
+  };
+
+  const handleSkipMinute = () => {
+    const rawMinutes = window.prompt('How many minutes passed?', '1');
+    if (rawMinutes === null) return;
+    const minutes = Number.parseFloat(rawMinutes);
+    if (!Number.isFinite(minutes) || minutes < 0) {
+      window.alert('Please enter a valid minute amount.');
+      return;
+    }
+
+    applyStatusTimePassage({
+      minute: minutes,
+      round: 'deactivate',
+    });
   };
 
   const moveStatus = (statusId: string, direction: 'up' | 'down') => {
@@ -1486,6 +2000,99 @@ export const Characters: React.FC = () => {
       next.splice(targetIndex, 0, moved);
       return next;
     });
+  };
+
+  const addScript = (folderId: string | null = activeScriptCategoryId === 'main' ? null : activeScriptCategoryId) => {
+    setCharScripts(prev => [
+      ...prev,
+      {
+        id: `script_${uid()}`,
+        name: 'New Script',
+        watchIds: [],
+        conditions: [],
+        active: true,
+        color: folderId ? scriptFolders.find(folder => folder.id === getRootFolderId(scriptFolders, folderId))?.color || '#06b6d4' : '#06b6d4',
+        hidden: false,
+        folderId,
+      },
+    ]);
+  };
+
+  const updateScript = (scriptId: string, updater: (script: CharacterScript) => CharacterScript) => {
+    setCharScripts(prev => prev.map(script => script.id === scriptId ? updater(script) : script));
+  };
+
+  const removeScript = (scriptId: string) => {
+    const conditionIds = new Set(
+      charScripts
+        .find(script => script.id === scriptId)
+        ?.conditions.map(condition => condition.id) || []
+    );
+    setCharStatuses(prev => prev.filter(status => !status.scriptSourceConditionId || !conditionIds.has(status.scriptSourceConditionId)));
+    setCharScripts(prev => prev.filter(script => script.id !== scriptId));
+  };
+
+  const moveScript = (scriptId: string, direction: 'up' | 'down') => {
+    setCharScripts(prev => {
+      const index = prev.findIndex(script => script.id === scriptId);
+      if (index < 0) return prev;
+      const targetIndex = direction === 'up' ? index - 1 : index + 1;
+      if (targetIndex < 0 || targetIndex >= prev.length) return prev;
+      const next = [...prev];
+      const [moved] = next.splice(index, 1);
+      next.splice(targetIndex, 0, moved);
+      return next;
+    });
+  };
+
+  const addScriptCondition = (scriptId: string) => {
+    updateScript(scriptId, script => ({
+      ...script,
+      conditions: [
+        ...(script.conditions || []),
+        {
+          id: `cond_${uid()}`,
+          leftId: script.watchIds[0] || '',
+          operator: 'lte',
+          compareValue: '0',
+          minValue: '0',
+          maxValue: '0',
+          statusEntries: [],
+          statusIds: [],
+          onFalse: 'remove',
+          appliedStatusInstanceIds: [],
+        },
+      ],
+    }));
+  };
+
+  const updateScriptCondition = (
+    scriptId: string,
+    conditionId: string,
+    updater: (condition: CharacterScriptCondition) => CharacterScriptCondition
+  ) => {
+    updateScript(scriptId, script => ({
+      ...script,
+      conditions: (script.conditions || []).map(condition => condition.id === conditionId ? updater(condition) : condition),
+    }));
+  };
+
+  const removeScriptCondition = (scriptId: string, conditionId: string) => {
+    setCharStatuses(prev => prev.filter(status => status.scriptSourceConditionId !== conditionId));
+    updateScript(scriptId, script => ({
+      ...script,
+      conditions: (script.conditions || []).filter(condition => condition.id !== conditionId),
+    }));
+  };
+
+  const removeScriptConditionStatusEntry = (scriptId: string, conditionId: string, entryId: string) => {
+    setCharStatuses(prev => prev.filter(status => !(
+      status.scriptSourceConditionId === conditionId && status.scriptSourceTemplateStatusId === entryId
+    )));
+    updateScriptCondition(scriptId, conditionId, current => ({
+      ...current,
+      statusEntries: (current.statusEntries || []).filter(entry => entry.id !== entryId),
+    }));
   };
 
   const updateInventoryItem = (itemId: string, updater: (item: CharacterInventoryItem) => CharacterInventoryItem) => {
@@ -1540,7 +2147,7 @@ export const Characters: React.FC = () => {
   const addInventoryEffect = (itemId: string) => {
     updateInventoryItem(itemId, item => ({
       ...item,
-      effects: [...(item.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+      effects: [...(item.effects || []), createAttributeEffect()],
     }));
   };
 
@@ -1555,6 +2162,27 @@ export const Characters: React.FC = () => {
     updateInventoryItem(itemId, item => ({
       ...item,
       effects: (item.effects || []).filter((_, index) => index !== effectIndex),
+    }));
+  };
+
+  const addInventoryLocalVariable = (itemId: string) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      localVariables: [...(item.localVariables || []), createLocalVariable()],
+    }));
+  };
+
+  const updateInventoryLocalVariable = (itemId: string, variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      localVariables: (item.localVariables || []).map((variable, index) => index === variableIndex ? updater(variable) : variable),
+    }));
+  };
+
+  const removeInventoryLocalVariable = (itemId: string, variableIndex: number) => {
+    updateInventoryItem(itemId, item => ({
+      ...item,
+      localVariables: (item.localVariables || []).filter((_, index) => index !== variableIndex),
     }));
   };
 
@@ -1581,6 +2209,77 @@ export const Characters: React.FC = () => {
     ));
   };
 
+  const toggleStatusActionDescription = (statusId: string, actionId: string) => {
+    const key = `${statusId}:${actionId}`;
+    setExpandedStatusActionDescriptions(prev => (
+      prev.includes(key) ? prev.filter(id => id !== key) : [...prev, key]
+    ));
+  };
+
+  const addStatusAction = (statusId: string) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      actions: [...(status.actions || []), createCharacterAction()],
+    }));
+  };
+
+  const updateStatusAction = (statusId: string, actionId: string, updater: (action: CharacterAction) => CharacterAction) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      actions: (status.actions || []).map(action => action.id === actionId ? updater(action) : action),
+    }));
+  };
+
+  const removeStatusAction = (statusId: string, actionId: string) => {
+    updateStatus(statusId, status => ({
+      ...status,
+      actions: (status.actions || []).filter(action => action.id !== actionId),
+    }));
+    setExpandedStatusActionDescriptions(prev => prev.filter(id => id !== `${statusId}:${actionId}`));
+  };
+
+  const addStatusActionMacro = (statusId: string, actionId: string) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      macros: [...(current.macros || []), { id: `macro_${uid()}`, name: 'New Action Macro', formula: '1d20' }],
+    }));
+  };
+
+  const updateStatusActionMacro = (statusId: string, actionId: string, macroId: string, updater: (macro: CharacterDiceMacro) => CharacterDiceMacro) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      macros: (current.macros || []).map(macro => macro.id === macroId ? updater(macro) : macro),
+    }));
+  };
+
+  const removeStatusActionMacro = (statusId: string, actionId: string, macroId: string) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      macros: (current.macros || []).filter(macro => macro.id !== macroId),
+    }));
+  };
+
+  const addStatusActionEffect = (statusId: string, actionId: string) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      effects: [...(current.effects || []), createAttributeEffect()],
+    }));
+  };
+
+  const updateStatusActionEffect = (statusId: string, actionId: string, effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).map((effect, index) => index === effectIndex ? updater(effect) : effect),
+    }));
+  };
+
+  const removeStatusActionEffect = (statusId: string, actionId: string, effectIndex: number) => {
+    updateStatusAction(statusId, actionId, current => ({
+      ...current,
+      effects: (current.effects || []).filter((_, index) => index !== effectIndex),
+    }));
+  };
+
   const shareStatus = async (status: CharacterStatus) => {
     const webhookUrl = mainDiceState.webhookUrl || '';
     if (!webhookUrl.trim()) {
@@ -1590,13 +2289,57 @@ export const Characters: React.FC = () => {
 
     const message = [
       `**${status.name || 'Unnamed Status'}**`,
-      `Duration: ${status.duration || '-'}`,
+      `Duration: ${formatStatusDuration(status)}`,
       status.description ? `Description: ${status.description}` : '',
       (status.effects || []).length > 0 ? `Effects: ${(status.effects || []).map(effect => `${effect.targetId || 'unknown'} ${effect.value || '0'}`).join(', ')}` : '',
+      (status.actions || []).length > 0 ? `Actions: ${(status.actions || []).map(action => action.name || 'Unnamed Action').join(', ')}` : '',
     ].filter(Boolean).join('\n');
 
     const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
     if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const shareStatusAction = async (status: CharacterStatus, action: CharacterAction) => {
+    const webhookUrl = mainDiceState.webhookUrl || '';
+    if (!webhookUrl.trim()) {
+      setDiceError('Discord: Add a webhook URL before sharing actions.');
+      return;
+    }
+    const message = [
+      `**${status.name || 'Unnamed Status'} Action**`,
+      action.name ? `Action: ${action.name}` : '',
+      action.cost ? `Cost: ${action.cost}` : '',
+      action.usageRemaining ? `Remaining Usage: ${action.usageRemaining}` : '',
+      action.description ? `Description: ${action.description}` : '',
+    ].filter(Boolean).join('\n');
+    const discordErr = await sendMessageToDiscord(webhookUrl, selectedCharacter?.name || editName || 'Character Sheet', message);
+    if (discordErr) setDiceError(`Discord: ${discordErr}`);
+  };
+
+  const rollStatusActionMacro = async (status: CharacterStatus, action: CharacterAction, macro: CharacterDiceMacro) => {
+    setDiceError(null);
+    try {
+      const context = getCharacterContext();
+      const localContext = getLocalVariableContext(status.localVariables, context);
+      const ids = getCharacterReferenceIds();
+      const result = executeCharacterMacro(
+        { ...macro, name: `${status.name}: ${action.name || 'Action'}: ${macro.name}` },
+        context,
+        ids,
+        localContext
+      );
+      result.description = action.description || status.description || undefined;
+      setRollResults(prev => [result, ...prev]);
+      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+
+      const activeDiceState = getDiceStateForMode('sheet');
+      if (activeDiceState.autoSend) {
+        const discordErr = await sendToDiscord(activeDiceState.webhookUrl || '', selectedCharacter?.name || editName, result);
+        if (discordErr) setDiceError(`Discord: ${discordErr}`);
+      }
+    } catch (err: unknown) {
+      setDiceError(err instanceof Error ? err.message : 'Roll failed');
+    }
   };
 
   const addGeneralItem = () => {
@@ -1613,6 +2356,7 @@ export const Characters: React.FC = () => {
         macros: [],
         effects: [],
         actions: [],
+        localVariables: [],
         hidden: false,
       }),
     ]);
@@ -1720,7 +2464,7 @@ export const Characters: React.FC = () => {
   const addGeneralEffect = (itemId: string) => {
     updateGeneralItem(itemId, item => ({
       ...item,
-      effects: [...(item.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+      effects: [...(item.effects || []), createAttributeEffect()],
     }));
   };
 
@@ -1738,12 +2482,33 @@ export const Characters: React.FC = () => {
     }));
   };
 
+  const addGeneralLocalVariable = (itemId: string) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      localVariables: [...(item.localVariables || []), createLocalVariable()],
+    }));
+  };
+
+  const updateGeneralLocalVariable = (itemId: string, variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      localVariables: (item.localVariables || []).map((variable, index) => index === variableIndex ? updater(variable) : variable),
+    }));
+  };
+
+  const removeGeneralLocalVariable = (itemId: string, variableIndex: number) => {
+    updateGeneralItem(itemId, item => ({
+      ...item,
+      localVariables: (item.localVariables || []).filter((_, index) => index !== variableIndex),
+    }));
+  };
+
   const addGeneralAction = (itemId: string) => {
     updateGeneralItem(itemId, item => ({
       ...item,
       actions: [
         ...(item.actions || []),
-        { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] },
+        createCharacterAction(),
       ],
     }));
   };
@@ -1793,7 +2558,7 @@ export const Characters: React.FC = () => {
   const addGeneralActionEffect = (itemId: string, actionId: string) => {
     updateGeneralAction(itemId, actionId, current => ({
       ...current,
-      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+      effects: [...(current.effects || []), createAttributeEffect()],
     }));
   };
 
@@ -1815,8 +2580,9 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(item.localVariables, context);
       const ids = getCharacterReferenceIds();
-      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${macro.name}` }, context, ids);
+      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${macro.name}` }, context, ids, localContext);
       result.description = item.description || undefined;
       setRollResults(prev => [result, ...prev]);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
@@ -1829,8 +2595,9 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(item.localVariables, context);
       const ids = getCharacterReferenceIds();
-      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${action.name}: ${macro.name}` }, context, ids);
+      const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${action.name}: ${macro.name}` }, context, ids, localContext);
       result.description = action.description || item.description || undefined;
       setRollResults(prev => [result, ...prev]);
       setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
@@ -2163,10 +2930,13 @@ export const Characters: React.FC = () => {
       if (!bar.id) return;
       const currentValue = context[`${bar.id}_current`];
       const maxValue = context[`${bar.id}_max`];
+      const resetValue = context[`${bar.id}_reset`];
       if (Number.isFinite(currentValue)) {
         values[`${bar.id}_current`] = currentValue;
       }
-      if (Number.isFinite(maxValue)) {
+      if (getBarMode(bar) === 'resource' && Number.isFinite(resetValue)) {
+        values[`${bar.id}_reset`] = resetValue;
+      } else if (Number.isFinite(maxValue)) {
         values[`${bar.id}_max`] = maxValue;
       }
     });
@@ -2227,9 +2997,22 @@ export const Characters: React.FC = () => {
 
   const cloneEffectForImport = (effect: Partial<StatusEffect> = {}): StatusEffect => ({
     id: `eff_${uid()}`,
+    effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' ? effect.effectType : 'attribute',
     targetId: typeof effect.targetId === 'string' ? effect.targetId : '',
     value: typeof effect.value === 'string' ? effect.value : '0',
     active: effect.active ?? true,
+    useTargetPicker: effect.useTargetPicker ?? false,
+    targetLabel: typeof effect.targetLabel === 'string' ? effect.targetLabel : undefined,
+    statusName: typeof effect.statusName === 'string' ? effect.statusName : undefined,
+    statusEntry: effect.statusEntry,
+    statusFolderId: typeof effect.statusFolderId === 'string' ? effect.statusFolderId : null,
+    barUpdateDescription: typeof effect.barUpdateDescription === 'string' ? effect.barUpdateDescription : undefined,
+  });
+
+  const cloneLocalVariableForImport = (variable: Partial<CharacterLocalVariable> = {}): CharacterLocalVariable => ({
+    id: typeof variable.id === 'string' ? variable.id : `local_${uid()}`,
+    description: typeof variable.description === 'string' ? variable.description : '',
+    value: typeof variable.value === 'string' ? variable.value : '0',
   });
 
   const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => ({
@@ -2238,13 +3021,71 @@ export const Characters: React.FC = () => {
     description: typeof action.description === 'string' ? action.description : '',
     cost: typeof action.cost === 'string' ? action.cost : '',
     usageRemaining: typeof action.usageRemaining === 'string' ? action.usageRemaining : '',
+    maxUsage: typeof action.maxUsage === 'string' ? action.maxUsage : '',
+    replenishTrigger: action.replenishTrigger || 'custom',
+    replenishAmount: typeof action.replenishAmount === 'string' ? action.replenishAmount : '',
     macros: Array.isArray(action.macros) ? action.macros.map(cloneMacroForImport) : [],
     effects: Array.isArray(action.effects) ? action.effects.map(cloneEffectForImport) : [],
   });
 
+  const getEffectTargetLabelById = (targetId: string): string => (
+    getEffectTargetOptions().find(option => option.id === targetId)?.label || targetId
+  );
+
+  const annotateEffectsForExport = (effects?: StatusEffect[]): StatusEffect[] => (
+    (effects || []).map(effect => {
+      if ((!effect.effectType || effect.effectType === 'attribute') && (effect.useTargetPicker ?? true)) {
+        return {
+          ...effect,
+          effectType: 'attribute',
+          useTargetPicker: true,
+          targetLabel: effect.targetLabel || getEffectTargetLabelById(effect.targetId),
+        };
+      }
+      if (effect.effectType === 'status' && effect.statusEntry) {
+        return {
+          ...effect,
+          statusEntry: annotateEntryForExport(effect.statusEntry),
+        };
+      }
+      return effect;
+    })
+  );
+
+  const annotateActionsForExport = (actions?: CharacterAction[]): CharacterAction[] => (
+    (actions || []).map(action => ({
+      ...action,
+      effects: annotateEffectsForExport(action.effects),
+    }))
+  );
+
+  const annotateEntryForExport = <T,>(entry: T): T => {
+    const copy = JSON.parse(JSON.stringify(entry)) as T & {
+      effects?: StatusEffect[];
+      actions?: CharacterAction[];
+      conditions?: CharacterScriptCondition[];
+    };
+    if (Array.isArray(copy.effects)) {
+      copy.effects = annotateEffectsForExport(copy.effects);
+    }
+    if (Array.isArray(copy.actions)) {
+      copy.actions = annotateActionsForExport(copy.actions);
+    }
+    if (Array.isArray(copy.conditions)) {
+      copy.conditions = copy.conditions.map(condition => ({
+        ...condition,
+        statusEntries: (condition.statusEntries || []).map(statusEntry => ({
+          ...statusEntry,
+          entry: annotateEntryForExport(statusEntry.entry),
+        })),
+      }));
+    }
+    return copy as T;
+  };
+
   const buildEntryExportPayload = (
     kind: CharacterEntryExportKind,
-    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro,
+    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro | CharacterScript,
     folderName?: string | null
   ): CharacterEntryExportPayload => ({
     schema: 'inoraxium-character-entry',
@@ -2253,12 +3094,12 @@ export const Characters: React.FC = () => {
     exportedAt: new Date().toISOString(),
     sourceCharacterName: selectedCharacter?.name || editName || undefined,
     folderName: folderName || null,
-    entry,
+    entry: annotateEntryForExport(entry),
   });
 
   const exportCharacterEntry = (
     kind: CharacterEntryExportKind,
-    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro,
+    entry: CharacterInventoryItem | CharacterGeneralItem | CharacterSpell | CharacterStatus | CharacterDiceMacro | CharacterScript,
     folderName?: string | null
   ) => {
     downloadJsonFile(buildEntryExportPayload(kind, entry, folderName), safeExportFileName(entry.name, kind));
@@ -2281,6 +3122,7 @@ export const Characters: React.FC = () => {
     macros: Array.isArray(entry.macros) ? entry.macros.map(cloneMacroForImport) : [],
     effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
     actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
+    localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(cloneLocalVariableForImport) : [],
     hidden: entry.hidden ?? false,
   });
 
@@ -2298,10 +3140,13 @@ export const Characters: React.FC = () => {
     resourceCost: typeof entry.resourceCost === 'string' ? entry.resourceCost : '',
     usageRemaining: typeof entry.usageRemaining === 'string' ? entry.usageRemaining : '',
     totalUsage: typeof entry.totalUsage === 'string' ? entry.totalUsage : '',
+    replenishTrigger: entry.replenishTrigger || 'custom',
+    replenishAmount: typeof entry.replenishAmount === 'string' ? entry.replenishAmount : '',
     magicSchool: typeof entry.magicSchool === 'string' ? entry.magicSchool : '',
     color: typeof entry.color === 'string' ? entry.color : '#7c3aed',
     macros: Array.isArray(entry.macros) ? entry.macros.map(cloneMacroForImport) : [],
     actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
+    localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(cloneLocalVariableForImport) : [],
     hidden: entry.hidden ?? false,
     folderId,
   });
@@ -2310,12 +3155,250 @@ export const Characters: React.FC = () => {
     id: `st_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Status',
     duration: typeof entry.duration === 'string' ? entry.duration : '',
+    durationType: entry.durationType || 'custom',
+    durationEndBehavior: entry.durationEndBehavior || 'delete',
+    maxDuration: typeof entry.maxDuration === 'string' ? entry.maxDuration : '',
+    replenishTrigger: entry.replenishTrigger || 'custom',
+    replenishAmount: typeof entry.replenishAmount === 'string' ? entry.replenishAmount : '',
     description: typeof entry.description === 'string' ? entry.description : '',
     effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
+    actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
+    localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(cloneLocalVariableForImport) : [],
+    active: entry.active ?? true,
     color: typeof entry.color === 'string' ? entry.color : '#f59e0b',
     hidden: entry.hidden ?? false,
     folderId,
   });
+
+  const buildScriptAppliedStatus = (
+    template: Partial<CharacterStatus>,
+    conditionId: string,
+    scriptStatusEntryId: string,
+    folderId: string | null,
+  ): CharacterStatus => ({
+    id: `st_${uid()}`,
+    name: template.name || 'Script Status',
+    duration: template.duration || 'Script',
+    durationType: template.durationType || 'custom',
+    durationEndBehavior: template.durationEndBehavior || 'delete',
+    maxDuration: template.maxDuration || '',
+    replenishTrigger: template.replenishTrigger || 'custom',
+    replenishAmount: template.replenishAmount || '',
+    description: template.description || '',
+    effects: (template.effects || []).map(cloneEffectForImport),
+    actions: (template.actions || []).map(cloneActionForImport),
+    localVariables: (template.localVariables || []).map(cloneLocalVariableForImport),
+    active: true,
+    color: template.color || '#f59e0b',
+    hidden: template.hidden ?? false,
+    folderId,
+    scriptSourceConditionId: conditionId,
+    scriptSourceTemplateStatusId: scriptStatusEntryId,
+  });
+
+  const evaluateScriptCondition = (
+    condition: CharacterScriptCondition,
+    context: Record<string, number>,
+  ): boolean => {
+    const left = context[condition.leftId] ?? 0;
+    const value = evalCharFormula(condition.compareValue || '0', context);
+    const min = evalCharFormula(condition.minValue || '0', context);
+    const max = evalCharFormula(condition.maxValue || '0', context);
+
+    switch (condition.operator) {
+      case 'lt':
+        return left < value;
+      case 'lte':
+        return left <= value;
+      case 'gt':
+        return left > value;
+      case 'gte':
+        return left >= value;
+      case 'eq':
+        return left === value;
+      case 'neq':
+        return left !== value;
+      case 'between':
+        return left >= Math.min(min, max) && left <= Math.max(min, max);
+      case 'outside':
+        return left < Math.min(min, max) || left > Math.max(min, max);
+      default:
+        return false;
+    }
+  };
+
+  const buildStatusApplyEffect = (entry: Partial<CharacterStatus>): StatusEffect => ({
+    id: `eff_${uid()}`,
+    effectType: 'status',
+    targetId: '',
+    value: '',
+    active: true,
+    statusName: typeof entry.name === 'string' && entry.name.trim() ? entry.name : 'Imported Status',
+    statusEntry: entry,
+    statusFolderId: null,
+  });
+
+  const buildBarUpdateEffect = (): StatusEffect => ({
+    id: `eff_${uid()}`,
+    effectType: 'bar-update',
+    targetId: bars[0]?.id || '',
+    value: '0',
+    active: true,
+  });
+
+  const requestBarUpdateTarget = (description: string): Promise<string> => {
+    if (bars.length === 0) {
+      throw new Error('This character has no bars yet. Add a bar before importing an asset with Bar Update effects.');
+    }
+
+    return new Promise((resolve, reject) => {
+      setBarTargetDraft(bars[0]?.id || '');
+      setBarTargetRequest({
+        description,
+        resolve: (barId) => {
+          setBarTargetRequest(null);
+          if (!barId) {
+            reject(new Error('Bar Update import was cancelled.'));
+            return;
+          }
+          resolve(barId);
+        },
+      });
+    });
+  };
+
+  const requestEffectTarget = (label: string): Promise<string> => {
+    const options = getEffectTargetOptions();
+    if (options.length === 0) {
+      throw new Error('This character has no attributes or bars yet. Add attributes before importing an asset with attribute effects.');
+    }
+
+    return new Promise((resolve, reject) => {
+      setEffectTargetDraft(options[0]?.id || '');
+      setEffectTargetRequest({
+        label,
+        resolve: (targetId) => {
+          setEffectTargetRequest(null);
+          if (!targetId) {
+            reject(new Error('Attribute effect import was cancelled.'));
+            return;
+          }
+          resolve(targetId);
+        },
+      });
+    });
+  };
+
+  const resolveImportTargets = async <T,>(entry: T): Promise<T> => {
+    const clonedEntry = JSON.parse(JSON.stringify(entry)) as T;
+
+    const resolveEffects = async (effects?: Partial<StatusEffect>[]) => {
+      if (!Array.isArray(effects)) return;
+
+      for (const effect of effects) {
+        if ((!effect.effectType || effect.effectType === 'attribute') && (effect.useTargetPicker ?? true)) {
+          const label = effect.targetLabel || effect.targetId || 'Choose a matching attribute for this effect.';
+          effect.targetId = await requestEffectTarget(label);
+          effect.useTargetPicker = true;
+          effect.targetLabel = label;
+        }
+
+        if (effect.effectType === 'bar-update' && !effect.targetId) {
+          const description = effect.barUpdateDescription || 'This imported asset wants to update one of this character\'s bars.';
+          effect.targetId = await requestBarUpdateTarget(description);
+        }
+
+        if (effect.effectType === 'status' && effect.statusEntry) {
+          effect.statusEntry = await resolveImportTargets(effect.statusEntry);
+        }
+      }
+    };
+
+    const entryWithEffects = clonedEntry as {
+      effects?: Partial<StatusEffect>[];
+      actions?: Array<Partial<CharacterAction> & { effects?: Partial<StatusEffect>[] }>;
+      conditions?: Array<Partial<CharacterScriptCondition> & {
+        statusEntries?: Array<Partial<CharacterScriptStatusEntry> & { entry?: Partial<CharacterStatus> }>;
+      }>;
+    };
+
+    await resolveEffects(entryWithEffects.effects);
+    if (Array.isArray(entryWithEffects.actions)) {
+      for (const action of entryWithEffects.actions) {
+        await resolveEffects(action.effects);
+      }
+    }
+    if (Array.isArray(entryWithEffects.conditions)) {
+      for (const condition of entryWithEffects.conditions) {
+        if (!Array.isArray(condition.statusEntries)) continue;
+        for (const statusEntry of condition.statusEntries) {
+          if (statusEntry.entry) {
+            statusEntry.entry = await resolveImportTargets(statusEntry.entry);
+          }
+        }
+      }
+    }
+
+    return clonedEntry;
+  };
+
+  const importStatusApplyEffect = (onAdd: (effect: StatusEffect) => void) => {
+    if (!isCharacterOwner && !canEditInventory) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
+        if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+          throw new Error('Please import a status export JSON file.');
+        }
+        const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
+        onAdd(buildStatusApplyEffect(resolvedEntry));
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Status import failed.';
+        setDiceError(message);
+        window.alert(message);
+      }
+    };
+    input.click();
+  };
+
+  const applyStatusEffect = (effect: StatusEffect) => {
+    if (effect.effectType !== 'status' || !effect.statusEntry) return;
+    const folderId = effect.statusFolderId || null;
+    setCharStatuses(prev => [...prev, buildImportedStatus(effect.statusEntry as Partial<CharacterStatus>, folderId)]);
+    setActiveSheetTab('statuses');
+    if (folderId) {
+      setActiveStatusCategoryId(getRootFolderId(statusFolders, folderId) || folderId);
+    }
+  };
+
+  const applyBarUpdateEffect = (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
+    if (effect.effectType !== 'bar-update' || !effect.targetId) return;
+
+    const context = getCharacterContext();
+    const localContext = getLocalVariableContext(localVariables, context);
+    const delta = evalCharFormula(effect.value || '0', context, localContext);
+    if (!Number.isFinite(delta)) return;
+
+    setBars(prev => prev.map((bar) => {
+      if (bar.id !== effect.targetId) return bar;
+      const current = evalCharFormula(bar.currentValue || '0', context);
+      const unclampedNext = current + delta;
+      const max = getBarMode(bar) === 'resource' ? 0 : evalCharFormula(bar.maxValue || '0', context);
+      const nextCurrent = getBarMode(bar) === 'resource' || !Number.isFinite(max) || max <= 0
+        ? unclampedNext
+        : Math.min(unclampedNext, max);
+      return {
+        ...bar,
+        currentValue: `${Math.round(nextCurrent * 100) / 100}`,
+      };
+    }));
+  };
 
   const buildImportedDiceMacro = (entry: Partial<CharacterDiceMacro>, folderId: string | null = null): CharacterDiceMacro => ({
     id: `macro_${uid()}`,
@@ -2324,37 +3407,115 @@ export const Characters: React.FC = () => {
     folderId,
   });
 
-  const importSharedEntryPayload = (payload: CharacterEntryExportPayload, expectedKind: CharacterEntryExportKind) => {
+  const getScriptValueLabelById = (valueId: string): string => {
+    const mainAttr = mainAttrs.find(attr => attr.id === valueId || `${attr.id}_mod` === valueId);
+    if (mainAttr) return valueId.endsWith('_mod') ? `${mainAttr.name || mainAttr.id} Modifier (${valueId})` : `${mainAttr.name || mainAttr.id} (${valueId})`;
+    const attribute = [...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].find(attr => attr.id === valueId);
+    if (attribute) return `${attribute.name || attribute.id} (${valueId})`;
+    const currentBar = bars.find(bar => `${bar.id}_current` === valueId);
+    if (currentBar) return `${currentBar.name || currentBar.id} Current (${valueId})`;
+    const resetBar = bars.find(bar => `${bar.id}_reset` === valueId);
+    if (resetBar) return `${resetBar.name || resetBar.id} Reset (${valueId})`;
+    const maxBar = bars.find(bar => `${bar.id}_max` === valueId);
+    if (maxBar) return `${maxBar.name || maxBar.id} Max (${valueId})`;
+    return valueId;
+  };
+
+  const buildScriptExportPayload = (script: CharacterScript): CharacterEntryExportPayload => {
+    const valueIds = new Set<string>([
+      ...(script.watchIds || []),
+      ...(script.conditions || []).map(condition => condition.leftId).filter(Boolean),
+    ]);
+    const importedValueLabels = Object.fromEntries(
+      [...valueIds].map(valueId => [valueId, getScriptValueLabelById(valueId)])
+    );
+
+    return buildEntryExportPayload('script', {
+      ...script,
+      importedValueLabels: {
+        ...(script.importedValueLabels || {}),
+        ...importedValueLabels,
+      },
+    }, scriptFolders.find(folder => folder.id === script.folderId)?.name || null);
+  };
+
+  const buildImportedScriptStatusEntry = (entry: Partial<CharacterScriptStatusEntry> = {}): CharacterScriptStatusEntry => ({
+    id: `script_status_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : entry.entry?.name || 'Imported Status',
+    entry: entry.entry ? buildImportedStatus(entry.entry, null) : buildImportedStatus({}, null),
+    statusFolderId: typeof entry.statusFolderId === 'string' ? entry.statusFolderId : null,
+    onFalse: entry.onFalse === 'keep' ? 'keep' : 'remove',
+    appliedStatusInstanceIds: [],
+  });
+
+  const buildImportedScriptCondition = (condition: Partial<CharacterScriptCondition> = {}): CharacterScriptCondition => ({
+    id: `cond_${uid()}`,
+    leftId: typeof condition.leftId === 'string' ? condition.leftId : '',
+    operator: condition.operator || 'lte',
+    compareValue: typeof condition.compareValue === 'string' ? condition.compareValue : '0',
+    minValue: typeof condition.minValue === 'string' ? condition.minValue : '0',
+    maxValue: typeof condition.maxValue === 'string' ? condition.maxValue : '0',
+    statusEntries: Array.isArray(condition.statusEntries)
+      ? condition.statusEntries.map(entry => buildImportedScriptStatusEntry(entry as Partial<CharacterScriptStatusEntry>))
+      : [],
+    statusIds: [],
+    onFalse: condition.onFalse === 'keep' ? 'keep' : 'remove',
+    appliedStatusInstanceIds: [],
+  });
+
+  const buildImportedScript = (entry: Partial<CharacterScript>, folderId: string | null): CharacterScript => ({
+    id: `script_${uid()}`,
+    name: typeof entry.name === 'string' ? entry.name : 'Imported Script',
+    watchIds: Array.isArray(entry.watchIds) ? entry.watchIds.filter((id): id is string => typeof id === 'string') : [],
+    conditions: Array.isArray(entry.conditions)
+      ? entry.conditions.map(condition => buildImportedScriptCondition(condition as Partial<CharacterScriptCondition>))
+      : [],
+    importedValueLabels: entry.importedValueLabels || {},
+    active: entry.active ?? true,
+    color: typeof entry.color === 'string' ? entry.color : '#06b6d4',
+    hidden: entry.hidden ?? false,
+    folderId,
+  });
+
+  const importSharedEntryPayload = async (payload: CharacterEntryExportPayload, expectedKind: CharacterEntryExportKind) => {
     if (payload.schema !== 'inoraxium-character-entry' || payload.version !== 1 || !payload.entry) {
       throw new Error('This is not a valid character entry export file.');
     }
     if (payload.kind !== expectedKind) {
-      throw new Error(`This file contains a ${payload.kind}, so it cannot be imported into ${expectedKind === 'item' ? 'Inventory' : expectedKind === 'spell' ? 'Spells' : expectedKind === 'status' ? 'Statuses' : 'Macros'}.`);
+      throw new Error(`This file contains a ${payload.kind}, so it cannot be imported into ${expectedKind === 'item' ? 'Inventory' : expectedKind === 'spell' ? 'Spells' : expectedKind === 'status' ? 'Statuses' : expectedKind === 'script' ? 'Scripts' : 'Macros'}.`);
     }
+
+    const resolvedEntry = await resolveImportTargets(payload.entry);
 
     if (payload.kind === 'item') {
       const folderId = getMatchingFolderIdByName(inventoryFolders, payload.folderName);
       if (folderId) {
-        setCharInventory(prev => [...prev, buildImportedInventoryItem(payload.entry as Partial<CharacterGeneralItem | CharacterInventoryItem>, folderId)]);
+        setCharInventory(prev => [...prev, buildImportedInventoryItem(resolvedEntry as Partial<CharacterGeneralItem | CharacterInventoryItem>, folderId)]);
       } else {
-        setCharGeneralItems(prev => [...prev, buildImportedGeneralItem(payload.entry as Partial<CharacterGeneralItem | CharacterInventoryItem>)]);
+        setCharGeneralItems(prev => [...prev, buildImportedGeneralItem(resolvedEntry as Partial<CharacterGeneralItem | CharacterInventoryItem>)]);
       }
       return;
     }
 
     if (payload.kind === 'spell') {
       const folderId = getMatchingFolderIdByName(spellFolders, payload.folderName);
-      setCharSpells(prev => [...prev, buildImportedSpell(payload.entry as Partial<CharacterSpell>, folderId)]);
+      setCharSpells(prev => [...prev, buildImportedSpell(resolvedEntry as Partial<CharacterSpell>, folderId)]);
       return;
     }
 
     if (payload.kind === 'status') {
       const folderId = getMatchingFolderIdByName(statusFolders, payload.folderName);
-      setCharStatuses(prev => [...prev, buildImportedStatus(payload.entry as Partial<CharacterStatus>, folderId)]);
+      setCharStatuses(prev => [...prev, buildImportedStatus(resolvedEntry as Partial<CharacterStatus>, folderId)]);
       return;
     }
 
-    setSheetDiceMacros(prev => [...prev, buildImportedDiceMacro(payload.entry as Partial<CharacterDiceMacro>, null)]);
+    if (payload.kind === 'script') {
+      const folderId = getMatchingFolderIdByName(scriptFolders, payload.folderName);
+      setCharScripts(prev => [...prev, buildImportedScript(resolvedEntry as Partial<CharacterScript>, folderId)]);
+      return;
+    }
+
+    setSheetDiceMacros(prev => [...prev, buildImportedDiceMacro(resolvedEntry as Partial<CharacterDiceMacro>, null)]);
   };
 
   const importSharedEntry = (expectedKind: CharacterEntryExportKind) => {
@@ -2371,7 +3532,7 @@ export const Characters: React.FC = () => {
       if (!file) return;
       try {
         const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
-        importSharedEntryPayload(parsed, expectedKind);
+        await importSharedEntryPayload(parsed, expectedKind);
         setDiceError(null);
       } catch (err: unknown) {
         const message = err instanceof Error ? err.message : 'Import failed.';
@@ -2381,6 +3542,157 @@ export const Characters: React.FC = () => {
     };
     input.click();
   };
+
+  const importScriptConditionStatus = (scriptId: string, conditionId: string) => {
+    if (!isCharacterOwner) return;
+
+    const input = document.createElement('input');
+    input.type = 'file';
+    input.accept = 'application/json,.json';
+    input.onchange = async () => {
+      const file = input.files?.[0];
+      if (!file) return;
+      try {
+        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
+        if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+          throw new Error('Please import a status export JSON file.');
+        }
+
+        const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
+        const scriptStatusEntry: CharacterScriptStatusEntry = {
+          id: `script_status_${uid()}`,
+          name: typeof resolvedEntry.name === 'string' && resolvedEntry.name.trim() ? resolvedEntry.name : file.name.replace(/\.json$/i, ''),
+          entry: resolvedEntry,
+          statusFolderId: null,
+          onFalse: 'remove',
+          appliedStatusInstanceIds: [],
+        };
+
+        updateScriptCondition(scriptId, conditionId, current => ({
+          ...current,
+          statusEntries: [...(current.statusEntries || []), scriptStatusEntry],
+        }));
+        setDiceError(null);
+      } catch (err: unknown) {
+        const message = err instanceof Error ? err.message : 'Status import failed.';
+        setDiceError(message);
+        window.alert(message);
+      }
+    };
+    input.click();
+  };
+
+  useEffect(() => {
+    if (!selectedCharacter || charScripts.length === 0) return;
+
+    const context = getCharacterContext();
+    let nextStatuses = [...charStatuses];
+    let scriptsChanged = false;
+
+    const nextScripts = charScripts.map((script) => {
+      if ((script.active ?? true) === false) return script;
+
+      let nextConditions = script.conditions || [];
+      const updatedConditions = nextConditions.map((condition) => {
+        if (!condition.leftId) return condition;
+
+        const isMatched = evaluateScriptCondition(condition, context);
+        const legacyStatusEntries: CharacterScriptStatusEntry[] = (condition.statusIds || [])
+          .map((statusId) => {
+            const template = nextStatuses.find(status => status.id === statusId && !status.scriptSourceConditionId);
+            if (!template) return null;
+            return {
+              id: statusId,
+              name: template.name || statusId,
+              entry: template,
+              statusFolderId: template.folderId ?? null,
+              onFalse: condition.onFalse || 'remove',
+              appliedStatusInstanceIds: condition.appliedStatusInstanceIds || [],
+            };
+          })
+          .filter((entry): entry is CharacterScriptStatusEntry => !!entry);
+        const statusEntries = condition.statusEntries?.length ? condition.statusEntries : legacyStatusEntries;
+        const normalizedEntries = statusEntries.map(entry => ({
+          ...entry,
+          appliedStatusInstanceIds: (entry.appliedStatusInstanceIds || []).filter(statusId => (
+            nextStatuses.some(status => status.id === statusId)
+          )),
+        }));
+        let entryChanged = JSON.stringify(normalizedEntries) !== JSON.stringify(condition.statusEntries || []);
+
+        if (isMatched) {
+          const nextStatusEntries = normalizedEntries.map((entry) => {
+            const alreadyApplied = nextStatuses.some(status => (
+              status.scriptSourceConditionId === condition.id && status.scriptSourceTemplateStatusId === entry.id
+            ));
+            if (alreadyApplied) return entry;
+
+            const createdStatus = buildScriptAppliedStatus(entry.entry, condition.id, entry.id, entry.statusFolderId ?? null);
+            nextStatuses = [...nextStatuses, createdStatus];
+            entryChanged = true;
+            return {
+              ...entry,
+              appliedStatusInstanceIds: [...(entry.appliedStatusInstanceIds || []), createdStatus.id],
+            };
+          });
+
+          if (entryChanged || condition.statusIds?.length || condition.appliedStatusInstanceIds?.length) {
+            scriptsChanged = true;
+            return {
+              ...condition,
+              statusEntries: nextStatusEntries,
+              statusIds: [],
+              appliedStatusInstanceIds: [],
+            };
+          }
+          return condition;
+        }
+
+        const removeIds = new Set(
+          normalizedEntries
+            .filter(entry => entry.onFalse === 'remove')
+            .flatMap(entry => entry.appliedStatusInstanceIds || [])
+        );
+        if (removeIds.size > 0) {
+          nextStatuses = nextStatuses.filter(status => !removeIds.has(status.id));
+        }
+
+        const nextStatusEntries = normalizedEntries.map(entry => (
+          entry.onFalse === 'remove'
+            ? { ...entry, appliedStatusInstanceIds: [] }
+            : entry
+        ));
+        if (
+          removeIds.size > 0
+          || entryChanged
+          || condition.statusIds?.length
+          || condition.appliedStatusInstanceIds?.length
+          || JSON.stringify(nextStatusEntries) !== JSON.stringify(condition.statusEntries || [])
+        ) {
+          scriptsChanged = true;
+          return {
+            ...condition,
+            statusEntries: nextStatusEntries,
+            statusIds: [],
+            appliedStatusInstanceIds: [],
+          };
+        }
+
+        return condition;
+      });
+
+      nextConditions = updatedConditions;
+      return nextConditions === script.conditions ? script : { ...script, conditions: nextConditions };
+    });
+
+    if (nextStatuses.length !== charStatuses.length || nextStatuses.some((status, index) => status.id !== charStatuses[index]?.id)) {
+      setCharStatuses(nextStatuses);
+    }
+
+    if (scriptsChanged) {
+      setCharScripts(nextScripts);
+    }
+  });
 
   const importAttributePreset = () => {
     attributeImportInputRef.current?.click();
@@ -2409,6 +3721,9 @@ export const Characters: React.FC = () => {
 
     const currentBar = bars.find(bar => `${bar.id}_current` === referenceId);
     if (currentBar) return `${currentBar.name || currentBar.id} Current`;
+
+    const resetBar = bars.find(bar => `${bar.id}_reset` === referenceId);
+    if (resetBar) return `${resetBar.name || resetBar.id} Reset`;
 
     const maxBar = bars.find(bar => `${bar.id}_max` === referenceId);
     if (maxBar) return `${maxBar.name || maxBar.id} Max`;
@@ -2446,7 +3761,7 @@ export const Characters: React.FC = () => {
   const addInventoryAction = (itemId: string) => {
     updateInventoryItem(itemId, item => ({
       ...item,
-      actions: [...(item.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] }],
+      actions: [...(item.actions || []), createCharacterAction()],
     }));
   };
 
@@ -2495,7 +3810,7 @@ export const Characters: React.FC = () => {
   const addInventoryActionEffect = (itemId: string, actionId: string) => {
     updateInventoryAction(itemId, actionId, current => ({
       ...current,
-      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+      effects: [...(current.effects || []), createAttributeEffect()],
     }));
   };
 
@@ -2534,11 +3849,13 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(item.localVariables, context);
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${item.name}: ${action.name || 'Action'}: ${macro.name}` },
         context,
-        ids
+        ids,
+        localContext
       );
       result.description = action.description || item.description || undefined;
       setRollResults(prev => [result, ...prev]);
@@ -2568,9 +3885,13 @@ export const Characters: React.FC = () => {
         resourceCost: '1 AP',
         usageRemaining: '',
         totalUsage: '',
+        replenishTrigger: 'custom',
+        replenishAmount: '',
         magicSchool: '',
         color: categoryColor || '#7c3aed',
         macros: [],
+        actions: [],
+        localVariables: [],
         hidden: false,
         folderId,
       },
@@ -2622,6 +3943,27 @@ export const Characters: React.FC = () => {
     }));
   };
 
+  const addSpellLocalVariable = (spellId: string) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      localVariables: [...(spell.localVariables || []), createLocalVariable()],
+    }));
+  };
+
+  const updateSpellLocalVariable = (spellId: string, variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      localVariables: (spell.localVariables || []).map((variable, index) => index === variableIndex ? updater(variable) : variable),
+    }));
+  };
+
+  const removeSpellLocalVariable = (spellId: string, variableIndex: number) => {
+    updateSpell(spellId, spell => ({
+      ...spell,
+      localVariables: (spell.localVariables || []).filter((_, index) => index !== variableIndex),
+    }));
+  };
+
   const toggleSpellDescription = (spellId: string) => {
     setExpandedSpellDescriptions(prev => (
       prev.includes(spellId)
@@ -2639,7 +3981,7 @@ export const Characters: React.FC = () => {
   const addSpellAction = (spellId: string) => {
     updateSpell(spellId, spell => ({
       ...spell,
-      actions: [...(spell.actions || []), { id: `act_${uid()}`, name: 'New Action', description: '', cost: '', usageRemaining: '', macros: [], effects: [] }],
+      actions: [...(spell.actions || []), createCharacterAction()],
     }));
   };
 
@@ -2688,7 +4030,7 @@ export const Characters: React.FC = () => {
   const addSpellActionEffect = (spellId: string, actionId: string) => {
     updateSpellAction(spellId, actionId, current => ({
       ...current,
-      effects: [...(current.effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }],
+      effects: [...(current.effects || []), createAttributeEffect()],
     }));
   };
 
@@ -2753,11 +4095,13 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(spell.localVariables, context);
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${spell.name}: ${action.name || 'Action'}: ${macro.name}` },
         context,
-        ids
+        ids,
+        localContext
       );
       result.description = action.description || spell.description || undefined;
       setRollResults(prev => [result, ...prev]);
@@ -2879,11 +4223,13 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(item.localVariables, context);
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${item.name}: ${macro.name}` },
         context,
-        ids
+        ids,
+        localContext
       );
       result.description = item.description || undefined;
       setRollResults(prev => [result, ...prev]);
@@ -2903,11 +4249,13 @@ export const Characters: React.FC = () => {
     setDiceError(null);
     try {
       const context = getCharacterContext();
+      const localContext = getLocalVariableContext(spell.localVariables, context);
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${spell.name}: ${macro.name}` },
         context,
-        ids
+        ids,
+        localContext
       );
       result.description = spell.description || undefined;
       setRollResults(prev => [result, ...prev]);
@@ -3454,6 +4802,8 @@ export const Characters: React.FC = () => {
       sendToSpreadsheet: true,
       userId,
       ownerEmail: userEmail || undefined,
+      controlUserIds: [],
+      viewUserIds: [],
       bio: '',
       backstory: '',
       notes: '',
@@ -3472,6 +4822,9 @@ export const Characters: React.FC = () => {
       diceMacros: DEFAULT_CHARACTER_DICE_STATE.macros.map((macro) => ({ ...macro })),
       diceMacroFolders: [],
       collapsedDiceMacroFolderIds: [],
+      scripts: [],
+      scriptFolders: [],
+      collapsedScriptFolderIds: [],
       statuses: [],
       statusFolders: [],
       collapsedStatusFolderIds: [],
@@ -3532,6 +4885,10 @@ export const Characters: React.FC = () => {
     id: effect.id ? `eff_${uid()}` : undefined,
   });
 
+  const cloneLocalVariable = (variable: CharacterLocalVariable): CharacterLocalVariable => ({
+    ...variable,
+  });
+
   const cloneAction = (action: CharacterAction): CharacterAction => ({
     ...action,
     id: `act_${uid()}`,
@@ -3550,6 +4907,7 @@ export const Characters: React.FC = () => {
     const spellFolderClone = cloneEntryFolders(selectedCharacter.spellFolders || []);
     const statusFolderClone = cloneEntryFolders(selectedCharacter.statusFolders || []);
     const diceMacroFolderClone = cloneEntryFolders(selectedCharacter.diceMacroFolders || []);
+    const scriptFolderClone = cloneEntryFolders(selectedCharacter.scriptFolders || []);
     const id = `char-${Date.now()}-${Math.random().toString(36).slice(2, 6)}`;
 
     const newChar: CharacterData = {
@@ -3566,6 +4924,8 @@ export const Characters: React.FC = () => {
       sendToSpreadsheet: selectedCharacter.sendToSpreadsheet ?? true,
       userId,
       ownerEmail: userEmail || undefined,
+      controlUserIds: [],
+      viewUserIds: [],
       bio: '',
       backstory: '',
       notes: '',
@@ -3592,11 +4952,27 @@ export const Characters: React.FC = () => {
       collapsedDiceMacroFolderIds: (selectedCharacter.collapsedDiceMacroFolderIds || [])
         .map((folderId) => diceMacroFolderClone.idMap.get(folderId))
         .filter((folderId): folderId is string => !!folderId),
+      scripts: (selectedCharacter.scripts || []).map((script) => ({
+        ...script,
+        id: `script_${uid()}`,
+        folderId: script.folderId ? scriptFolderClone.idMap.get(script.folderId) || null : null,
+        conditions: (script.conditions || []).map((condition) => ({
+          ...condition,
+          id: `cond_${uid()}`,
+          appliedStatusInstanceIds: [],
+        })),
+      })),
+      scriptFolders: scriptFolderClone.folders,
+      collapsedScriptFolderIds: (selectedCharacter.collapsedScriptFolderIds || [])
+        .map((folderId) => scriptFolderClone.idMap.get(folderId))
+        .filter((folderId): folderId is string => !!folderId),
       statuses: (selectedCharacter.statuses || []).map((status) => ({
         ...status,
         id: `st_${uid()}`,
         folderId: status.folderId ? statusFolderClone.idMap.get(status.folderId) || null : null,
         effects: (status.effects || []).map(cloneStatusEffect),
+        actions: (status.actions || []).map(cloneAction),
+        localVariables: (status.localVariables || []).map(cloneLocalVariable),
       })),
       statusFolders: statusFolderClone.folders,
       collapsedStatusFolderIds: (selectedCharacter.collapsedStatusFolderIds || [])
@@ -3608,6 +4984,7 @@ export const Characters: React.FC = () => {
         macros: (item.macros || []).map((macro) => cloneDiceMacro(macro)),
         effects: (item.effects || []).map(cloneStatusEffect),
         actions: (item.actions || []).map(cloneAction),
+        localVariables: (item.localVariables || []).map(cloneLocalVariable),
       })),
       inventory: (selectedCharacter.inventory || []).map((item) => ({
         ...item,
@@ -3616,6 +4993,7 @@ export const Characters: React.FC = () => {
         macros: (item.macros || []).map((macro) => cloneDiceMacro(macro)),
         effects: (item.effects || []).map(cloneStatusEffect),
         actions: (item.actions || []).map(cloneAction),
+        localVariables: (item.localVariables || []).map(cloneLocalVariable),
       })),
       inventoryFolders: inventoryFolderClone.folders,
       collapsedInventoryFolderIds: (selectedCharacter.collapsedInventoryFolderIds || [])
@@ -3628,6 +5006,7 @@ export const Characters: React.FC = () => {
         folderId: spell.folderId ? spellFolderClone.idMap.get(spell.folderId) || null : null,
         macros: (spell.macros || []).map((macro) => cloneDiceMacro(macro)),
         actions: (spell.actions || []).map(cloneAction),
+        localVariables: (spell.localVariables || []).map(cloneLocalVariable),
       })),
       spellFolders: spellFolderClone.folders,
       collapsedSpellFolderIds: (selectedCharacter.collapsedSpellFolderIds || [])
@@ -3715,6 +5094,9 @@ export const Characters: React.FC = () => {
       diceMacros: sheetDiceMacros,
       diceMacroFolders,
       collapsedDiceMacroFolderIds: collapsedDiceMacroFolders,
+      scripts: charScripts,
+      scriptFolders,
+      collapsedScriptFolderIds: collapsedScriptFolders,
       statuses: charStatuses,
       statusFolders,
       collapsedStatusFolderIds: collapsedStatusFolders,
@@ -3803,8 +5185,61 @@ export const Characters: React.FC = () => {
     if (selectedCharacter?.id === id) setSelectedCharacter(next[0] || null);
   };
 
+  const persistSelectedCharacterAccess = async (updated: CharacterData, successMessage: string) => {
+    setCharacters((prev) => prev.map((character) => (
+      character.id === updated.id ? updated : character
+    )));
+    setSelectedCharacter(updated);
+    setAccessStatus('Saving access changes...');
+
+    const saveResult = await saveCharacter(updated);
+    if (!saveResult.remoteSaved && !saveResult.remoteSkipped) {
+      setAccessStatus('Access change was saved locally, but Firestore rejected it. Check rules/login.');
+      return;
+    }
+    setAccessStatus(successMessage);
+  };
+
+  const handleAddAccessUser = async (kind: 'control' | 'view') => {
+    if (!selectedCharacter) return;
+    if (kind === 'control' && !canManageControlAccess) return;
+    if (kind === 'view' && !canManageViewAccess) return;
+
+    const uidToAdd = (kind === 'control' ? controlAccessUid : viewAccessUid).trim();
+    if (!uidToAdd || uidToAdd === selectedCharacter.userId) return;
+
+    const controlIds = selectedCharacter.controlUserIds || [];
+    const viewIds = selectedCharacter.viewUserIds || [];
+    const updated: CharacterData = kind === 'control'
+      ? {
+        ...selectedCharacter,
+        controlUserIds: Array.from(new Set([...controlIds, uidToAdd])),
+        viewUserIds: viewIds.filter((uid) => uid !== uidToAdd),
+      }
+      : {
+        ...selectedCharacter,
+        viewUserIds: Array.from(new Set([...viewIds, uidToAdd])),
+      };
+
+    await persistSelectedCharacterAccess(updated, `${getProfileLabel(uidToAdd)} now has ${kind === 'control' ? 'Control' : 'View'} access.`);
+    if (kind === 'control') setControlAccessUid('');
+    if (kind === 'view') setViewAccessUid('');
+  };
+
+  const handleRemoveAccessUser = async (kind: 'control' | 'view', uidToRemove: string) => {
+    if (!selectedCharacter) return;
+    if (kind === 'control' && !canManageControlAccess) return;
+    if (kind === 'view' && !canManageViewAccess) return;
+
+    const updated: CharacterData = kind === 'control'
+      ? { ...selectedCharacter, controlUserIds: (selectedCharacter.controlUserIds || []).filter((uid) => uid !== uidToRemove) }
+      : { ...selectedCharacter, viewUserIds: (selectedCharacter.viewUserIds || []).filter((uid) => uid !== uidToRemove) };
+
+    await persistSelectedCharacterAccess(updated, `${getProfileLabel(uidToRemove)} access removed.`);
+  };
+
   const handleTransferOwner = async () => {
-    if (!isAdmin || !selectedCharacter || !ownerTransferUid.trim()) return;
+    if (!canTransferCharacterOwner || !selectedCharacter || !ownerTransferUid.trim()) return;
 
     const nextOwner = userProfiles.find((profile) => profile.uid === ownerTransferUid);
     const nextOwnerLabel = nextOwner?.email || nextOwner?.displayName || ownerTransferUid;
@@ -3817,6 +5252,8 @@ export const Characters: React.FC = () => {
         ...selectedCharacter,
         userId: ownerTransferUid,
         ownerEmail: nextOwner?.email || '',
+        controlUserIds: (selectedCharacter.controlUserIds || []).filter((uid) => uid !== ownerTransferUid),
+        viewUserIds: (selectedCharacter.viewUserIds || []).filter((uid) => uid !== ownerTransferUid),
         ownerTransferredAt: Date.now(),
       };
       setCharacters((prev) => prev.map((character) => (
@@ -3842,6 +5279,7 @@ export const Characters: React.FC = () => {
       title?: string;
       description?: string;
       addLabel?: string;
+      showChildren?: boolean;
       rootParentId?: string | null;
       onAddRoot: () => void;
       onAddChild: (parentId: string) => void;
@@ -3950,7 +5388,7 @@ export const Characters: React.FC = () => {
                   </>
                 )}
               </div>
-              {renderNodes(folder.id, depth + 1)}
+              {options.showChildren !== false && renderNodes(folder.id, depth + 1)}
             </div>
           ))}
         </div>
@@ -3978,6 +5416,132 @@ export const Characters: React.FC = () => {
             {options.emptyLabel}
           </div>
         ) : renderNodes()}
+      </div>
+    );
+  };
+
+  const getEffectTargetOptions = () => [
+    ...mainAttrs.flatMap(attr => attr.id ? [
+      { id: attr.id, label: `${attr.name || attr.id} (${attr.id})` },
+      { id: `${attr.id}_mod`, label: `${attr.name || attr.id} Modifier (${attr.id}_mod)` },
+    ] : []),
+    ...secondaryAttrs.map(attr => attr.id ? { id: attr.id, label: `${attr.name || attr.id} (${attr.id})` } : null).filter((option): option is { id: string; label: string } => !!option),
+    ...skills.map(attr => attr.id ? { id: attr.id, label: `${attr.name || attr.id} (${attr.id})` } : null).filter((option): option is { id: string; label: string } => !!option),
+    ...otherAttrs.map(attr => attr.id ? { id: attr.id, label: `${attr.name || attr.id} (${attr.id})` } : null).filter((option): option is { id: string; label: string } => !!option),
+    ...resistances.map(attr => attr.id ? { id: attr.id, label: `${attr.name || attr.id} (${attr.id})` } : null).filter((option): option is { id: string; label: string } => !!option),
+    ...bars.flatMap(bar => {
+      if (!bar.id) return [];
+      const barName = bar.name || bar.id;
+      return getBarMode(bar) === 'resource'
+        ? [
+          { id: `${bar.id}_current`, label: `${barName} Current (${bar.id}_current)` },
+          { id: `${bar.id}_reset`, label: `${barName} Reset (${bar.id}_reset)` },
+        ]
+        : [
+          { id: `${bar.id}_current`, label: `${barName} Current (${bar.id}_current)` },
+          { id: `${bar.id}_max`, label: `${barName} Max (${bar.id}_max)` },
+        ];
+    }),
+  ];
+
+  const renderBarTargetResolverModal = () => {
+    if (!barTargetRequest) return null;
+
+    return (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+          <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            Choose Bar Target
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            This imported asset has a Bar Update effect. Choose which bar on this character it should update.
+          </p>
+          <div className="mt-4 rounded-xl border border-cyan-900/40 bg-cyan-950/20 p-3">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-cyan-300/70">Asset Note</div>
+            <div className="mt-1 text-sm text-cyan-50">{barTargetRequest.description}</div>
+          </div>
+          <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-amber-500">
+            Target Bar
+          </label>
+          <select
+            value={barTargetDraft}
+            onChange={(e) => setBarTargetDraft(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-amber-100 focus:border-cyan-500/60 focus:outline-none"
+          >
+            {bars.map((bar) => (
+              <option key={bar.id} value={bar.id}>
+                {bar.name || bar.id} ({bar.id})
+              </option>
+            ))}
+          </select>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => barTargetRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel Import
+            </button>
+            <button
+              onClick={() => barTargetRequest.resolve(barTargetDraft || bars[0]?.id || null)}
+              disabled={!barTargetDraft && bars.length === 0}
+              className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Use This Bar
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderEffectTargetResolverModal = () => {
+    if (!effectTargetRequest) return null;
+    const options = getEffectTargetOptions();
+
+    return (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-amber-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(251,191,36,0.18)]">
+          <h3 className="text-lg font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            Choose Attribute Target
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            This imported asset has an attribute effect. Choose the matching attribute or bar value on this character.
+          </p>
+          <div className="mt-4 rounded-xl border border-amber-900/40 bg-amber-950/20 p-3">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-amber-300/70">Exported Target</div>
+            <div className="mt-1 text-sm text-amber-50">{effectTargetRequest.label}</div>
+          </div>
+          <label className="mt-4 block text-xs font-bold uppercase tracking-wider text-amber-500">
+            Target Attribute
+          </label>
+          <select
+            value={effectTargetDraft}
+            onChange={(e) => setEffectTargetDraft(e.target.value)}
+            className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-amber-100 focus:border-amber-500/60 focus:outline-none"
+          >
+            <option value="">Choose target...</option>
+            {options.map((option) => (
+              <option key={option.id} value={option.id}>{option.label}</option>
+            ))}
+          </select>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => effectTargetRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel Import
+            </button>
+            <button
+              onClick={() => effectTargetRequest.resolve(effectTargetDraft || null)}
+              disabled={!effectTargetDraft}
+              className="rounded-lg border border-amber-500/60 bg-amber-900/40 px-4 py-2 text-sm font-bold text-amber-100 transition hover:bg-amber-800/55 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Use This Attribute
+            </button>
+          </div>
+        </div>
       </div>
     );
   };
@@ -4020,6 +5584,11 @@ export const Characters: React.FC = () => {
       const activeMacroCategory = activeMacroCategoryId !== 'main' && activeMacroCategoryId !== 'rolls'
         ? diceMacroFolders.find(folder => folder.id === activeMacroCategoryId) || null
         : null;
+      const scriptRootCategories = scriptFolders.filter(folder => (folder.parentId ?? null) === null);
+      const activeScriptCategory = activeScriptCategoryId !== 'main'
+        ? scriptFolders.find(folder => folder.id === activeScriptCategoryId) || null
+        : null;
+      const scriptValueOptions = getEffectTargetOptions();
       const attributeEffectHistory: Record<string, Array<{ label: string; value: number; sourceAnchorId?: string }>> = {};
       const pushAttributeHistory = (targetId: string, label: string, value: number, sourceAnchorId?: string) => {
         if (!targetId || !Number.isFinite(value) || Math.abs(value) < 0.0001) return;
@@ -4069,24 +5638,38 @@ export const Characters: React.FC = () => {
       });
 
       (charStatuses || []).forEach((status) => {
+        if ((status.active ?? true) === false) return;
+        const statusLocalContext = getLocalVariableContext(status.localVariables, finalContext);
         (status.effects || []).forEach((effect) => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if (!(effect.active ?? true) || !effect.targetId) return;
-          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          const effectValue = evalCharFormula(effect.value || '0', finalContext, statusLocalContext);
           pushAttributeHistory(effect.targetId, `${status.name || 'Status'} effect`, effectValue, `status-${status.id}`);
+        });
+        (status.actions || []).forEach((action) => {
+          (action.effects || []).forEach((effect) => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
+            if (!(effect.active ?? true) || !effect.targetId) return;
+            const effectValue = evalCharFormula(effect.value || '0', finalContext, statusLocalContext);
+            pushAttributeHistory(effect.targetId, `${status.name || 'Status'} / ${action.name || 'Action'}`, effectValue, `status-${status.id}`);
+          });
         });
       });
 
       (charInventory || []).forEach((item) => {
         if (!item.equipped) return;
+        const itemLocalContext = getLocalVariableContext(item.localVariables, finalContext);
         (item.effects || []).forEach((effect) => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if (!(effect.active ?? true) || !effect.targetId) return;
-          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          const effectValue = evalCharFormula(effect.value || '0', finalContext, itemLocalContext);
           pushAttributeHistory(effect.targetId, `${item.name || 'Item'} effect`, effectValue, `inventory-item-${item.id}`);
         });
         (item.actions || []).forEach((action) => {
           (action.effects || []).forEach((effect) => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if (!(effect.active ?? true) || !effect.targetId) return;
-            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            const effectValue = evalCharFormula(effect.value || '0', finalContext, itemLocalContext);
             pushAttributeHistory(effect.targetId, `${item.name || 'Item'} / ${action.name || 'Action'}`, effectValue, `inventory-item-${item.id}`);
           });
         });
@@ -4094,25 +5677,30 @@ export const Characters: React.FC = () => {
 
       (charGeneralItems || []).map(normalizeGeneralItem).forEach((item) => {
         if (!item.equipped) return;
+        const itemLocalContext = getLocalVariableContext(item.localVariables, finalContext);
         (item.effects || []).forEach((effect) => {
+          if (effect.effectType && effect.effectType !== 'attribute') return;
           if (!(effect.active ?? true) || !effect.targetId) return;
-          const effectValue = evalCharFormula(effect.value || '0', finalContext);
+          const effectValue = evalCharFormula(effect.value || '0', finalContext, itemLocalContext);
           pushAttributeHistory(effect.targetId, `${item.name || 'General Item'} effect`, effectValue, `general-item-${item.id}`);
         });
         (item.actions || []).forEach((action) => {
           (action.effects || []).forEach((effect) => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if (!(effect.active ?? true) || !effect.targetId) return;
-            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            const effectValue = evalCharFormula(effect.value || '0', finalContext, itemLocalContext);
             pushAttributeHistory(effect.targetId, `${item.name || 'General Item'} / ${action.name || 'Action'}`, effectValue, `general-item-${item.id}`);
           });
         });
       });
 
       (charSpells || []).forEach((spell) => {
+        const spellLocalContext = getLocalVariableContext(spell.localVariables, finalContext);
         (spell.actions || []).forEach((action) => {
           (action.effects || []).forEach((effect) => {
+            if (effect.effectType && effect.effectType !== 'attribute') return;
             if (!(effect.active ?? true) || !effect.targetId) return;
-            const effectValue = evalCharFormula(effect.value || '0', finalContext);
+            const effectValue = evalCharFormula(effect.value || '0', finalContext, spellLocalContext);
             pushAttributeHistory(effect.targetId, `${spell.name || 'Spell'} / ${action.name || 'Action'}`, effectValue, `spell-${spell.id}`);
           });
         });
@@ -4174,10 +5762,13 @@ export const Characters: React.FC = () => {
       });
     });
       bars.filter(bar => bar.favorite).forEach((bar) => {
+        const barMode = getBarMode(bar);
         favoriteDisplayMap.set(bar.id, {
           id: bar.id,
           name: bar.name || getReferenceDisplayName(bar.id),
-          value: `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_max`] ?? 0}`,
+          value: barMode === 'resource'
+            ? `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_reset`] ?? 0}`
+            : `${finalContext[`${bar.id}_current`] ?? 0}/${finalContext[`${bar.id}_max`] ?? 0}`,
         });
       });
       const favoriteDisplayEntries = (() => {
@@ -4324,6 +5915,451 @@ export const Characters: React.FC = () => {
           <div className="border-t border-amber-800/20 pt-2">
             {renderAttributeHistory(`${attributeId}_mod`)}
           </div>
+        </div>
+      );
+
+      const renderLocalVariablesEditor = (
+        variables: CharacterLocalVariable[] | undefined,
+        onAdd: () => void,
+        onUpdate: (variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => void,
+        onRemove: (variableIndex: number) => void,
+        canEdit: boolean,
+      ) => (
+        <div className="bg-black/20 p-3 rounded-lg border border-cyan-800/10">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <label className="text-sm font-bold text-stone-300">Local Variables</label>
+              <p className="text-[11px] text-stone-500">Use with <code className="text-cyan-300">@@id</code> in this asset's macros, actions, and effects.</p>
+            </div>
+            {canEdit && (
+              <button onClick={onAdd} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
+                + Add Variable
+              </button>
+            )}
+          </div>
+          {(variables || []).length === 0 ? (
+            <span className="text-[10px] text-stone-600 italic">No local variables added.</span>
+          ) : (
+            <div className="space-y-2">
+              {(variables || []).map((variable, variableIndex) => (
+                <div key={variableIndex} className="grid grid-cols-1 md:grid-cols-[150px_1fr_1fr_auto] gap-2 items-center">
+                  {renderActionField('ID', (
+                    <input
+                      type="text"
+                      value={variable.id}
+                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, id: e.target.value.replace(/^@@?/, '') }))}
+                      disabled={!canEdit}
+                      placeholder="local_id"
+                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-300 font-mono focus:outline-none disabled:opacity-60"
+                    />
+                  ), 'min-w-0')}
+                  {renderActionField('Description', (
+                    <input
+                      type="text"
+                      value={variable.description}
+                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, description: e.target.value }))}
+                      disabled={!canEdit}
+                      placeholder="Description"
+                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                    />
+                  ), 'min-w-0')}
+                  {renderActionField('Value', (
+                    <input
+                      type="text"
+                      value={variable.value}
+                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, value: e.target.value }))}
+                      disabled={!canEdit}
+                      placeholder="@dex_mod - 1"
+                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                    />
+                  ), 'min-w-0')}
+                  {canEdit ? (
+                    <button onClick={() => onRemove(variableIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                      <Trash2 size={14} />
+                    </button>
+                  ) : (
+                    <div />
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
+
+      const renderEffectEditorRow = (
+        effect: StatusEffect,
+        effectIndex: number,
+        onUpdate: (effectIndex: number, updater: (effect: StatusEffect) => StatusEffect) => void,
+        onRemove: (effectIndex: number) => void,
+        canEdit: boolean,
+        targetPlaceholder = 'Target ID (e.g. str_mod)',
+        valuePlaceholder = 'Value (e.g. +2)',
+        localVariables?: CharacterLocalVariable[],
+      ) => {
+        if (effect.effectType === 'status') {
+          return (
+            <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_1fr_220px_auto] gap-2 items-center">
+              <button
+                onClick={() => applyStatusEffect(effect)}
+                disabled={!canEdit || !effect.statusEntry}
+                className="h-8 min-w-[4.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start bg-indigo-900/30 border-indigo-700/50 text-indigo-200 hover:bg-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Apply
+              </button>
+              <input
+                type="text"
+                value={effect.statusName || effect.statusEntry?.name || 'Imported Status'}
+                readOnly
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-indigo-200 font-semibold focus:outline-none"
+              />
+              <select
+                value={effect.statusFolderId ?? ''}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, statusFolderId: e.target.value || null }))}
+                disabled={!canEdit}
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+              >
+                <option value="">General Statuses</option>
+                {getFolderOptions(statusFolders).map(option => (
+                  <option key={option.id} value={option.id}>
+                    {option.label}
+                  </option>
+                ))}
+              </select>
+              {canEdit ? (
+                <button onClick={() => onRemove(effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                  <Trash2 size={14} />
+                </button>
+              ) : (
+                <div />
+              )}
+            </div>
+          );
+        }
+
+        if (effect.effectType === 'bar-update') {
+          return (
+            <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-center">
+              <button
+                onClick={() => applyBarUpdateEffect(effect, localVariables)}
+                disabled={!canEdit || !effect.targetId}
+                className="h-8 min-w-[4.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start bg-cyan-900/30 border-cyan-700/50 text-cyan-200 hover:bg-cyan-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+              >
+                Apply
+              </button>
+              <select
+                value={effect.targetId}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, targetId: e.target.value }))}
+                disabled={!canEdit}
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+              >
+                <option value="">Choose bar</option>
+                {bars.map((bar) => (
+                  <option key={bar.id} value={bar.id}>
+                    {bar.name || bar.id}
+                  </option>
+                ))}
+              </select>
+              <input
+                value={effect.value}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, value: e.target.value }))}
+                disabled={!canEdit}
+                placeholder="Amount (e.g. 100)"
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-200 font-mono focus:outline-none disabled:opacity-60"
+              />
+              {canEdit ? (
+                <button onClick={() => onRemove(effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                  <Trash2 size={14} />
+                </button>
+              ) : (
+                <div />
+              )}
+            </div>
+          );
+        }
+
+        return (
+          <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_auto_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-center">
+            <button
+              onClick={() => onUpdate(effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
+              disabled={!canEdit}
+              className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start disabled:opacity-40 disabled:cursor-not-allowed ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+            >
+              {(effect.active ?? true) ? 'On' : 'Off'}
+            </button>
+            <button
+              onClick={() => onUpdate(effectIndex, current => ({ ...current, useTargetPicker: !(current.useTargetPicker ?? true) }))}
+              disabled={!canEdit}
+              className={`h-8 w-9 rounded border grid place-items-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${(effect.useTargetPicker ?? true) ? 'bg-amber-900/35 border-amber-400/50 text-amber-200' : 'bg-stone-900/40 border-stone-700/60 text-stone-500'}`}
+              title={(effect.useTargetPicker ?? true) ? 'Picker mode: choose a character attribute' : 'Manual mode: type target id'}
+            >
+              <Crown size={14} fill={(effect.useTargetPicker ?? true) ? 'currentColor' : 'none'} />
+            </button>
+            {renderActionField('Target', (
+              (effect.useTargetPicker ?? true) ? (
+                <select
+                  value={effect.targetId}
+                  onChange={(e) => onUpdate(effectIndex, current => ({
+                    ...current,
+                    targetId: e.target.value,
+                    targetLabel: getEffectTargetLabelById(e.target.value),
+                  }))}
+                  disabled={!canEdit}
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-300 focus:outline-none disabled:opacity-60"
+                >
+                  <option value="">Choose target...</option>
+                  {getEffectTargetOptions().map(option => (
+                    <option key={option.id} value={option.id}>{option.label}</option>
+                  ))}
+                </select>
+              ) : (
+                <input
+                  value={effect.targetId}
+                  onChange={(e) => onUpdate(effectIndex, current => ({ ...current, targetId: e.target.value }))}
+                  disabled={!canEdit}
+                  placeholder={targetPlaceholder}
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
+                />
+              )
+            ), 'min-w-0')}
+            {renderActionField('Value', (
+              <input
+                value={effect.value}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, value: e.target.value }))}
+                disabled={!canEdit}
+                placeholder={valuePlaceholder}
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+              />
+            ), 'min-w-0')}
+            {canEdit ? (
+              <button onClick={() => onRemove(effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                <Trash2 size={14} />
+              </button>
+            ) : (
+              <div />
+            )}
+          </div>
+        );
+      };
+
+      const renderActionField = (
+        label: string,
+        children: React.ReactNode,
+        className = 'min-w-[140px]',
+      ) => {
+        const labelFitStyle = className.includes('w-[11ch]')
+          ? { minWidth: `${Math.max(11, Math.ceil(label.length * 0.8))}ch` }
+          : undefined;
+
+        return (
+          <label className={`flex flex-col gap-1 ${className}`} style={labelFitStyle}>
+            <span
+              className="h-4 whitespace-nowrap text-[10px] font-bold uppercase leading-4 tracking-[0.16em] text-stone-500"
+              title={label}
+            >
+              {label}
+            </span>
+            {children}
+          </label>
+        );
+      };
+
+      const renderActionUsageControls = (
+        action: CharacterAction,
+        onUpdate: (updater: (action: CharacterAction) => CharacterAction) => void,
+        canEdit: boolean,
+      ) => (
+        <>
+          {renderActionField('Remaining', (
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={action.usageRemaining}
+              onChange={(e) => onUpdate(current => ({ ...current, usageRemaining: sanitizeWholeNumberInput(e.target.value) }))}
+              disabled={!canEdit}
+              placeholder="0"
+              className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+            />
+          ), 'w-[11ch] flex-none')}
+          {renderActionField('Max', (
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={action.maxUsage || ''}
+              onChange={(e) => onUpdate(current => ({ ...current, maxUsage: sanitizeWholeNumberInput(e.target.value) }))}
+              disabled={!canEdit}
+              placeholder="0"
+              className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+            />
+          ), 'w-[11ch] flex-none')}
+          {renderActionField('Replenish On', (
+            <select
+              value={action.replenishTrigger || 'custom'}
+              onChange={(e) => onUpdate(current => ({ ...current, replenishTrigger: e.target.value as CharacterReplenishTrigger }))}
+              disabled={!canEdit}
+              className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+              title="When this action regains usage"
+            >
+              {REPLENISH_TRIGGER_OPTIONS.map(option => (
+                <option key={option.value} value={option.value}>{option.label}</option>
+              ))}
+            </select>
+          ), 'min-w-[150px]')}
+          {renderActionField('Gain', (
+            <input
+              type="text"
+              inputMode="numeric"
+              pattern="[0-9]*"
+              value={action.replenishAmount || ''}
+              onChange={(e) => onUpdate(current => ({ ...current, replenishAmount: sanitizeWholeNumberInput(e.target.value) }))}
+              disabled={!canEdit}
+              placeholder="0"
+              className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+            />
+          ), 'w-[11ch] flex-none')}
+        </>
+      );
+
+      const renderStatusActionsEditor = (status: CharacterStatus, canEdit: boolean) => (
+        <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
+          <div className="flex justify-between items-center mb-2">
+            <label className="text-sm font-bold text-stone-300">Actions</label>
+            {canEdit && (
+              <button onClick={() => addStatusAction(status.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                + Add Action
+              </button>
+            )}
+          </div>
+          {(status.actions || []).length === 0 ? (
+            <span className="text-xs text-stone-600 italic">No actions added.</span>
+          ) : (
+            <div className="space-y-3">
+              {(status.actions || []).map((action) => {
+                const actionKey = `${status.id}:${action.id}`;
+                const isExpanded = expandedStatusActionDescriptions.includes(actionKey);
+                return (
+                  <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
+                    <div className="flex flex-wrap gap-2 items-start mb-2">
+                      {renderActionField('Name', (
+                        <input
+                          type="text"
+                          value={action.name}
+                          onChange={(e) => updateStatusAction(status.id, action.id, current => ({ ...current, name: e.target.value }))}
+                          disabled={!canEdit}
+                          placeholder="Action name"
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                        />
+                      ), 'min-w-[180px]')}
+                      {renderActionField('Cost', (
+                        <input
+                          type="text"
+                          value={action.cost}
+                          onChange={(e) => updateStatusAction(status.id, action.id, current => ({ ...current, cost: e.target.value }))}
+                          disabled={!canEdit}
+                          placeholder="Cost"
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                        />
+                      ), 'min-w-[140px]')}
+                      {renderActionUsageControls(action, updater => updateStatusAction(status.id, action.id, updater), canEdit)}
+                      <button onClick={() => shareStatusAction(status, action)} className="inline-flex items-center gap-1 px-3 py-2 bg-sky-900/30 border border-sky-800/40 rounded text-sm text-sky-200 hover:bg-sky-900/50 cursor-pointer">
+                        <Share2 size={14} /> Share
+                      </button>
+                      {canEdit && (
+                        <button onClick={() => removeStatusAction(status.id, action.id)} className="p-2 text-stone-500 hover:text-red-400 cursor-pointer">
+                          <Trash2 size={14} />
+                        </button>
+                      )}
+                    </div>
+                    <textarea
+                      value={action.description}
+                      onChange={(e) => updateStatusAction(status.id, action.id, current => ({ ...current, description: e.target.value }))}
+                      disabled={!canEdit}
+                      rows={isExpanded ? 2 : 6}
+                      placeholder="Action description"
+                      className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
+                    />
+                    <button onClick={() => toggleStatusActionDescription(status.id, action.id)} className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer">
+                      {isExpanded ? 'Show More' : 'Hide'}
+                    </button>
+                    <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-sm font-bold text-stone-300">Action Macros</label>
+                        {canEdit && (
+                          <button onClick={() => addStatusActionMacro(status.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                            + Add Macro
+                          </button>
+                        )}
+                      </div>
+                      {(action.macros || []).length === 0 ? (
+                        <span className="text-xs text-stone-600 italic">No macros added.</span>
+                      ) : (
+                        <div className="space-y-2">
+                          {(action.macros || []).map((macro) => (
+                            <div key={macro.id} className="grid grid-cols-1 md:grid-cols-[140px_1fr_auto_auto] gap-2 items-center">
+                              <input value={macro.name} onChange={(e) => updateStatusActionMacro(status.id, action.id, macro.id, current => ({ ...current, name: e.target.value }))} disabled={!canEdit} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-amber-100 focus:outline-none disabled:opacity-60" />
+                              <input value={macro.formula} onChange={(e) => updateStatusActionMacro(status.id, action.id, macro.id, current => ({ ...current, formula: e.target.value }))} disabled={!canEdit} className="bg-stone-900 border border-stone-800 rounded px-2 py-1.5 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60" />
+                              <button onClick={() => rollStatusActionMacro(status, action, macro)} className="flex items-center gap-1 px-3 py-1 bg-amber-700/40 text-amber-200 rounded border border-amber-600/40 hover:bg-amber-700/60 transition-colors text-xs font-bold cursor-pointer">
+                                <Dices size={12} /> Roll
+                              </button>
+                              {canEdit ? (
+                                <button onClick={() => removeStatusActionMacro(status.id, action.id, macro.id)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                  <Trash2 size={14} />
+                                </button>
+                              ) : (
+                                <div />
+                              )}
+                            </div>
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                    <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
+                      <div className="flex justify-between items-center mb-2">
+                        <label className="text-sm font-bold text-stone-300">Effects</label>
+                        {canEdit && (
+                          <div className="flex flex-wrap gap-2">
+                            <button onClick={() => addStatusActionEffect(status.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                              + Add Effect
+                            </button>
+                            <button
+                              onClick={() => importStatusApplyEffect(effect => updateStatusAction(status.id, action.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                              className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                            >
+                              + Add Status
+                            </button>
+                            <button
+                              onClick={() => updateStatusAction(status.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                              className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                            >
+                              + Bar Update
+                            </button>
+                          </div>
+                        )}
+                      </div>
+                      {(action.effects || []).length === 0 ? (
+                        <span className="text-[10px] text-stone-600 italic">No effects added.</span>
+                      ) : (
+                        <div className="space-y-2">
+                          {(action.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                            effect,
+                            effectIndex,
+                            (index, updater) => updateStatusActionEffect(status.id, action.id, index, updater),
+                            (index) => removeStatusActionEffect(status.id, action.id, index),
+                            canEdit,
+                            'Target ID (e.g. str_mod)',
+                            'Value (e.g. @@bonus)',
+                            status.localVariables
+                          ))}
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       );
 
@@ -4715,6 +6751,8 @@ export const Characters: React.FC = () => {
 
     return (
       <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px]" style={{ fontFamily: "'IM Fell English', serif" }}>
+        {renderBarTargetResolverModal()}
+        {renderEffectTargetResolverModal()}
         <input
           ref={attributeImportInputRef}
           type="file"
@@ -4724,9 +6762,15 @@ export const Characters: React.FC = () => {
         />
         <div className="sticky top-3 z-30 mb-6 border border-amber-700/40 bg-stone-950/88 backdrop-blur-md rounded-2xl px-4 py-3 shadow-[0_12px_30px_rgba(0,0,0,0.32)]">
           <div className="flex flex-wrap justify-between items-center gap-3">
-          <button onClick={() => setIsViewingSheet(false)} className="flex items-center gap-2 text-amber-500 hover:text-amber-300 font-bold tracking-wider cursor-pointer" style={{ fontFamily: "'Cinzel', serif" }}>
-            <ArrowLeft size={20} /> Back to List
-          </button>
+          {embeddedMode ? (
+            <span className="text-amber-500 font-bold tracking-wider" style={{ fontFamily: "'Cinzel', serif" }}>
+              {selectedCharacter.name}
+            </span>
+          ) : (
+            <button onClick={() => setIsViewingSheet(false)} className="flex items-center gap-2 text-amber-500 hover:text-amber-300 font-bold tracking-wider cursor-pointer" style={{ fontFamily: "'Cinzel', serif" }}>
+              <ArrowLeft size={20} /> Back to List
+            </button>
+          )}
           <div className="flex gap-3">
             {sheetSyncStatus && (
               <div
@@ -4779,32 +6823,77 @@ export const Characters: React.FC = () => {
         </div>
 
         <div className="sticky top-[5.75rem] z-20 mb-4 rounded-2xl border border-amber-800/30 bg-stone-950/86 px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.24)] backdrop-blur-md overflow-visible">
-          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
-            {[
-              { key: 'bio', label: 'Bio', hint: 'Story and profile' },
-              { key: 'attributes', label: 'Attributes', hint: 'Stats and bars' },
-              { key: 'macros', label: 'Macros', hint: 'Quick rolls and dice macros' },
-              { key: 'inventory', label: 'Inventory', hint: 'Gear and general items' },
-              { key: 'spells', label: 'Spells', hint: 'Magic and abilities' },
-              { key: 'statuses', label: 'Statuses', hint: 'Effects and conditions' },
-            ].map((tab) => {
-              const isActive = activeSheetTab === tab.key;
-              return (
-                <button
-                  key={tab.key}
-                  onClick={() => setActiveSheetTab(tab.key as CharacterSheetTab)}
-                  title={tab.hint}
-                  className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none tracking-wide transition-all cursor-pointer ${
-                    isActive
-                      ? 'border-amber-400/60 bg-amber-900/42 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
-                      : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
-                  }`}
-                  style={{ fontFamily: "'Cinzel', serif" }}
-                >
-                  {tab.label}
-                </button>
-              );
-            })}
+          <div className="flex flex-wrap items-center justify-between gap-3 overflow-visible">
+            <div className="flex min-w-0 gap-2 overflow-x-auto overflow-y-visible py-0.5">
+              {[
+                { key: 'bio', label: 'Bio', hint: 'Story and profile' },
+                { key: 'attributes', label: 'Attributes', hint: 'Stats and bars' },
+                { key: 'macros', label: 'Macros', hint: 'Quick rolls and dice macros' },
+                { key: 'scripts', label: 'Scripts', hint: 'Automatic status logic' },
+                { key: 'inventory', label: 'Inventory', hint: 'Gear and general items' },
+                { key: 'spells', label: 'Spells', hint: 'Magic and abilities' },
+                { key: 'statuses', label: 'Statuses', hint: 'Effects and conditions' },
+              ].map((tab) => {
+                const isActive = activeSheetTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActiveSheetTab(tab.key as CharacterSheetTab)}
+                    title={tab.hint}
+                    className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none tracking-wide transition-all cursor-pointer ${
+                      isActive
+                        ? 'border-amber-400/60 bg-amber-900/42 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
+                        : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
+                    }`}
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+            <div className="ml-auto flex shrink-0 flex-wrap items-center justify-end gap-2">
+              <button
+                onClick={handleShortRest}
+                disabled={!isCharacterOwner}
+                className="rounded-xl border border-emerald-700/45 bg-emerald-950/35 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-emerald-200 transition hover:bg-emerald-900/45 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Short Rest
+              </button>
+              <button
+                onClick={handleLongRest}
+                disabled={!isCharacterOwner}
+                className="rounded-xl border border-sky-700/45 bg-sky-950/35 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-sky-200 transition hover:bg-sky-900/45 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Long Rest
+              </button>
+              <button
+                onClick={handleEndTurn}
+                disabled={!isCharacterOwner}
+                className="rounded-xl border border-amber-700/45 bg-amber-950/35 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-amber-200 transition hover:bg-amber-900/45 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                End Turn
+              </button>
+              <button
+                onClick={handleEndBattle}
+                disabled={!isCharacterOwner}
+                className="rounded-xl border border-red-700/45 bg-red-950/35 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-red-200 transition hover:bg-red-900/45 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                End Battle
+              </button>
+              <button
+                onClick={handleSkipMinute}
+                disabled={!isCharacterOwner}
+                className="rounded-xl border border-violet-700/45 bg-violet-950/35 px-3 py-2 text-xs font-bold uppercase tracking-[0.12em] text-violet-200 transition hover:bg-violet-900/45 disabled:cursor-not-allowed disabled:opacity-40"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Skip Minute
+              </button>
+            </div>
           </div>
         </div>
 
@@ -5042,6 +7131,64 @@ export const Characters: React.FC = () => {
             >
               Import
             </button>
+          )}
+          </div>
+        </div>
+        )}
+
+        {activeSheetTab === 'scripts' && (
+        <div className="sticky top-[9.35rem] z-20 mb-6 rounded-2xl border border-cyan-800/30 bg-stone-950/88 px-3 py-3 shadow-[0_10px_24px_rgba(0,0,0,0.22)] backdrop-blur-md overflow-visible">
+          <div className="flex items-center justify-between gap-3 overflow-visible">
+          <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+            <button
+              onClick={() => setActiveScriptCategoryId('main')}
+              className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                activeScriptCategoryId === 'main'
+                  ? 'border-cyan-300/60 bg-cyan-900/45 text-cyan-100 shadow-[0_0_16px_rgba(34,211,238,0.16)]'
+                  : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-cyan-700/45 hover:text-cyan-200'
+              }`}
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Main
+            </button>
+            {scriptRootCategories.map((folder) => (
+              <button
+                key={folder.id}
+                onClick={() => setActiveScriptCategoryId(folder.id)}
+                className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none transition-all cursor-pointer ${
+                  activeScriptCategoryId === folder.id
+                    ? 'text-cyan-50 shadow-[0_0_16px_rgba(34,211,238,0.16)]'
+                    : 'bg-stone-900/55 text-stone-300 hover:text-cyan-100'
+                }`}
+                style={{
+                  fontFamily: "'Cinzel', serif",
+                  borderColor: activeScriptCategoryId === folder.id ? `${folder.color || '#0891b2'}cc` : `${folder.color || '#334155'}66`,
+                  background: activeScriptCategoryId === folder.id
+                    ? `linear-gradient(135deg, ${folder.color || '#0891b2'}66, rgba(12, 10, 9, 0.72))`
+                    : `linear-gradient(135deg, ${folder.color || '#334155'}22, rgba(12, 10, 9, 0.52))`,
+                }}
+              >
+                {folder.name || 'Untitled Folder'}
+              </button>
+            ))}
+          </div>
+          {isCharacterOwner && (
+            <div className="flex shrink-0 items-center gap-2">
+              <button
+                onClick={() => importSharedEntry('script')}
+                className="rounded-xl border border-cyan-700/50 bg-cyan-900/35 px-4 py-2 text-sm font-bold leading-none text-cyan-100 hover:bg-cyan-900/55 cursor-pointer"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Import
+              </button>
+              <button
+                onClick={() => addScript(activeScriptCategoryId === 'main' ? null : activeScriptCategoryId)}
+                className="rounded-xl border border-cyan-700/50 bg-cyan-900/35 px-4 py-2 text-sm font-bold leading-none text-cyan-100 hover:bg-cyan-900/55 cursor-pointer"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                + Add Script
+              </button>
+            </div>
           )}
           </div>
         </div>
@@ -5538,6 +7685,418 @@ export const Characters: React.FC = () => {
           </div>
           )}
 
+          {activeSheetTab === 'scripts' && (
+          <div className="rounded-2xl border border-cyan-800/30 bg-gradient-to-br from-cyan-950/26 via-black/20 to-slate-950/16 p-6 relative overflow-hidden shadow-[0_18px_50px_rgba(8,145,178,0.16)]">
+            <div className="absolute inset-y-0 left-0 w-1 bg-gradient-to-b from-cyan-400/80 via-sky-400/45 to-transparent"></div>
+            <div className="relative z-10 space-y-6">
+              <div className="flex items-center justify-between border-b border-cyan-800/30 pb-3">
+                <div>
+                  <div className="inline-flex items-center rounded-full border border-cyan-500/30 bg-cyan-500/10 px-2.5 py-1 text-[10px] font-bold uppercase tracking-[0.24em] text-cyan-200 mb-2">
+                    Automation
+                  </div>
+                  <h3 className="text-xl font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                    ✦ Scripts
+                  </h3>
+                  <p className="text-xs text-cyan-100/55 mt-1">
+                    Watch attributes or bars, then automatically apply or remove statuses when conditions match.
+                  </p>
+                </div>
+              </div>
+
+              {activeScriptCategoryId === 'main' ? (
+                <div>
+                  {renderFolderTree(scriptFolders, {
+                    editable: isCharacterOwner,
+                    emptyLabel: 'No script folders yet. Add a folder here and it will become a script tab.',
+                    title: 'Script Folders',
+                    description: 'Root folders appear as script tabs. Subfolders stay inside their category.',
+                    addLabel: '+ Add Folder',
+                    rootParentId: null,
+                    onAddRoot: () => addScriptFolder(),
+                    onAddChild: (parentId) => addScriptFolder(parentId),
+                    onMove: moveScriptFolder,
+                    onUpdate: updateScriptFolder,
+                    onRemove: removeScriptFolder,
+                  })}
+                </div>
+              ) : (
+                <div>
+                  {renderFolderTree(scriptFolders, {
+                    editable: isCharacterOwner,
+                    emptyLabel: `No subfolders in ${activeScriptCategory?.name || 'this folder'} yet.`,
+                    title: `${activeScriptCategory?.name || 'Script Folder'} Subfolders`,
+                    description: 'Subfolders organize this script category only and do not appear in the script tab bar.',
+                    addLabel: '+ Add Subfolder',
+                    rootParentId: activeScriptCategoryId,
+                    onAddRoot: () => addScriptFolder(activeScriptCategoryId),
+                    onAddChild: (parentId) => addScriptFolder(parentId),
+                    onMove: moveScriptFolder,
+                    onUpdate: updateScriptFolder,
+                    onRemove: removeScriptFolder,
+                  })}
+                </div>
+              )}
+
+              <div className="space-y-4">
+                <div className="flex items-center justify-between">
+                  <h4 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                    {activeScriptCategoryId === 'main' ? 'General Scripts' : `${activeScriptCategory?.name || 'Category'} Scripts`}
+                  </h4>
+                  {isCharacterOwner && (
+                    <button
+                      onClick={() => addScript(activeScriptCategoryId === 'main' ? null : activeScriptCategoryId)}
+                      className="rounded-lg border border-cyan-700/50 bg-cyan-900/35 px-3 py-1.5 text-sm text-cyan-100 hover:bg-cyan-900/55 cursor-pointer"
+                    >
+                      + Add Script
+                    </button>
+                  )}
+                </div>
+
+                {charScripts
+                  .filter(script => activeScriptCategoryId === 'main'
+                    ? (script.folderId ?? null) === null
+                    : isFolderInTree(scriptFolders, activeScriptCategoryId, script.folderId) && isFolderVisible(scriptFolders, script.folderId))
+                  .length === 0 ? (
+                    <div className="rounded-xl border border-dashed border-cyan-900/40 bg-black/20 px-4 py-8 text-center text-sm italic text-stone-500">
+                      No scripts here yet.
+                    </div>
+                  ) : (
+                    <div className="space-y-4">
+                      {charScripts
+                        .filter(script => activeScriptCategoryId === 'main'
+                          ? (script.folderId ?? null) === null
+                          : isFolderInTree(scriptFolders, activeScriptCategoryId, script.folderId) && isFolderVisible(scriptFolders, script.folderId))
+                        .map((script, idx, visibleScripts) => {
+                          const isScriptActive = script.active ?? true;
+                          const isScriptCollapsed = script.hidden ?? false;
+                          return (
+                            <div key={script.id} className={`rounded-xl border p-4 shadow-lg transition-opacity ${isScriptActive ? '' : 'opacity-60'}`} style={{ borderColor: `${script.color || '#06b6d4'}55`, background: `linear-gradient(135deg, ${script.color || '#06b6d4'}1f, rgba(8, 47, 73, 0.16))` }}>
+                              <div className="flex flex-wrap items-end gap-3">
+                                {renderActionField('Active', (
+                                  <button
+                                    onClick={() => updateScript(script.id, current => ({ ...current, active: !(current.active ?? true) }))}
+                                    disabled={!isCharacterOwner}
+                                    className={`h-10 w-10 shrink-0 rounded-lg border grid place-items-center transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
+                                      isScriptActive
+                                        ? 'border-cyan-400/70 bg-cyan-500/20 text-cyan-200 shadow-[0_0_16px_rgba(34,211,238,0.24)]'
+                                        : 'border-stone-700 bg-stone-950/70 text-stone-600 hover:text-stone-400'
+                                    }`}
+                                    title={isScriptActive ? 'Script active' : 'Script inactive'}
+                                  >
+                                    <Zap size={17} fill={isScriptActive ? 'currentColor' : 'none'} />
+                                  </button>
+                                ), 'min-w-[48px]')}
+                                {renderActionField('Script Name', (
+                                  <input
+                                    value={script.name}
+                                    onChange={(e) => updateScript(script.id, current => ({ ...current, name: e.target.value }))}
+                                    disabled={!isCharacterOwner}
+                                    className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-cyan-100 focus:outline-none focus:border-cyan-500/40 disabled:opacity-60"
+                                    placeholder="Script name"
+                                  />
+                                ), 'min-w-[220px] flex-1')}
+                                {renderActionField('Color', (
+                                  <input
+                                    type="color"
+                                    value={script.color || '#06b6d4'}
+                                    onChange={(e) => updateScript(script.id, current => ({ ...current, color: e.target.value }))}
+                                    disabled={!isCharacterOwner}
+                                    className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
+                                  />
+                                ), 'min-w-[64px]')}
+                                {renderActionField('Category', (
+                                  <select
+                                    value={script.folderId ?? ''}
+                                    onChange={(e) => updateScript(script.id, current => ({ ...current, folderId: e.target.value || null }))}
+                                    disabled={!isCharacterOwner}
+                                    className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none focus:border-cyan-500/40 disabled:opacity-60"
+                                  >
+                                    <option value="">General Scripts</option>
+                                    {getFolderOptions(scriptFolders).map(option => (
+                                      <option key={option.id} value={option.id}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                ), 'min-w-[200px]')}
+                                {isCharacterOwner && (
+                                  <div className="ml-auto flex items-center gap-1">
+                                    <button
+                                      onClick={() => updateScript(script.id, current => ({ ...current, hidden: !current.hidden }))}
+                                      className="px-2 py-1 text-xs text-cyan-200 border border-cyan-800/40 rounded hover:bg-cyan-900/20 cursor-pointer"
+                                    >
+                                      {isScriptCollapsed ? 'Show' : 'Collapse'}
+                                    </button>
+                                    <button
+                                      onClick={() => downloadJsonFile(buildScriptExportPayload(script), safeExportFileName(script.name, 'script'))}
+                                      className="px-2 py-1 text-xs text-emerald-300 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
+                                    >
+                                      Export
+                                    </button>
+                                    <button onClick={() => moveScript(script.id, 'up')} disabled={idx === 0} className="p-1 text-stone-500 hover:text-cyan-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"><ArrowUp size={15} /></button>
+                                    <button onClick={() => moveScript(script.id, 'down')} disabled={idx === visibleScripts.length - 1} className="p-1 text-stone-500 hover:text-cyan-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"><ArrowDown size={15} /></button>
+                                    <button onClick={() => removeScript(script.id)} className="p-1 text-stone-500 hover:text-red-400 cursor-pointer"><Trash2 size={16} /></button>
+                                  </div>
+                                )}
+                              </div>
+
+                              {!isScriptCollapsed && (
+                              <>
+                              <div className="mt-4 rounded-lg border border-cyan-900/30 bg-black/20 p-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <div>
+                                    <label className="text-sm font-bold text-stone-300">Control Values</label>
+                                    <p className="text-xs text-stone-500">The script checks its conditions whenever these values change.</p>
+                                  </div>
+                                  {isCharacterOwner && (
+                                    <button
+                                      onClick={() => updateScript(script.id, current => ({ ...current, watchIds: [...(current.watchIds || []), scriptValueOptions[0]?.id || ''] }))}
+                                      className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                    >
+                                      + Add Control
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="space-y-2">
+                                  {(script.watchIds || []).length === 0 ? (
+                                    <span className="text-xs text-stone-600 italic">No control values selected.</span>
+                                  ) : script.watchIds.map((watchId, watchIndex) => {
+                                    const importedLabel = script.importedValueLabels?.[watchId];
+                                    const hasCurrentOption = scriptValueOptions.some(option => option.id === watchId);
+                                    return (
+                                    <div key={`${script.id}-watch-${watchIndex}`} className="grid grid-cols-[1fr_auto] gap-2">
+                                      {renderActionField('Control Value', (
+                                        <>
+                                          <select
+                                            value={watchId}
+                                            onChange={(e) => updateScript(script.id, current => ({ ...current, watchIds: (current.watchIds || []).map((id, index) => index === watchIndex ? e.target.value : id) }))}
+                                            disabled={!isCharacterOwner}
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+                                          >
+                                            <option value="">Choose value...</option>
+                                            {!hasCurrentOption && watchId && (
+                                              <option value={watchId}>{importedLabel || `Imported value (${watchId})`}</option>
+                                            )}
+                                            {scriptValueOptions.map(option => (
+                                              <option key={option.id} value={option.id}>{option.label}</option>
+                                            ))}
+                                          </select>
+                                          {importedLabel && (
+                                            <span className="text-[10px] text-cyan-300/70">Imported as: {importedLabel}</span>
+                                          )}
+                                        </>
+                                      ), 'min-w-0')}
+                                      {isCharacterOwner && (
+                                        <button onClick={() => updateScript(script.id, current => ({ ...current, watchIds: (current.watchIds || []).filter((_, index) => index !== watchIndex) }))} className="text-stone-600 hover:text-red-400 cursor-pointer">
+                                          <Trash2 size={14} />
+                                        </button>
+                                      )}
+                                    </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+
+                              <div className="mt-4 rounded-lg border border-cyan-900/30 bg-black/20 p-3">
+                                <div className="mb-2 flex items-center justify-between gap-3">
+                                  <label className="text-sm font-bold text-stone-300">If Conditions</label>
+                                  {isCharacterOwner && (
+                                    <button onClick={() => addScriptCondition(script.id)} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
+                                      + Add If
+                                    </button>
+                                  )}
+                                </div>
+                                <div className="space-y-3">
+                                  {(script.conditions || []).length === 0 ? (
+                                    <span className="text-xs text-stone-600 italic">No conditions yet.</span>
+                                  ) : script.conditions.map((condition) => {
+                                    const importedLeftLabel = script.importedValueLabels?.[condition.leftId];
+                                    const hasCurrentLeftOption = scriptValueOptions.some(option => option.id === condition.leftId);
+                                    return (
+                                    <div key={condition.id} className="rounded-lg border border-cyan-900/25 bg-stone-950/45 p-3 space-y-3">
+                                      <div className="grid grid-cols-1 gap-2 lg:grid-cols-[1.2fr_160px_1fr_1fr_auto]">
+                                        {renderActionField('If Value', (
+                                          <>
+                                            <select
+                                              value={condition.leftId}
+                                              onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({ ...current, leftId: e.target.value }))}
+                                              disabled={!isCharacterOwner}
+                                              className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+                                            >
+                                              <option value="">Choose value...</option>
+                                              {!hasCurrentLeftOption && condition.leftId && (
+                                                <option value={condition.leftId}>{importedLeftLabel || `Imported value (${condition.leftId})`}</option>
+                                              )}
+                                              {scriptValueOptions.map(option => (
+                                                <option key={option.id} value={option.id}>{option.label}</option>
+                                              ))}
+                                            </select>
+                                            {importedLeftLabel && (
+                                              <span className="text-[10px] text-cyan-300/70">Imported as: {importedLeftLabel}</span>
+                                            )}
+                                          </>
+                                        ), 'min-w-0')}
+                                        {renderActionField('Operator', (
+                                          <select
+                                            value={condition.operator}
+                                            onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({ ...current, operator: e.target.value as CharacterScriptConditionOperator }))}
+                                            disabled={!isCharacterOwner}
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+                                          >
+                                            <option value="lte">is ≤</option>
+                                            <option value="lt">is &lt;</option>
+                                            <option value="gte">is ≥</option>
+                                            <option value="gt">is &gt;</option>
+                                            <option value="eq">is equal to</option>
+                                            <option value="neq">is not equal to</option>
+                                            <option value="between">is between</option>
+                                            <option value="outside">is outside</option>
+                                          </select>
+                                        ), 'min-w-[160px]')}
+                                        {condition.operator === 'between' || condition.operator === 'outside' ? (
+                                          <>
+                                            {renderActionField('Min', (
+                                              <input
+                                                value={condition.minValue || ''}
+                                                onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({ ...current, minValue: e.target.value }))}
+                                                disabled={!isCharacterOwner}
+                                                placeholder="Min"
+                                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                              />
+                                            ), 'min-w-0')}
+                                            {renderActionField('Max', (
+                                              <input
+                                                value={condition.maxValue || ''}
+                                                onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({ ...current, maxValue: e.target.value }))}
+                                                disabled={!isCharacterOwner}
+                                                placeholder="Max"
+                                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                              />
+                                            ), 'min-w-0')}
+                                          </>
+                                        ) : (
+                                          <>
+                                            {renderActionField('Compare Value', (
+                                              <input
+                                                value={condition.compareValue || ''}
+                                                onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({ ...current, compareValue: e.target.value }))}
+                                                disabled={!isCharacterOwner}
+                                                placeholder="Value or formula"
+                                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
+                                              />
+                                            ), 'min-w-0 lg:col-span-2')}
+                                          </>
+                                        )}
+                                        {isCharacterOwner && (
+                                          <button onClick={() => removeScriptCondition(script.id, condition.id)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                                            <Trash2 size={14} />
+                                          </button>
+                                        )}
+                                      </div>
+
+                                      <div className="rounded-lg border border-cyan-900/20 bg-black/20 p-3">
+                                        <div>
+                                          <div className="mb-2 flex items-center justify-between gap-3">
+                                            <div>
+                                              <label className="block text-xs font-bold uppercase tracking-[0.16em] text-cyan-200">Apply Status JSON</label>
+                                              <p className="text-xs text-stone-500">Import one or more status JSON files. Each one can remove itself or stay when the condition becomes false.</p>
+                                            </div>
+                                            {isCharacterOwner && (
+                                              <button
+                                                onClick={() => importScriptConditionStatus(script.id, condition.id)}
+                                                className="shrink-0 rounded border border-cyan-700/50 bg-cyan-900/30 px-3 py-1.5 text-xs text-cyan-100 hover:bg-cyan-900/50 cursor-pointer"
+                                              >
+                                                + Import Status JSON
+                                              </button>
+                                            )}
+                                          </div>
+                                          {(condition.statusEntries || []).length === 0 ? (
+                                            <div className="rounded border border-dashed border-stone-700/60 px-3 py-3 text-center text-xs italic text-stone-600">
+                                              No status JSON imported for this condition.
+                                            </div>
+                                          ) : (
+                                            <div className="space-y-2">
+                                              {(condition.statusEntries || []).map((statusEntry) => (
+                                                <div key={statusEntry.id} className="grid grid-cols-1 gap-2 rounded-lg border border-cyan-900/25 bg-stone-950/45 p-2 lg:grid-cols-[1fr_220px_190px_auto]">
+                                                  <div className="min-w-0">
+                                                    <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-stone-500">Status JSON</div>
+                                                    <div className="truncate text-sm font-bold text-cyan-100">{statusEntry.name || statusEntry.entry?.name || 'Imported Status'}</div>
+                                                    <div className="text-[10px] text-stone-500">
+                                                      Applied now: {(statusEntry.appliedStatusInstanceIds || []).length}
+                                                    </div>
+                                                  </div>
+                                                  {renderActionField('Target Category', (
+                                                    <select
+                                                      value={statusEntry.statusFolderId ?? ''}
+                                                      onChange={(e) => {
+                                                        const nextFolderId = e.target.value || null;
+                                                        updateScriptCondition(script.id, condition.id, current => ({
+                                                          ...current,
+                                                          statusEntries: (current.statusEntries || []).map(entry => entry.id === statusEntry.id ? { ...entry, statusFolderId: nextFolderId } : entry),
+                                                        }));
+                                                        setCharStatuses(prev => prev.map(status => (
+                                                          status.scriptSourceConditionId === condition.id && status.scriptSourceTemplateStatusId === statusEntry.id
+                                                            ? { ...status, folderId: nextFolderId }
+                                                            : status
+                                                        )));
+                                                      }}
+                                                      disabled={!isCharacterOwner}
+                                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+                                                    >
+                                                      <option value="">General Statuses</option>
+                                                      {getFolderOptions(statusFolders).map(option => (
+                                                        <option key={option.id} value={option.id}>{option.label}</option>
+                                                      ))}
+                                                    </select>
+                                                  ), 'min-w-0')}
+                                                  {renderActionField('When False', (
+                                                    <select
+                                                      value={statusEntry.onFalse}
+                                                      onChange={(e) => updateScriptCondition(script.id, condition.id, current => ({
+                                                        ...current,
+                                                        statusEntries: (current.statusEntries || []).map(entry => entry.id === statusEntry.id ? { ...entry, onFalse: e.target.value as 'remove' | 'keep' } : entry),
+                                                      }))}
+                                                      disabled={!isCharacterOwner}
+                                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+                                                    >
+                                                      <option value="remove">Remove when false</option>
+                                                      <option value="keep">Keep when false</option>
+                                                    </select>
+                                                  ), 'min-w-0')}
+                                                  {isCharacterOwner && (
+                                                    <button
+                                                      onClick={() => removeScriptConditionStatusEntry(script.id, condition.id, statusEntry.id)}
+                                                      className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                    >
+                                                      <Trash2 size={14} />
+                                                    </button>
+                                                  )}
+                                                </div>
+                                              ))}
+                                            </div>
+                                          )}
+                                          {(condition.statusIds || []).length > 0 && (
+                                            <div className="mt-2 rounded border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-xs text-amber-200">
+                                              This condition has legacy status links. They will be migrated the next time the script evaluates.
+                                            </div>
+                                          )}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    );
+                                  })}
+                                </div>
+                              </div>
+                              </>
+                              )}
+                            </div>
+                          );
+                        })}
+                    </div>
+                  )}
+              </div>
+            </div>
+          </div>
+          )}
+
           {activeSheetTab === 'attributes' && (
           <>
           <div className="flex flex-col gap-6">
@@ -5791,7 +8350,7 @@ export const Characters: React.FC = () => {
                         ))}
                       </div>
                       <button
-                        onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', color: '#f59e0b' }])}
+                        onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', mode: 'default', resetValue: '0', resetTrigger: 'short-rest', color: '#f59e0b' }])}
                         className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
                       >
                         + Add
@@ -5809,11 +8368,15 @@ export const Characters: React.FC = () => {
                       .filter(bar => matchesAttributeSearch(bar, 'bars'))
                       .map((bar, idx, filteredBars) => {
                       const actualIndex = bars.findIndex(item => item.id === bar.id);
+                      const barMode = getBarMode(bar);
                       const rawMax = finalContext[`${bar.id}_max`] || 0;
+                      const rawReset = finalContext[`${bar.id}_reset`] || 0;
                       const rawCurrent = finalContext[`${bar.id}_current`] || 0;
                       const safeMax = rawMax > 0 ? rawMax : 0;
                       const clampedCurrent = safeMax > 0 ? Math.min(Math.max(rawCurrent, 0), safeMax) : 0;
-                      const percent = safeMax > 0 ? Math.round((clampedCurrent / safeMax) * 100) : 0;
+                      const displayedCurrent = barMode === 'resource' ? rawCurrent : clampedCurrent;
+                      const referenceValue = barMode === 'resource' ? rawReset : safeMax;
+                      const percent = referenceValue > 0 ? Math.min(100, Math.max(0, Math.round((displayedCurrent / referenceValue) * 100))) : 0;
 
                       return (
                         <div id={`sheet-bar-${bar.id}`} key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
@@ -5853,6 +8416,13 @@ export const Characters: React.FC = () => {
                               <Star size={14} fill={bar.favorite ? 'currentColor' : 'none'} />
                             </button>
                             <button
+                              onClick={() => setOpenBarSettingsId(openBarSettingsId === bar.id ? null : bar.id)}
+                              className={`p-1 rounded border cursor-pointer ${openBarSettingsId === bar.id ? 'bg-sky-400/20 border-sky-300/50 text-sky-100' : 'border-stone-700 text-stone-500 hover:text-sky-300'}`}
+                              title="Bar settings"
+                            >
+                              <Settings size={14} />
+                            </button>
+                            <button
                               onClick={() => setBars(moveListItem(bars, bar.id, 'up'))}
                               disabled={idx === 0}
                               className="p-1 text-stone-500 hover:text-amber-300 disabled:opacity-30 disabled:cursor-not-allowed cursor-pointer"
@@ -5877,6 +8447,50 @@ export const Characters: React.FC = () => {
                             </button>
                           </div>
 
+                          {openBarSettingsId === bar.id && (
+                            <div className="grid grid-cols-1 gap-3 rounded-lg border border-sky-800/25 bg-sky-950/10 p-3 sm:grid-cols-2">
+                              <div>
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-sky-300 mb-1">Bar Mode</label>
+                                <select
+                                  value={barMode}
+                                  onChange={(e) => {
+                                    const nextMode = e.target.value as NonNullable<CharacterBar['mode']>;
+                                    const next = [...bars];
+                                    next[actualIndex] = {
+                                      ...next[actualIndex],
+                                      mode: nextMode,
+                                      resetValue: next[actualIndex].resetValue ?? next[actualIndex].maxValue ?? '0',
+                                      resetTrigger: next[actualIndex].resetTrigger ?? 'short-rest',
+                                    };
+                                    setBars(next);
+                                  }}
+                                  className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm text-amber-100 focus:outline-none"
+                                >
+                                  <option value="default">Default</option>
+                                  <option value="resource">Resource</option>
+                                </select>
+                              </div>
+                              {barMode === 'resource' && (
+                                <div>
+                                  <label className="block text-[11px] font-bold uppercase tracking-wider text-sky-300 mb-1">Reset On</label>
+                                  <select
+                                    value={bar.resetTrigger || 'short-rest'}
+                                    onChange={(e) => {
+                                      const next = [...bars];
+                                      next[actualIndex].resetTrigger = e.target.value as NonNullable<CharacterBar['resetTrigger']>;
+                                      setBars(next);
+                                    }}
+                                    className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm text-amber-100 focus:outline-none"
+                                  >
+                                    {BAR_RESET_TRIGGER_OPTIONS.map(option => (
+                                      <option key={option.value} value={option.value}>{option.label}</option>
+                                    ))}
+                                  </select>
+                                </div>
+                              )}
+                            </div>
+                          )}
+
                           <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
                             <div>
                               <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">Current Value</label>
@@ -5892,13 +8506,17 @@ export const Characters: React.FC = () => {
                               />
                             </div>
                             <div>
-                              <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">Max Value</label>
+                              <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">{barMode === 'resource' ? 'Reset Value' : 'Max Value'}</label>
                               <input
                                 type="text"
-                                value={bar.maxValue}
+                                value={barMode === 'resource' ? (bar.resetValue ?? '') : bar.maxValue}
                                 onChange={(e) => {
                                   const next = [...bars];
-                                  next[actualIndex].maxValue = e.target.value;
+                                  if (barMode === 'resource') {
+                                    next[actualIndex].resetValue = e.target.value;
+                                  } else {
+                                    next[actualIndex].maxValue = e.target.value;
+                                  }
                                   setBars(next);
                                 }}
                                 className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 focus:outline-none"
@@ -5921,8 +8539,8 @@ export const Characters: React.FC = () => {
 
                           <div className="space-y-2">
                             <div className="flex items-center justify-between text-xs text-amber-400 font-mono">
-                              <span>{clampedCurrent} / {safeMax}</span>
-                              <span>%{percent}</span>
+                              <span>{displayedCurrent} / {referenceValue}</span>
+                              <span>{barMode === 'resource' ? 'Resource' : `%${percent}`}</span>
                             </div>
                             <div className="relative h-6 rounded-full border border-amber-800/30 bg-stone-950/80 overflow-hidden">
                               <div
@@ -5933,7 +8551,7 @@ export const Characters: React.FC = () => {
                                 }}
                               />
                               <div className="absolute inset-0 flex items-center justify-center text-xs font-bold font-mono text-amber-100">
-                                %{percent}
+                                {barMode === 'resource' ? displayedCurrent : `%${percent}`}
                               </div>
                             </div>
                           </div>
@@ -6099,6 +8717,7 @@ export const Characters: React.FC = () => {
                   title: 'Status Categories',
                   description: 'Root folders appear as status category tabs. Subfolders stay inside their category.',
                   addLabel: '+ Add Category',
+                  showChildren: false,
                   onAddRoot: () => addStatusFolder(),
                   onAddChild: (parentId) => addStatusFolder(parentId),
                   onMove: moveStatusFolder,
@@ -6167,6 +8786,7 @@ export const Characters: React.FC = () => {
                     const folderDepth = getFolderDepth(statusFolders, effectiveFolderId);
                     const isFolderSectionCollapsed = !!collapsedAncestorId;
                     const shouldShowFolderHeader = !!folderLabel && effectiveFolderId !== activeStatusCategoryId;
+                    const isStatusActive = status.active ?? true;
                     return (
                     <React.Fragment key={status.id}>
                     {shouldShowFolderHeader && previousFolderId !== effectiveFolderId && (
@@ -6202,7 +8822,7 @@ export const Characters: React.FC = () => {
                       />
                     )}
                     {actualIndex >= 0 && (
-                    <div id={`status-${status.id}`} key={status.id} className="rounded-xl p-4 shadow-lg flex flex-col gap-3 border" style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
+                    <div id={`status-${status.id}`} key={status.id} className={`rounded-xl p-4 shadow-lg flex flex-col gap-3 border transition-opacity ${isStatusActive ? '' : 'opacity-60'}`} style={{ background: `linear-gradient(135deg, ${(status.color || '#f59e0b')}22, rgba(69, 26, 3, 0.18))`, borderColor: `${status.color || '#f59e0b'}55` }}>
                       <div className="flex items-start justify-between gap-3">
                         <div className="flex items-center gap-2">
                           <span
@@ -6262,25 +8882,115 @@ export const Characters: React.FC = () => {
                           )}
                         </div>
                       </div>
-                      <div className="flex flex-wrap gap-3 items-start">
-                        <input
-                          type="text"
-                          value={status.name}
-                          onChange={(e) => updateStatus(status.id, current => ({ ...current, name: e.target.value }))}
-                          disabled={!isCharacterOwner}
-                          className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                          placeholder="Status name"
-                        />
-                        <input
-                          type="text"
-                          value={status.duration}
-                          onChange={(e) => updateStatus(status.id, current => ({ ...current, duration: e.target.value }))}
-                          disabled={!isCharacterOwner}
-                          className="min-w-[140px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                          placeholder="Duration"
-                        />
-                        <div className="flex items-center gap-2 min-w-[150px]">
-                          <label className="text-xs text-stone-300 whitespace-nowrap">Color</label>
+                      <div className="flex flex-wrap gap-3 items-end">
+                        {renderActionField('Active', (
+                          <button
+                            onClick={() => updateStatus(status.id, current => ({ ...current, active: !(current.active ?? true) }))}
+                            disabled={!isCharacterOwner}
+                            className={`h-10 w-10 shrink-0 rounded-lg border grid place-items-center transition-all cursor-pointer disabled:cursor-not-allowed disabled:opacity-60 ${
+                              isStatusActive
+                                ? 'border-emerald-400/70 bg-emerald-500/20 text-emerald-200 shadow-[0_0_16px_rgba(16,185,129,0.28)]'
+                                : 'border-stone-700 bg-stone-950/70 text-stone-600 hover:text-stone-400'
+                            }`}
+                            title={isStatusActive ? 'Status active: effects are applied' : 'Status inactive: effects are ignored'}
+                          >
+                            <Shield size={17} fill={isStatusActive ? 'currentColor' : 'none'} />
+                          </button>
+                        ), 'min-w-[48px]')}
+                        {renderActionField('Status Name', (
+                          <input
+                            type="text"
+                            value={status.name}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, name: e.target.value }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            placeholder="Status name"
+                          />
+                        ), 'min-w-[220px] flex-1')}
+                        {renderActionField('Duration Type', (
+                          <select
+                            value={getStatusDurationType(status)}
+                            onChange={(e) => {
+                              const nextType = e.target.value as CharacterStatusDurationType;
+                              updateStatus(status.id, current => ({
+                                ...current,
+                                durationType: nextType,
+                                duration: nextType === 'custom'
+                                  ? current.duration
+                                  : (/^-?\d+(\.\d+)?$/.test(current.duration || '') ? current.duration : '1'),
+                              }));
+                            }}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                          >
+                            {STATUS_DURATION_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ), 'min-w-[150px]')}
+                        {renderActionField('Duration', (
+                          <input
+                            type={getStatusDurationType(status) === 'custom' ? 'text' : 'number'}
+                            min={getStatusDurationType(status) === 'custom' ? undefined : 0}
+                            step={getStatusDurationType(status) === 'minute' ? 0.1 : getStatusDurationType(status) === 'custom' ? undefined : 1}
+                            value={status.duration}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, duration: e.target.value }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            placeholder={getStatusDurationType(status) === 'custom' ? 'Duration' : 'Amount'}
+                          />
+                        ), 'min-w-[120px]')}
+                        {renderActionField('Max Duration', (
+                          <input
+                            type="text"
+                            value={status.maxDuration || ''}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, maxDuration: e.target.value }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            placeholder="Max duration"
+                            title="Optional cap used when this status replenishes"
+                          />
+                        ), 'min-w-[130px]')}
+                        {renderActionField('At 0', (
+                          <select
+                            value={getStatusDurationEndBehavior(status)}
+                            onChange={(e) => updateStatus(status.id, current => ({
+                              ...current,
+                              durationEndBehavior: e.target.value as CharacterStatusDurationEndBehavior,
+                            }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            title="What happens when typed duration reaches 0"
+                          >
+                            {STATUS_DURATION_END_BEHAVIOR_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ), 'min-w-[160px]')}
+                        {renderActionField('Replenish On', (
+                          <select
+                            value={status.replenishTrigger || 'custom'}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, replenishTrigger: e.target.value as CharacterReplenishTrigger }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            title="When this status duration replenishes"
+                          >
+                            {REPLENISH_TRIGGER_OPTIONS.map(option => (
+                              <option key={option.value} value={option.value}>{option.label}</option>
+                            ))}
+                          </select>
+                        ), 'min-w-[150px]')}
+                        {renderActionField('Replenish Amount', (
+                          <input
+                            type="text"
+                            value={status.replenishAmount || ''}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, replenishAmount: e.target.value }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                            placeholder="Replenish amount"
+                          />
+                        ), 'min-w-[150px]')}
+                        {renderActionField('Color', (
                           <input
                             type="color"
                             value={status.color || '#f59e0b'}
@@ -6288,20 +8998,22 @@ export const Characters: React.FC = () => {
                             disabled={!isCharacterOwner}
                             className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
                           />
-                        </div>
-                        <select
-                          value={status.folderId ?? ''}
-                          onChange={(e) => updateStatus(status.id, current => ({ ...current, folderId: e.target.value || null }))}
-                          disabled={!isCharacterOwner}
-                          className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                        >
-                          <option value="">General Statuses</option>
-                          {getFolderOptions(statusFolders).map((option) => (
-                            <option key={option.id} value={option.id}>
-                              {option.label}
-                            </option>
-                          ))}
-                        </select>
+                        ), 'min-w-[64px]')}
+                        {renderActionField('Category', (
+                          <select
+                            value={status.folderId ?? ''}
+                            onChange={(e) => updateStatus(status.id, current => ({ ...current, folderId: e.target.value || null }))}
+                            disabled={!isCharacterOwner}
+                            className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                          >
+                            <option value="">General Statuses</option>
+                            {getFolderOptions(statusFolders).map((option) => (
+                              <option key={option.id} value={option.id}>
+                                {option.label}
+                              </option>
+                            ))}
+                          </select>
+                        ), 'min-w-[200px]')}
                       </div>
                       {!status.hidden && (
                       <>
@@ -6314,81 +9026,86 @@ export const Characters: React.FC = () => {
                           setCharStatuses(next);
                         }}
                         placeholder="Description of the status"
-                        rows={expandedStatusDescriptions.includes(status.id) ? 6 : 2}
+                        rows={expandedStatusDescriptions.includes(status.id) ? 2 : 6}
                         className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none"
                       />
                       <button
                         onClick={() => toggleStatusDescription(status.id)}
                         className="text-base text-amber-300 hover:text-amber-200 cursor-pointer self-start"
                       >
-                        {expandedStatusDescriptions.includes(status.id) ? 'Hide' : 'Show More'}
+                        {expandedStatusDescriptions.includes(status.id) ? 'Show More' : 'Hide'}
                       </button>
+
+                      {renderLocalVariablesEditor(
+                        status.localVariables,
+                        () => addStatusLocalVariable(status.id),
+                        (variableIndex, updater) => updateStatusLocalVariable(status.id, variableIndex, updater),
+                        (variableIndex) => removeStatusLocalVariable(status.id, variableIndex),
+                        isCharacterOwner
+                      )}
 
                       {/* Effects area */}
                       <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                         <div className="flex justify-between items-center mb-2">
                           <label className="text-base font-bold text-stone-300">Effects</label>
-                          <button
-                            onClick={() => {
-                              const next = [...charStatuses];
-                              next[actualIndex].effects = [...(next[actualIndex].effects || []), { id: `eff_${uid()}`, targetId: '', value: '0', active: true }];
-                              setCharStatuses(next);
-                            }}
-                            className="text-sm bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300"
-                          >
-                            + Add Effect
-                          </button>
-                        </div>
-                        <div className="space-y-2">
-                          {(status.effects || []).map((effect, effIdx) => (
-                            <div key={effIdx} className="flex items-center gap-2">
+                          {isCharacterOwner && (
+                            <div className="flex flex-wrap gap-2">
                               <button
                                 onClick={() => {
                                   const next = [...charStatuses];
-                                  next[actualIndex].effects[effIdx].active = !(next[actualIndex].effects[effIdx].active ?? true);
+                                  next[actualIndex].effects = [...(next[actualIndex].effects || []), createAttributeEffect()];
                                   setCharStatuses(next);
                                 }}
-                                className={`px-2 py-1 rounded border text-sm cursor-pointer ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
+                                className="text-sm bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300"
                               >
-                                {(effect.active ?? true) ? 'On' : 'Off'}
+                                + Add Effect
                               </button>
-                              <input
-                                type="text"
-                                value={effect.targetId}
-                                onChange={(e) => {
+                              <button
+                                onClick={() => importStatusApplyEffect(effect => {
                                   const next = [...charStatuses];
-                                  next[actualIndex].effects[effIdx].targetId = e.target.value;
+                                  next[actualIndex].effects = [...(next[actualIndex].effects || []), effect];
                                   setCharStatuses(next);
-                                }}
-                                placeholder="Target ID (e.g. wis_mod)"
-                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none w-1/2"
-                              />
-                              <input
-                                type="text"
-                                value={effect.value}
-                                onChange={(e) => {
-                                  const next = [...charStatuses];
-                                  next[actualIndex].effects[effIdx].value = e.target.value;
-                                  setCharStatuses(next);
-                                }}
-                                placeholder="Value (e.g. -2)"
-                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none w-1/4"
-                              />
+                                })}
+                                className="text-sm bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300"
+                              >
+                                + Add Status
+                              </button>
                               <button
                                 onClick={() => {
                                   const next = [...charStatuses];
-                                  next[actualIndex].effects = next[actualIndex].effects.filter((_, i) => i !== effIdx);
+                                  next[actualIndex].effects = [...(next[actualIndex].effects || []), buildBarUpdateEffect()];
                                   setCharStatuses(next);
                                 }}
-                                className="text-stone-600 hover:text-red-400 cursor-pointer ml-auto"
+                                className="text-sm bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300"
                               >
-                                <Trash2 size={14} />
+                                + Bar Update
                               </button>
                             </div>
+                          )}
+                        </div>
+                        <div className="space-y-2">
+                          {(status.effects || []).map((effect, effIdx) => renderEffectEditorRow(
+                            effect,
+                            effIdx,
+                            (index, updater) => {
+                              const next = [...charStatuses];
+                              next[actualIndex].effects[index] = updater(next[actualIndex].effects[index]);
+                              setCharStatuses(next);
+                            },
+                            (index) => {
+                              const next = [...charStatuses];
+                              next[actualIndex].effects = next[actualIndex].effects.filter((_, i) => i !== index);
+                              setCharStatuses(next);
+                            },
+                            isCharacterOwner,
+                            'Target ID (e.g. wis_mod)',
+                            'Value (e.g. -2)',
+                            status.localVariables
                           ))}
                           {(status.effects || []).length === 0 && <span className="text-[10px] text-stone-600 italic">No effects added.</span>}
                         </div>
                       </div>
+                      {renderStatusActionsEditor(status, isCharacterOwner)}
                       </>
                       )}
                     </div>
@@ -6447,6 +9164,7 @@ export const Characters: React.FC = () => {
                     title: 'Inventory Categories',
                     description: 'Root folders appear as inventory category tabs. Subfolders stay inside their category.',
                     addLabel: '+ Add Category',
+                    showChildren: false,
                     onAddRoot: () => addInventoryFolder(),
                     onAddChild: (parentId) => addInventoryFolder(parentId),
                     onMove: moveInventoryFolder,
@@ -6554,63 +9272,73 @@ export const Characters: React.FC = () => {
                                 </div>
                               </div>
 
-                              <div className="flex flex-wrap gap-3 items-start">
-                                <input
-                                  type="text"
-                                  value={itemState.name}
-                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, name: e.target.value }))}
-                                  disabled={!canEditInventory}
-                                  className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                                  placeholder="Item name"
-                                />
-                                <div className="min-w-[170px] flex-1 sm:flex-none grid grid-cols-[1fr_auto] gap-2">
-                                <input
-                                  type="number"
-                                  min={0}
-                                  value={itemState.quantity}
-                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, quantity: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
-                                  disabled={!canEditInventory}
-                                  className="min-w-0 w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60 font-mono"
-                                  placeholder="Qty"
+                              <div className="flex flex-wrap gap-3 items-end">
+                                {renderActionField('Item Name', (
+                                  <input
+                                    type="text"
+                                    value={itemState.name}
+                                    onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, name: e.target.value }))}
+                                    disabled={!canEditInventory}
+                                    className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                    placeholder="Item name"
                                   />
+                                ), 'min-w-[220px] flex-1')}
+                                {renderActionField('Quantity', (
+                                  <input
+                                    type="text"
+                                    inputMode="numeric"
+                                    pattern="[0-9]*"
+                                    min={0}
+                                    value={itemState.quantity}
+                                    onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, quantity: parseWholeNumberInput(e.target.value) }))}
+                                    disabled={!canEditInventory}
+                                    className="min-w-0 w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60 font-mono"
+                                    placeholder="Qty"
+                                    />
+                                ), 'w-[11ch] flex-none')}
+                                {renderActionField('Equip', (
                                   <button
                                     onClick={() => canEditInventory && updateGeneralItem(item.id, current => ({ ...current, equipped: !current.equipped, status: !current.equipped ? 'equipped' : (current.status === 'equipped' ? 'unequipped' : current.status) }))}
                                     disabled={!canEditInventory}
-                                    className={`px-2 rounded border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${itemState.equipped ? 'bg-amber-400/20 border-amber-300/60 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.35)]' : 'bg-stone-900/60 border-stone-700 text-stone-400 hover:text-amber-200'}`}
+                                    className={`grid h-[38px] w-full place-items-center rounded border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${itemState.equipped ? 'bg-amber-400/20 border-amber-300/60 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.35)]' : 'bg-stone-900/60 border-stone-700 text-stone-400 hover:text-amber-200'}`}
                                     title={itemState.equipped ? 'Unequip item' : 'Equip item'}
                                   >
                                     <Shield size={15} />
                                   </button>
-                                </div>
-                                <select
-                                  value={rarityKey}
-                                  onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterGeneralItem['rarity'] }))}
-                                  disabled={!canEditInventory}
-                                  className="min-w-[180px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                                >
-                                  {INVENTORY_RARITIES.map((rarity) => (
-                                    <option key={rarity} value={rarity}>
-                                      {INVENTORY_RARITY_STYLES[rarity].label}
-                                    </option>
-                                  ))}
-                                </select>
-                                <select
-                                  value="general"
-                                  onChange={(e) => {
-                                    if (e.target.value !== 'general') {
-                                      moveGeneralItemToInventoryFolder(item.id, e.target.value);
-                                    }
-                                  }}
-                                  disabled={!canEditInventory}
-                                  className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                                >
-                                  <option value="general">General Items</option>
-                                  {getFolderOptions(inventoryFolders).map(option => (
-                                    <option key={option.id} value={option.id}>
-                                      {option.label}
-                                    </option>
-                                  ))}
-                                </select>
+                                ), 'w-[44px] flex-none')}
+                                {renderActionField('Rarity', (
+                                  <select
+                                    value={rarityKey}
+                                    onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterGeneralItem['rarity'] }))}
+                                    disabled={!canEditInventory}
+                                    className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                  >
+                                    {INVENTORY_RARITIES.map((rarity) => (
+                                      <option key={rarity} value={rarity}>
+                                        {INVENTORY_RARITY_STYLES[rarity].label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ), 'min-w-[180px]')}
+                                {renderActionField('Category', (
+                                  <select
+                                    value="general"
+                                    onChange={(e) => {
+                                      if (e.target.value !== 'general') {
+                                        moveGeneralItemToInventoryFolder(item.id, e.target.value);
+                                      }
+                                    }}
+                                    disabled={!canEditInventory}
+                                    className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                  >
+                                    <option value="general">General Items</option>
+                                    {getFolderOptions(inventoryFolders).map(option => (
+                                      <option key={option.id} value={option.id}>
+                                        {option.label}
+                                      </option>
+                                    ))}
+                                  </select>
+                                ), 'min-w-[200px]')}
                               </div>
                               {!itemState.hidden && (
                               <>
@@ -6620,16 +9348,23 @@ export const Characters: React.FC = () => {
                                     value={itemState.description}
                                     onChange={(e) => updateGeneralItem(item.id, current => ({ ...current, description: e.target.value }))}
                                     disabled={!canEditInventory}
-                                    rows={isExpanded ? 6 : 2}
+                                    rows={isExpanded ? 2 : 6}
                                     placeholder="Description, lore, notes..."
                                     className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
                                   />
                                   <div className="flex items-center gap-3">
                                     <button onClick={() => toggleGeneralItemDescription(item.id)} className="text-base text-amber-300 hover:text-amber-200 cursor-pointer">
-                                      {isExpanded ? 'Hide' : 'Show More'}
+                                      {isExpanded ? 'Show More' : 'Hide'}
                                     </button>
                                   </div>
                                 </div>
+                                {renderLocalVariablesEditor(
+                                  itemState.localVariables,
+                                  () => addGeneralLocalVariable(item.id),
+                                  (variableIndex, updater) => updateGeneralLocalVariable(item.id, variableIndex, updater),
+                                  (variableIndex) => removeGeneralLocalVariable(item.id, variableIndex),
+                                  canEditInventory
+                                )}
                                 <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                                   <div className="flex items-center justify-between mb-2">
                                     <label className="text-sm font-bold text-stone-300">Item Macros</label>
@@ -6678,9 +9413,13 @@ export const Characters: React.FC = () => {
                                         return (
                                           <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
                                             <div className="flex flex-wrap gap-2 items-start mb-2">
-                                              <input value={action.name} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, name: e.target.value }))} disabled={!canEditInventory} className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Action name" />
-                                              <input value={action.cost} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))} disabled={!canEditInventory} className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Cost" />
-                                              <input value={action.usageRemaining} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))} disabled={!canEditInventory} className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Remaining usage" />
+                                              {renderActionField('Name', (
+                                                <input value={action.name} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, name: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Action name" />
+                                              ), 'min-w-[180px]')}
+                                              {renderActionField('Cost', (
+                                                <input value={action.cost} onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))} disabled={!canEditInventory} className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60" placeholder="Cost" />
+                                              ), 'min-w-[140px]')}
+                                              {renderActionUsageControls(action, updater => updateGeneralAction(item.id, action.id, updater), canEditInventory)}
                                               {canEditInventory && (
                                                 <button onClick={() => removeGeneralAction(item.id, action.id)} className="p-2 text-stone-500 hover:text-red-400 cursor-pointer">
                                                   <Trash2 size={14} />
@@ -6692,12 +9431,12 @@ export const Characters: React.FC = () => {
                                               value={action.description}
                                               onChange={(e) => updateGeneralAction(item.id, action.id, current => ({ ...current, description: e.target.value }))}
                                               disabled={!canEditInventory}
-                                              rows={isActionExpanded ? 6 : 2}
+                                              rows={isActionExpanded ? 2 : 6}
                                               className="w-full bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                               placeholder="Action description"
                                             />
                                             <button onClick={() => toggleInventoryActionDescription(action.id)} className="mt-2 text-sm text-amber-300 hover:text-amber-200 cursor-pointer">
-                                              {isActionExpanded ? 'Hide' : 'Show More'}
+                                              {isActionExpanded ? 'Show More' : 'Hide'}
                                             </button>
                                             <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
                                               <div className="flex items-center justify-between mb-2">
@@ -6733,28 +9472,38 @@ export const Characters: React.FC = () => {
                                               <div className="flex items-center justify-between mb-2">
                                                 <label className="text-sm font-bold text-stone-300">Action Effects</label>
                                                 {canEditInventory && (
-                                                  <button onClick={() => addGeneralActionEffect(item.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
-                                                    + Add Effect
-                                                  </button>
+                                                  <div className="flex flex-wrap gap-2">
+                                                    <button onClick={() => addGeneralActionEffect(item.id, action.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                                      + Add Effect
+                                                    </button>
+                                                    <button
+                                                      onClick={() => importStatusApplyEffect(effect => updateGeneralAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                                                      className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                                                    >
+                                                      + Add Status
+                                                    </button>
+                                                    <button
+                                                      onClick={() => updateGeneralAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                                                      className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                                    >
+                                                      + Bar Update
+                                                    </button>
+                                                  </div>
                                                 )}
                                               </div>
                                               {(action.effects || []).length === 0 ? (
                                                 <span className="text-[10px] text-stone-600 italic">No effects added.</span>
                                               ) : (
                                                 <div className="space-y-2">
-                                                  {(action.effects || []).map((effect, effectIndex) => (
-                                                    <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
-                                                      <button onClick={() => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))} className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}>
-                                                        {(effect.active ?? true) ? 'On' : 'Off'}
-                                                      </button>
-                                                      <input value={effect.targetId} onChange={(e) => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))} disabled={!canEditInventory} placeholder="Target ID (e.g. str_mod)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60" />
-                                                      <input value={effect.value} onChange={(e) => updateGeneralActionEffect(item.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))} disabled={!canEditInventory} placeholder="Value (e.g. +2)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60" />
-                                                      {canEditInventory && (
-                                                        <button onClick={() => removeGeneralActionEffect(item.id, action.id, effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
-                                                          <Trash2 size={14} />
-                                                        </button>
-                                                      )}
-                                                    </div>
+                                                  {(action.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                                                    effect,
+                                                    effectIndex,
+                                                    (index, updater) => updateGeneralActionEffect(item.id, action.id, index, updater),
+                                                    (index) => removeGeneralActionEffect(item.id, action.id, index),
+                                                    canEditInventory,
+                                                    'Target ID (e.g. str_mod)',
+                                                    'Value (e.g. +2)',
+                                                    itemState.localVariables
                                                   ))}
                                                 </div>
                                               )}
@@ -6769,28 +9518,38 @@ export const Characters: React.FC = () => {
                                   <div className="flex items-center justify-between mb-2">
                                     <label className="text-sm font-bold text-stone-300">Effects {itemState.equipped ? '(Active)' : '(Inactive until equipped)'}</label>
                                     {canEditInventory && (
-                                      <button onClick={() => addGeneralEffect(item.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
-                                        + Add Effect
-                                      </button>
+                                      <div className="flex flex-wrap gap-2">
+                                        <button onClick={() => addGeneralEffect(item.id)} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                                          + Add Effect
+                                        </button>
+                                        <button
+                                          onClick={() => importStatusApplyEffect(effect => updateGeneralItem(item.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                                          className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                                        >
+                                          + Add Status
+                                        </button>
+                                        <button
+                                          onClick={() => updateGeneralItem(item.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                                          className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                        >
+                                          + Bar Update
+                                        </button>
+                                      </div>
                                     )}
                                   </div>
                                   {(itemState.effects || []).length === 0 ? (
                                     <span className="text-[10px] text-stone-600 italic">No effects added.</span>
                                   ) : (
                                     <div className="space-y-2">
-                                      {(itemState.effects || []).map((effect, effectIndex) => (
-                                        <div key={`${item.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
-                                          <button onClick={() => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))} className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}>
-                                            {(effect.active ?? true) ? 'On' : 'Off'}
-                                          </button>
-                                          <input value={effect.targetId} onChange={(e) => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, targetId: e.target.value }))} disabled={!canEditInventory} placeholder="Target ID (e.g. str_mod)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60" />
-                                          <input value={effect.value} onChange={(e) => updateGeneralEffect(item.id, effectIndex, current => ({ ...current, value: e.target.value }))} disabled={!canEditInventory} placeholder="Value (e.g. +2)" className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60" />
-                                          {canEditInventory && (
-                                            <button onClick={() => removeGeneralEffect(item.id, effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
-                                              <Trash2 size={14} />
-                                            </button>
-                                          )}
-                                        </div>
+                                      {(itemState.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                                        effect,
+                                        effectIndex,
+                                        (index, updater) => updateGeneralEffect(item.id, index, updater),
+                                        (index) => removeGeneralEffect(item.id, index),
+                                        canEditInventory,
+                                        'Target ID (e.g. str_mod)',
+                                        'Value (e.g. +2)',
+                                        itemState.localVariables
                                       ))}
                                     </div>
                                   )}
@@ -6953,65 +9712,75 @@ export const Characters: React.FC = () => {
                             </div>
                           </div>
 
-                          <div className="flex flex-wrap gap-3 items-start">
-                            <input
-                              type="text"
-                              value={item.name}
-                              onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, name: e.target.value }))}
-                              disabled={!canEditInventory}
-                              className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Item name"
-                            />
-                            <div className="min-w-[170px] flex-1 sm:flex-none grid grid-cols-[1fr_auto] gap-2">
+                          <div className="flex flex-wrap gap-3 items-end">
+                            {renderActionField('Item Name', (
                               <input
-                                type="number"
-                                min={0}
-                                value={item.quantity}
-                                onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, quantity: Math.max(0, parseInt(e.target.value, 10) || 0) }))}
+                                type="text"
+                                value={item.name}
+                                onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, name: e.target.value }))}
                                 disabled={!canEditInventory}
-                                className="min-w-0 w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60 font-mono"
-                                placeholder="Qty"
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="Item name"
                               />
+                            ), 'min-w-[220px] flex-1')}
+                            {renderActionField('Quantity', (
+                                <input
+                                  type="text"
+                                  inputMode="numeric"
+                                  pattern="[0-9]*"
+                                  min={0}
+                                  value={item.quantity}
+                                  onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, quantity: parseWholeNumberInput(e.target.value) }))}
+                                  disabled={!canEditInventory}
+                                  className="min-w-0 w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60 font-mono"
+                                  placeholder="Qty"
+                                />
+                            ), 'w-[11ch] flex-none')}
+                            {renderActionField('Equip', (
                               <button
                                 onClick={() => canEditInventory && updateInventoryItem(item.id, current => ({ ...current, equipped: !current.equipped, status: !current.equipped ? 'equipped' : (current.status === 'equipped' ? 'unequipped' : current.status) }))}
                                 disabled={!canEditInventory}
-                                className={`px-2 rounded border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${item.equipped ? 'bg-amber-400/20 border-amber-300/60 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.35)]' : 'bg-stone-900/60 border-stone-700 text-stone-400 hover:text-amber-200'}`}
+                                className={`grid h-[38px] w-full place-items-center rounded border transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${item.equipped ? 'bg-amber-400/20 border-amber-300/60 text-amber-100 shadow-[0_0_14px_rgba(251,191,36,0.35)]' : 'bg-stone-900/60 border-stone-700 text-stone-400 hover:text-amber-200'}`}
                                 title={item.equipped ? 'Unequip item' : 'Equip item'}
                               >
                                 <Shield size={15} />
                               </button>
-                            </div>
-                            <select
-                              value={rarityKey}
-                              onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterInventoryItem['rarity'] }))}
-                              disabled={!canEditInventory}
-                              className="min-w-[180px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                            >
-                              {INVENTORY_RARITIES.map((rarity) => (
-                                <option key={rarity} value={rarity}>
-                                  {INVENTORY_RARITY_STYLES[rarity].label}
-                                </option>
-                              ))}
-                            </select>
-                            <select
-                              value={item.folderId ?? 'general'}
-                              onChange={(e) => {
-                                if (e.target.value === 'general') {
-                                  moveInventoryItemToGeneralItems(item.id);
-                                  return;
-                                }
-                                updateInventoryItem(item.id, current => ({ ...current, folderId: e.target.value }));
-                              }}
-                              disabled={!canEditInventory}
-                              className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                            >
-                              <option value="general">General Items</option>
-                              {getFolderOptions(inventoryFolders).map(option => (
-                                <option key={option.id} value={option.id}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
+                            ), 'w-[44px] flex-none')}
+                            {renderActionField('Rarity', (
+                              <select
+                                value={rarityKey}
+                                onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, rarity: e.target.value as CharacterInventoryItem['rarity'] }))}
+                                disabled={!canEditInventory}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                              >
+                                {INVENTORY_RARITIES.map((rarity) => (
+                                  <option key={rarity} value={rarity}>
+                                    {INVENTORY_RARITY_STYLES[rarity].label}
+                                  </option>
+                                ))}
+                              </select>
+                            ), 'min-w-[180px]')}
+                            {renderActionField('Category', (
+                              <select
+                                value={item.folderId ?? 'general'}
+                                onChange={(e) => {
+                                  if (e.target.value === 'general') {
+                                    moveInventoryItemToGeneralItems(item.id);
+                                    return;
+                                  }
+                                  updateInventoryItem(item.id, current => ({ ...current, folderId: e.target.value }));
+                                }}
+                                disabled={!canEditInventory}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                              >
+                                <option value="general">General Items</option>
+                                {getFolderOptions(inventoryFolders).map(option => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ), 'min-w-[200px]')}
                           </div>
 
                           {!isCollapsed && (
@@ -7023,7 +9792,7 @@ export const Characters: React.FC = () => {
                               onChange={(e) => updateInventoryItem(item.id, current => ({ ...current, description: e.target.value }))}
                               disabled={!canEditInventory}
                               placeholder="Description, lore, notes..."
-                              rows={isDescriptionExpanded ? 6 : 2}
+                              rows={isDescriptionExpanded ? 2 : 6}
                               className="w-full bg-stone-900/60 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
                             />
                             <div className="flex items-center gap-3">
@@ -7031,10 +9800,18 @@ export const Characters: React.FC = () => {
                                 onClick={() => toggleInventoryDescription(item.id)}
                                 className="text-base text-amber-300 hover:text-amber-200 cursor-pointer"
                               >
-                                {isDescriptionExpanded ? 'Hide' : 'Show More'}
+                                {isDescriptionExpanded ? 'Show More' : 'Hide'}
                               </button>
                             </div>
                           </div>
+
+                          {renderLocalVariablesEditor(
+                            item.localVariables,
+                            () => addInventoryLocalVariable(item.id),
+                            (variableIndex, updater) => updateInventoryLocalVariable(item.id, variableIndex, updater),
+                            (variableIndex) => removeInventoryLocalVariable(item.id, variableIndex),
+                            canEditInventory
+                          )}
 
                           <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                             <div className="flex justify-between items-center mb-2">
@@ -7112,30 +9889,27 @@ export const Characters: React.FC = () => {
                                   return (
                                     <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
                                       <div className="flex flex-wrap gap-2 items-start mb-2">
-                                        <input
-                                          type="text"
-                                          value={action.name}
-                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, name: e.target.value }))}
-                                          disabled={!canEditInventory}
-                                          placeholder="Action name"
-                                          className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={action.cost}
-                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))}
-                                          disabled={!canEditInventory}
-                                          placeholder="Cost"
-                                          className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={action.usageRemaining}
-                                          onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))}
-                                          disabled={!canEditInventory}
-                                          placeholder="Remaining usage"
-                                          className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
+                                        {renderActionField('Name', (
+                                          <input
+                                            type="text"
+                                            value={action.name}
+                                            onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, name: e.target.value }))}
+                                            disabled={!canEditInventory}
+                                            placeholder="Action name"
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                          />
+                                        ), 'min-w-[180px]')}
+                                        {renderActionField('Cost', (
+                                          <input
+                                            type="text"
+                                            value={action.cost}
+                                            onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, cost: e.target.value }))}
+                                            disabled={!canEditInventory}
+                                            placeholder="Cost"
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                          />
+                                        ), 'min-w-[140px]')}
+                                        {renderActionUsageControls(action, updater => updateInventoryAction(item.id, action.id, updater), canEditInventory)}
                                         <button
                                           onClick={() => shareInventoryAction(item, action)}
                                           className="inline-flex items-center gap-1 px-3 py-2 bg-sky-900/30 border border-sky-800/40 rounded text-sm text-sky-200 hover:bg-sky-900/50 cursor-pointer"
@@ -7156,7 +9930,7 @@ export const Characters: React.FC = () => {
                                         value={action.description}
                                         onChange={(e) => updateInventoryAction(item.id, action.id, current => ({ ...current, description: e.target.value }))}
                                         disabled={!canEditInventory}
-                                        rows={isExpanded ? 6 : 2}
+                                        rows={isExpanded ? 2 : 6}
                                         placeholder="Action description"
                                         className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                       />
@@ -7164,7 +9938,7 @@ export const Characters: React.FC = () => {
                                         onClick={() => toggleInventoryActionDescription(action.id)}
                                         className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
                                       >
-                                        {isExpanded ? 'Hide' : 'Show More'}
+                                        {isExpanded ? 'Show More' : 'Hide'}
                                       </button>
                                       <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
                                         <div className="flex justify-between items-center mb-2">
@@ -7221,53 +9995,41 @@ export const Characters: React.FC = () => {
                                         <div className="flex justify-between items-center mb-2">
                                           <label className="text-sm font-bold text-stone-300">Effects</label>
                                           {canEditInventory && (
-                                            <button
-                                              onClick={() => addInventoryActionEffect(item.id, action.id)}
-                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
-                                            >
-                                              + Add Effect
-                                            </button>
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                onClick={() => addInventoryActionEffect(item.id, action.id)}
+                                                className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                              >
+                                                + Add Effect
+                                              </button>
+                                              <button
+                                                onClick={() => importStatusApplyEffect(effect => updateInventoryAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                                                className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                                              >
+                                                + Add Status
+                                              </button>
+                                              <button
+                                                onClick={() => updateInventoryAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                                                className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                              >
+                                                + Bar Update
+                                              </button>
+                                            </div>
                                           )}
                                         </div>
                                         {(action.effects || []).length === 0 ? (
                                           <span className="text-[10px] text-stone-600 italic">No effects added.</span>
                                         ) : (
                                           <div className="space-y-2">
-                                            {(action.effects || []).map((effect, effectIndex) => (
-                                              <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
-                                                <button
-                                                  onClick={() => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
-                                                  className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
-                                                >
-                                                  {(effect.active ?? true) ? 'On' : 'Off'}
-                                                </button>
-                                                <input
-                                                  type="text"
-                                                  value={effect.targetId}
-                                                  onChange={(e) => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
-                                                  disabled={!canEditInventory}
-                                                  placeholder="Target ID (e.g. str_mod)"
-                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
-                                                />
-                                                <input
-                                                  type="text"
-                                                  value={effect.value}
-                                                  onChange={(e) => updateInventoryActionEffect(item.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))}
-                                                  disabled={!canEditInventory}
-                                                  placeholder="Value (e.g. +2)"
-                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
-                                                />
-                                                {canEditInventory ? (
-                                                  <button
-                                                    onClick={() => removeInventoryActionEffect(item.id, action.id, effectIndex)}
-                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
-                                                  >
-                                                    <Trash2 size={14} />
-                                                  </button>
-                                                ) : (
-                                                  <div />
-                                                )}
-                                              </div>
+                                            {(action.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                                              effect,
+                                              effectIndex,
+                                              (index, updater) => updateInventoryActionEffect(item.id, action.id, index, updater),
+                                              (index) => removeInventoryActionEffect(item.id, action.id, index),
+                                              canEditInventory,
+                                              'Target ID (e.g. str_mod)',
+                                              'Value (e.g. +2)',
+                                              item.localVariables
                                             ))}
                                           </div>
                                         )}
@@ -7284,53 +10046,41 @@ export const Characters: React.FC = () => {
                                 Effects {item.equipped ? '(Active)' : '(Inactive until equipped)'}
                               </label>
                               {canEditInventory && (
-                                <button
-                                  onClick={() => addInventoryEffect(item.id)}
-                                  className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
-                                >
-                                  + Add Effect
-                                </button>
+                                <div className="flex flex-wrap gap-2">
+                                  <button
+                                    onClick={() => addInventoryEffect(item.id)}
+                                    className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                  >
+                                    + Add Effect
+                                  </button>
+                                  <button
+                                    onClick={() => importStatusApplyEffect(effect => updateInventoryItem(item.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                                    className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                                  >
+                                    + Add Status
+                                  </button>
+                                  <button
+                                    onClick={() => updateInventoryItem(item.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                                    className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                  >
+                                    + Bar Update
+                                  </button>
+                                </div>
                               )}
                             </div>
                             {(item.effects || []).length === 0 ? (
                               <span className="text-[10px] text-stone-600 italic">No effects added.</span>
                             ) : (
                               <div className="space-y-2">
-                                {(item.effects || []).map((effect, effectIndex) => (
-                                  <div key={`${item.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
-                                    <button
-                                      onClick={() => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
-                                      className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
-                                    >
-                                      {(effect.active ?? true) ? 'On' : 'Off'}
-                                    </button>
-                                    <input
-                                      type="text"
-                                      value={effect.targetId}
-                                      onChange={(e) => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
-                                      disabled={!canEditInventory}
-                                      placeholder="Target ID (e.g. str_mod)"
-                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
-                                    />
-                                    <input
-                                      type="text"
-                                      value={effect.value}
-                                      onChange={(e) => updateInventoryEffect(item.id, effectIndex, current => ({ ...current, value: e.target.value }))}
-                                      disabled={!canEditInventory}
-                                      placeholder="Value (e.g. +2)"
-                                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
-                                    />
-                                    {canEditInventory ? (
-                                      <button
-                                        onClick={() => removeInventoryEffect(item.id, effectIndex)}
-                                        className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
-                                      >
-                                        <Trash2 size={14} />
-                                      </button>
-                                    ) : (
-                                      <div />
-                                    )}
-                                  </div>
+                                {(item.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                                  effect,
+                                  effectIndex,
+                                  (index, updater) => updateInventoryEffect(item.id, index, updater),
+                                  (index) => removeInventoryEffect(item.id, index),
+                                  canEditInventory,
+                                  'Target ID (e.g. str_mod)',
+                                  'Value (e.g. +2)',
+                                  item.localVariables
                                 ))}
                               </div>
                             )}
@@ -7396,6 +10146,7 @@ export const Characters: React.FC = () => {
                     title: 'Spell Categories',
                     description: 'Root folders appear as spell category tabs. Subfolders stay inside their category.',
                     addLabel: '+ Add Category',
+                    showChildren: false,
                     onAddRoot: () => addSpellFolder(),
                     onAddChild: (parentId) => addSpellFolder(parentId),
                     onMove: moveSpellFolder,
@@ -7573,25 +10324,28 @@ export const Characters: React.FC = () => {
                             </div>
                           </div>
 
-                          <div className="flex flex-wrap gap-3 items-start">
-                            <input
-                              type="text"
-                              value={spell.name}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, name: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[220px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Spell or ability name"
-                            />
-                            <input
-                              type="text"
-                              value={spell.level}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, level: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[140px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Level"
-                            />
-                            <div className="flex items-center gap-2 min-w-[150px]">
-                              <label className="text-xs text-stone-300 whitespace-nowrap">Color</label>
+                          <div className="flex flex-wrap gap-3 items-end">
+                            {renderActionField('Spell Name', (
+                              <input
+                                type="text"
+                                value={spell.name}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, name: e.target.value }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-base text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="Spell or ability name"
+                              />
+                            ), 'min-w-[220px] flex-1')}
+                            {renderActionField('Level', (
+                              <input
+                                type="text"
+                                value={spell.level}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, level: e.target.value }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="Level"
+                              />
+                            ), 'min-w-[140px]')}
+                            {renderActionField('Color', (
                               <input
                                 type="color"
                                 value={spell.color || '#7c3aed'}
@@ -7599,20 +10353,22 @@ export const Characters: React.FC = () => {
                                 disabled={!isCharacterOwner}
                                 className="h-10 w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer disabled:opacity-60"
                               />
-                            </div>
-                            <select
-                              value={spell.folderId ?? ''}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, folderId: e.target.value || null }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[200px] flex-1 sm:flex-none bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                            >
-                              <option value="">No folder</option>
-                              {getFolderOptions(spellFolders).map(option => (
-                                <option key={option.id} value={option.id}>
-                                  {option.label}
-                                </option>
-                              ))}
-                            </select>
+                            ), 'min-w-[64px]')}
+                            {renderActionField('Category', (
+                              <select
+                                value={spell.folderId ?? ''}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, folderId: e.target.value || null }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                              >
+                                <option value="">No folder</option>
+                                {getFolderOptions(spellFolders).map(option => (
+                                  <option key={option.id} value={option.id}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            ), 'min-w-[200px]')}
                           </div>
                           {!spell.hidden && (
                           <>
@@ -7622,7 +10378,7 @@ export const Characters: React.FC = () => {
                               onChange={(e) => updateSpell(spell.id, current => ({ ...current, description: e.target.value }))}
                               disabled={!isCharacterOwner}
                               placeholder="Description"
-                              rows={expandedSpellDescriptions.includes(spell.id) ? 6 : 3}
+                              rows={expandedSpellDescriptions.includes(spell.id) ? 3 : 6}
                               className="w-full bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 resize-none disabled:opacity-60"
                             />
                           <div className="flex items-center gap-3">
@@ -7630,36 +10386,79 @@ export const Characters: React.FC = () => {
                               onClick={() => toggleSpellDescription(spell.id)}
                               className="text-sm text-amber-300 hover:text-amber-200 cursor-pointer"
                             >
-                              {expandedSpellDescriptions.includes(spell.id) ? 'Hide' : 'Show More'}
+                              {expandedSpellDescriptions.includes(spell.id) ? 'Show More' : 'Hide'}
                             </button>
                           </div>
 
-                          <div className="flex flex-wrap gap-3">
-                            <input
-                              type="text"
-                              value={spell.resourceCost}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, resourceCost: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[170px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Resource cost"
-                            />
-                            <input
-                              type="text"
-                              value={spell.usageRemaining}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, usageRemaining: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[160px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Usage remaining"
-                            />
-                            <input
-                              type="text"
-                              value={spell.totalUsage}
-                              onChange={(e) => updateSpell(spell.id, current => ({ ...current, totalUsage: e.target.value }))}
-                              disabled={!isCharacterOwner}
-                              className="min-w-[160px] flex-1 bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
-                              placeholder="Total usage"
-                            />
+                          <div className="flex flex-wrap gap-3 items-end">
+                            {renderActionField('Cost', (
+                              <input
+                                type="text"
+                                value={spell.resourceCost}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, resourceCost: e.target.value }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="Cost"
+                              />
+                            ), 'w-[140px] flex-none')}
+                            {renderActionField('Remaining', (
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={spell.usageRemaining}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, usageRemaining: sanitizeWholeNumberInput(e.target.value) }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="0"
+                              />
+                            ), 'w-[11ch] flex-none')}
+                            {renderActionField('Max', (
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={spell.totalUsage}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, totalUsage: sanitizeWholeNumberInput(e.target.value) }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="0"
+                              />
+                            ), 'w-[11ch] flex-none')}
+                            {renderActionField('Replenish On', (
+                              <select
+                                value={spell.replenishTrigger || 'custom'}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, replenishTrigger: e.target.value as CharacterReplenishTrigger }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                title="When this spell regains usage"
+                              >
+                                {REPLENISH_TRIGGER_OPTIONS.map(option => (
+                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                ))}
+                              </select>
+                            ), 'min-w-[150px]')}
+                            {renderActionField('Gain', (
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                pattern="[0-9]*"
+                                value={spell.replenishAmount || ''}
+                                onChange={(e) => updateSpell(spell.id, current => ({ ...current, replenishAmount: sanitizeWholeNumberInput(e.target.value) }))}
+                                disabled={!isCharacterOwner}
+                                className="bg-stone-900/60 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/40 disabled:opacity-60"
+                                placeholder="0"
+                              />
+                            ), 'w-[11ch] flex-none')}
                           </div>
+
+                          {renderLocalVariablesEditor(
+                            spell.localVariables,
+                            () => addSpellLocalVariable(spell.id),
+                            (variableIndex, updater) => updateSpellLocalVariable(spell.id, variableIndex, updater),
+                            (variableIndex) => removeSpellLocalVariable(spell.id, variableIndex),
+                            isCharacterOwner
+                          )}
 
                           <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                             <div className="flex justify-between items-center mb-2">
@@ -7737,30 +10536,27 @@ export const Characters: React.FC = () => {
                                   return (
                                     <div key={action.id} className="rounded-lg border border-amber-800/15 bg-amber-950/10 p-3">
                                       <div className="flex flex-wrap gap-2 items-start mb-2">
-                                        <input
-                                          type="text"
-                                          value={action.name}
-                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, name: e.target.value }))}
-                                          disabled={!isCharacterOwner}
-                                          placeholder="Action name"
-                                          className="min-w-[180px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={action.cost}
-                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, cost: e.target.value }))}
-                                          disabled={!isCharacterOwner}
-                                          placeholder="Cost"
-                                          className="min-w-[140px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
-                                        <input
-                                          type="text"
-                                          value={action.usageRemaining}
-                                          onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, usageRemaining: e.target.value }))}
-                                          disabled={!isCharacterOwner}
-                                          placeholder="Remaining usage"
-                                          className="min-w-[160px] bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
-                                        />
+                                        {renderActionField('Name', (
+                                          <input
+                                            type="text"
+                                            value={action.name}
+                                            onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, name: e.target.value }))}
+                                            disabled={!isCharacterOwner}
+                                            placeholder="Action name"
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                          />
+                                        ), 'min-w-[180px]')}
+                                        {renderActionField('Cost', (
+                                          <input
+                                            type="text"
+                                            value={action.cost}
+                                            onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, cost: e.target.value }))}
+                                            disabled={!isCharacterOwner}
+                                            placeholder="Cost"
+                                            className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                          />
+                                        ), 'min-w-[140px]')}
+                                        {renderActionUsageControls(action, updater => updateSpellAction(spell.id, action.id, updater), isCharacterOwner)}
                                         <button
                                           onClick={() => shareSpellAction(spell, action)}
                                           className="inline-flex items-center gap-1 px-3 py-2 bg-sky-900/30 border border-sky-800/40 rounded text-sm text-sky-200 hover:bg-sky-900/50 cursor-pointer"
@@ -7781,7 +10577,7 @@ export const Characters: React.FC = () => {
                                         value={action.description}
                                         onChange={(e) => updateSpellAction(spell.id, action.id, current => ({ ...current, description: e.target.value }))}
                                         disabled={!isCharacterOwner}
-                                        rows={isExpanded ? 6 : 2}
+                                        rows={isExpanded ? 2 : 6}
                                         placeholder="Action description"
                                         className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                       />
@@ -7789,7 +10585,7 @@ export const Characters: React.FC = () => {
                                         onClick={() => toggleSpellActionDescription(action.id)}
                                         className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
                                       >
-                                        {isExpanded ? 'Hide' : 'Show More'}
+                                        {isExpanded ? 'Show More' : 'Hide'}
                                       </button>
                                       <div className="mt-3 rounded-lg border border-amber-800/10 bg-black/20 p-3">
                                         <div className="flex justify-between items-center mb-2">
@@ -7846,53 +10642,41 @@ export const Characters: React.FC = () => {
                                         <div className="flex justify-between items-center mb-2">
                                           <label className="text-sm font-bold text-stone-300">Effects</label>
                                           {isCharacterOwner && (
-                                            <button
-                                              onClick={() => addSpellActionEffect(spell.id, action.id)}
-                                              className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
-                                            >
-                                              + Add Effect
-                                            </button>
+                                            <div className="flex flex-wrap gap-2">
+                                              <button
+                                                onClick={() => addSpellActionEffect(spell.id, action.id)}
+                                                className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                              >
+                                                + Add Effect
+                                              </button>
+                                              <button
+                                                onClick={() => importStatusApplyEffect(effect => updateSpellAction(spell.id, action.id, current => ({ ...current, effects: [...(current.effects || []), effect] })))}
+                                                className="text-xs bg-indigo-900/20 hover:bg-indigo-900/40 px-2 py-1 rounded text-indigo-300 cursor-pointer"
+                                              >
+                                                + Add Status
+                                              </button>
+                                              <button
+                                                onClick={() => updateSpellAction(spell.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildBarUpdateEffect()] }))}
+                                                className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                              >
+                                                + Bar Update
+                                              </button>
+                                            </div>
                                           )}
                                         </div>
                                         {(action.effects || []).length === 0 ? (
                                           <span className="text-[10px] text-stone-600 italic">No effects added.</span>
                                         ) : (
                                           <div className="space-y-2">
-                                            {(action.effects || []).map((effect, effectIndex) => (
-                                              <div key={`${action.id}-effect-${effectIndex}`} className="grid grid-cols-1 md:grid-cols-[auto_1fr_140px_auto] gap-2 items-center">
-                                                <button
-                                                  onClick={() => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, active: !(current.active ?? true) }))}
-                                                  className={`h-8 min-w-[3.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start ${(effect.active ?? true) ? 'bg-emerald-900/30 border-emerald-700/40 text-emerald-300' : 'bg-stone-900/40 border-stone-700/40 text-stone-400'}`}
-                                                >
-                                                  {(effect.active ?? true) ? 'On' : 'Off'}
-                                                </button>
-                                                <input
-                                                  type="text"
-                                                  value={effect.targetId}
-                                                  onChange={(e) => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, targetId: e.target.value }))}
-                                                  disabled={!isCharacterOwner}
-                                                  placeholder="Target ID (e.g. str_mod)"
-                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-400 font-mono focus:outline-none disabled:opacity-60"
-                                                />
-                                                <input
-                                                  type="text"
-                                                  value={effect.value}
-                                                  onChange={(e) => updateSpellActionEffect(spell.id, action.id, effectIndex, current => ({ ...current, value: e.target.value }))}
-                                                  disabled={!isCharacterOwner}
-                                                  placeholder="Value (e.g. +2)"
-                                                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 font-mono focus:outline-none disabled:opacity-60"
-                                                />
-                                                {isCharacterOwner ? (
-                                                  <button
-                                                    onClick={() => removeSpellActionEffect(spell.id, action.id, effectIndex)}
-                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
-                                                  >
-                                                    <Trash2 size={14} />
-                                                  </button>
-                                                ) : (
-                                                  <div />
-                                                )}
-                                              </div>
+                                            {(action.effects || []).map((effect, effectIndex) => renderEffectEditorRow(
+                                              effect,
+                                              effectIndex,
+                                              (index, updater) => updateSpellActionEffect(spell.id, action.id, index, updater),
+                                              (index) => removeSpellActionEffect(spell.id, action.id, index),
+                                              isCharacterOwner,
+                                              'Target ID (e.g. str_mod)',
+                                              'Value (e.g. +2)',
+                                              spell.localVariables
                                             ))}
                                           </div>
                                         )}
@@ -7921,8 +10705,18 @@ export const Characters: React.FC = () => {
 
   // ── Main List View ────────────────────────────────────────────────────────────
 
+  if (embeddedMode) {
+    return (
+      <div className="w-full rounded-2xl border border-amber-800/35 bg-stone-950/45 p-8 text-center text-stone-400" style={{ fontFamily: "'IM Fell English', serif" }}>
+        {embeddedCharacterId ? 'Loading selected character sheet...' : 'Add or select a character from the DM Tools rail.'}
+      </div>
+    );
+  }
+
   return (
     <div className="w-full flex flex-col gap-6" style={{ fontFamily: "'IM Fell English', serif" }}>
+      {renderBarTargetResolverModal()}
+      {renderEffectTargetResolverModal()}
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-amber-900/30 pb-4">
         <div>
@@ -8076,7 +10870,7 @@ export const Characters: React.FC = () => {
                         >
                           <Star size={16} fill={isFav ? 'currentColor' : 'none'} />
                         </button>
-                        {(isAdmin || char.userId === userId || !char.userId) && (
+                        {(isAdmin || canOwnCharacter(char) || canControlCharacter(char)) && (
                           <button
                             onClick={(e) => handleDelete(e, char.id)}
                             className="grid h-8 w-8 place-items-center text-stone-700 hover:text-red-400 opacity-0 group-hover:opacity-100 rounded-full hover:bg-red-950/20 transition-all cursor-pointer"
@@ -8102,7 +10896,7 @@ export const Characters: React.FC = () => {
               <h3 className="text-lg text-amber-300 font-bold" style={{ fontFamily: "'Cinzel', serif" }}>⚔️ Quick Editor</h3>
               {selectedCharacter && (
                 <span className="text-xs font-mono text-amber-500/70">
-                  ID: {selectedCharacter.id.slice(0, 8)} • {isSelectedCharacterOwnedByUser ? 'Owner' : isAdmin ? 'Admin' : 'Viewer'}
+                  ID: {selectedCharacter.id.slice(0, 8)} • {selectedAccessRole}
                 </span>
               )}
             </div>
@@ -8115,15 +10909,15 @@ export const Characters: React.FC = () => {
               <div className="space-y-4">
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Name</label>
-                  <input value={editName} onChange={(e) => setEditName(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" />
+                  <input value={editName} onChange={(e) => setEditName(e.target.value)} disabled={!isCharacterOwner} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 disabled:opacity-60" />
                 </div>
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Race</label>
-                  <input value={editRace} onChange={(e) => setEditRace(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="Human, Elf..." />
+                  <input value={editRace} onChange={(e) => setEditRace(e.target.value)} disabled={!isCharacterOwner} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 disabled:opacity-60" placeholder="Human, Elf..." />
                 </div>
                 <div>
                   <label className="block text-xs font-bold uppercase tracking-wider text-amber-600 mb-1">Vocation / Class</label>
-                  <input value={editClass} onChange={(e) => setEditClass(e.target.value)} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50" placeholder="Vanguard, Arcanist..." />
+                  <input value={editClass} onChange={(e) => setEditClass(e.target.value)} disabled={!isCharacterOwner} className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 disabled:opacity-60" placeholder="Vanguard, Arcanist..." />
                 </div>
                 {/* Visibility Dropdown */}
                 <div>
@@ -8140,16 +10934,16 @@ export const Characters: React.FC = () => {
                   ) : (
                     <div className="flex items-center gap-2 px-3 py-2 bg-stone-900 border border-stone-700 rounded-lg text-sm text-stone-400">
                       <span>{selectedCharacter.visibility === 'public' ? '🌐 Public' : '🔒 Private'}</span>
-                      <span className="text-xs text-stone-600">(read only — owner only)</span>
+                      <span className="text-xs text-stone-600">(read only)</span>
                     </div>
                   )}
                 </div>
 
-                {isAdmin && (
+                {(canTransferCharacterOwner || canManageControlAccess || canManageViewAccess) && (
                   <div className="rounded-xl border border-emerald-800/40 bg-emerald-950/10 p-4">
                     <div className="flex items-center justify-between gap-3 mb-3">
                       <div>
-                        <h4 className="text-sm font-bold text-emerald-200" style={{ fontFamily: "'Cinzel', serif" }}>Admin Owner Transfer</h4>
+                        <h4 className="text-sm font-bold text-emerald-200" style={{ fontFamily: "'Cinzel', serif" }}>Character Access</h4>
                         <p className="text-xs text-stone-500">
                           Current owner: {selectedCharacter.ownerEmail || selectedCharacter.userId || 'unclaimed'}
                         </p>
@@ -8157,39 +10951,99 @@ export const Characters: React.FC = () => {
                       <span className="text-[10px] text-emerald-300/70 font-mono">{userProfiles.length} users</span>
                     </div>
                     <div className="flex flex-col gap-2">
-                      <select
-                        value={ownerTransferUid}
-                        onChange={(e) => setOwnerTransferUid(e.target.value)}
-                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-emerald-500/50 cursor-pointer"
-                      >
-                        <option value="">Choose a Google user...</option>
-                        {selectedCharacter.userId && !userProfiles.some((profile) => profile.uid === selectedCharacter.userId) && (
-                          <option value={selectedCharacter.userId}>
-                            Current unknown user ({selectedCharacter.userId})
-                          </option>
-                        )}
-                        {userProfiles.map((profile) => (
-                          <option key={profile.uid} value={profile.uid}>
-                            {profile.email || profile.displayName || profile.uid} ({profile.uid.slice(0, 8)})
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        value={ownerTransferUid}
-                        onChange={(e) => setOwnerTransferUid(e.target.value)}
-                        placeholder="Or paste Firebase UID manually..."
-                        className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-xs text-amber-100 focus:outline-none focus:border-emerald-500/50 font-mono"
-                      />
-                      <button
-                        onClick={handleTransferOwner}
-                        disabled={!ownerTransferUid.trim() || ownerTransferUid === selectedCharacter.userId}
-                        className="px-4 py-2 bg-emerald-900/40 border border-emerald-700/50 rounded-lg text-sm text-emerald-100 hover:bg-emerald-800/50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
-                        style={{ fontFamily: "'Cinzel', serif" }}
-                      >
-                        Change Owner
-                      </button>
+                      {canTransferCharacterOwner && (
+                        <div className="rounded-lg border border-emerald-800/30 bg-black/25 p-3">
+                          <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-emerald-300/70 mb-1">Transfer Owner</label>
+                          <div className="grid grid-cols-1 gap-2">
+                            <select
+                              value={ownerTransferUid}
+                              onChange={(e) => setOwnerTransferUid(e.target.value)}
+                              className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-emerald-500/50 cursor-pointer"
+                            >
+                              <option value="">Choose a Google user...</option>
+                              {selectedCharacter.userId && !userProfiles.some((profile) => profile.uid === selectedCharacter.userId) && (
+                                <option value={selectedCharacter.userId}>
+                                  Current unknown user ({selectedCharacter.userId})
+                                </option>
+                              )}
+                              {userProfiles.map((profile) => (
+                                <option key={profile.uid} value={profile.uid}>
+                                  {profile.email || profile.displayName || profile.uid} ({profile.uid.slice(0, 8)})
+                                </option>
+                              ))}
+                            </select>
+                            <input
+                              value={ownerTransferUid}
+                              onChange={(e) => setOwnerTransferUid(e.target.value)}
+                              placeholder="Or paste Firebase UID manually..."
+                              className="w-full bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-xs text-amber-100 focus:outline-none focus:border-emerald-500/50 font-mono"
+                            />
+                            <button
+                              onClick={handleTransferOwner}
+                              disabled={!ownerTransferUid.trim() || ownerTransferUid === selectedCharacter.userId}
+                              className="px-4 py-2 bg-emerald-900/40 border border-emerald-700/50 rounded-lg text-sm text-emerald-100 hover:bg-emerald-800/50 transition-colors cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed"
+                              style={{ fontFamily: "'Cinzel', serif" }}
+                            >
+                              Change Owner
+                            </button>
+                          </div>
+                        </div>
+                      )}
+                      {canManageControlAccess && (
+                        <div className="rounded-lg border border-sky-800/30 bg-black/25 p-3">
+                          <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-sky-300/70 mb-1">Control Access</label>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex gap-2">
+                              <select value={controlAccessUid} onChange={(e) => setControlAccessUid(e.target.value)} className="min-w-0 flex-1 bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-sky-500/50 cursor-pointer">
+                                <option value="">Choose user...</option>
+                                {userProfiles.filter(profile => profile.uid !== selectedCharacter.userId && !(selectedCharacter.controlUserIds || []).includes(profile.uid)).map((profile) => (
+                                  <option key={profile.uid} value={profile.uid}>{profile.email || profile.displayName || profile.uid}</option>
+                                ))}
+                              </select>
+                              <button onClick={() => handleAddAccessUser('control')} disabled={!controlAccessUid.trim()} className="px-3 py-2 bg-sky-900/40 border border-sky-700/50 rounded-lg text-sm text-sky-100 hover:bg-sky-800/50 disabled:opacity-40">Add</button>
+                            </div>
+                            {(selectedCharacter.controlUserIds || []).length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {(selectedCharacter.controlUserIds || []).map((uid) => (
+                                  <button key={uid} onClick={() => handleRemoveAccessUser('control', uid)} className="rounded-full border border-sky-700/40 bg-sky-950/40 px-2 py-1 text-xs text-sky-100 hover:border-red-500/60 hover:text-red-200" title="Remove control access">
+                                    {getProfileLabel(uid)} ×
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
+                      {canManageViewAccess && (
+                        <div className="rounded-lg border border-amber-800/30 bg-black/25 p-3">
+                          <label className="block text-[10px] font-bold uppercase tracking-[0.16em] text-amber-300/70 mb-1">View Access</label>
+                          <div className="flex flex-col gap-2">
+                            <div className="flex gap-2">
+                              <select value={viewAccessUid} onChange={(e) => setViewAccessUid(e.target.value)} className="min-w-0 flex-1 bg-stone-900 border border-stone-700 rounded-lg px-3 py-2 text-sm text-amber-100 focus:outline-none focus:border-amber-500/50 cursor-pointer">
+                                <option value="">Choose user...</option>
+                                {userProfiles.filter(profile => profile.uid !== selectedCharacter.userId && !(selectedCharacter.viewUserIds || []).includes(profile.uid)).map((profile) => (
+                                  <option key={profile.uid} value={profile.uid}>{profile.email || profile.displayName || profile.uid}</option>
+                                ))}
+                              </select>
+                              <button onClick={() => handleAddAccessUser('view')} disabled={!viewAccessUid.trim()} className="px-3 py-2 bg-amber-900/40 border border-amber-700/50 rounded-lg text-sm text-amber-100 hover:bg-amber-800/50 disabled:opacity-40">Add</button>
+                            </div>
+                            {(selectedCharacter.viewUserIds || []).length > 0 && (
+                              <div className="flex flex-wrap gap-2">
+                                {(selectedCharacter.viewUserIds || []).map((uid) => (
+                                  <button key={uid} onClick={() => handleRemoveAccessUser('view', uid)} className="rounded-full border border-amber-700/40 bg-amber-950/40 px-2 py-1 text-xs text-amber-100 hover:border-red-500/60 hover:text-red-200" title="Remove view access">
+                                    {getProfileLabel(uid)} ×
+                                  </button>
+                                ))}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      )}
                       {ownerTransferStatus && (
                         <p className="text-xs text-emerald-200/80">{ownerTransferStatus}</p>
+                      )}
+                      {accessStatus && (
+                        <p className="text-xs text-emerald-200/80">{accessStatus}</p>
                       )}
                     </div>
                   </div>

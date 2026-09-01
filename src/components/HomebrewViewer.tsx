@@ -19,6 +19,22 @@ type ViewerEntry =
   | { kind: 'spell'; entry: CharacterSpell }
   | { kind: 'status'; entry: CharacterStatus };
 
+const statusDurationLabels: Record<string, string> = {
+  custom: 'Custom',
+  round: 'Round',
+  'short-rest': 'Short Rest',
+  'long-rest': 'Long Rest',
+  minute: 'Minute',
+};
+
+const formatStatusDuration = (status: Partial<CharacterStatus>): string => {
+  const duration = status.duration || '';
+  const type = status.durationType || 'custom';
+  if (type === 'custom') return duration || '—';
+  const label = statusDurationLabels[type] || 'Duration';
+  return `${duration || '0'} ${label}${duration === '1' ? '' : 's'}`;
+};
+
 const parchmentBackground = {
   backgroundImage:
     "radial-gradient(circle at top left, rgba(120,53,15,0.12), transparent 35%), linear-gradient(180deg, rgba(245,232,197,0.98) 0%, rgba(235,219,184,0.98) 100%)",
@@ -281,7 +297,7 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                     <div><span className="font-bold text-amber-950">Usage:</span> {viewerEntry.entry.usageRemaining || '—'}{'totalUsage' in viewerEntry.entry ? ` / ${viewerEntry.entry.totalUsage || '—'}` : ''}</div>
                   )}
                   {'duration' in viewerEntry.entry && (
-                    <div><span className="font-bold text-amber-950">Duration:</span> {viewerEntry.entry.duration || '—'}</div>
+                    <div><span className="font-bold text-amber-950">Duration:</span> {formatStatusDuration(viewerEntry.entry)}</div>
                   )}
                 </div>
               </section>

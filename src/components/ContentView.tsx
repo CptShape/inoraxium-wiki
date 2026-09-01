@@ -5,11 +5,10 @@ import MarkdownRenderer, { PartInfo } from './MarkdownRenderer';
 import MythologyHub from './mythology/MythologyHub';
 import { allGods } from '../data/inoraxium/worldbuilding-handbook/mythology/gods';
 import { BattleTracker } from './BattleTracker';
-import { DiceMacros } from './DiceMacros';
-import { MessageSender } from './MessageSender';
 import { WorldMap } from './WorldMap';
 import Characters from './Characters';
-import { SkillTreePage } from './SkillTreePage';
+import AssetCreatorPage from './AssetCreatorPage';
+import SessionPage from './SessionPage';
 
 interface WorkspaceFolderNode {
   id: string;
@@ -641,20 +640,6 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
-          {/* ── Dice Macros (special chapter) ──────────────────────────────── */}
-          {activeChapter.content === 'dice-macros' ? (
-            <div className="-mx-4 -mb-6">
-              <DiceMacros />
-            </div>
-          ) : null}
-
-          {/* ── Message Sender (special chapter) ───────────────────────────── */}
-          {activeChapter.content === 'message-sender' ? (
-            <div className="-mx-4 -mb-6">
-              <MessageSender />
-            </div>
-          ) : null}
-
           {/* ── World Map (special chapter) ───────────────────────────────── */}
           {activeChapter.content === 'world-map' ? (
             <div className="-mx-4 -mb-6">
@@ -669,15 +654,22 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
-          {/* ── Skill Tree (special chapter) ──────────────────────────────── */}
-          {activeChapter.content === 'skill-tree' ? (
+          {/* ── Session Module (special chapter) ──────────────────────────── */}
+          {activeChapter.content === 'session' ? (
             <div className="-mx-4 -mb-6">
-              <SkillTreePage system="inoraxium" />
+              <SessionPage />
+            </div>
+          ) : null}
+
+          {/* ── Asset Creator (special chapter) ───────────────────────────── */}
+          {activeChapter.content === 'asset-creator' ? (
+            <div className="-mx-4 -mb-6">
+              <AssetCreatorPage />
             </div>
           ) : null}
 
           {/* ── Markdown content ───────────────────────────────────────────── */}
-          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'dice-macros' && activeChapter.content !== 'message-sender' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'skill-tree' && (
+          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'session' && activeChapter.content !== 'asset-creator' && (
             <div style={{ fontFamily: "'IM Fell English', serif" }}>
               <MarkdownRenderer
                 path={activeChapter.content}

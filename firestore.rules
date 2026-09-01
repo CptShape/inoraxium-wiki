@@ -46,33 +46,50 @@ service cloud.firestore {
       return signedIn() && request.resource.data.userId == request.auth.uid;
     }
 
-    function publicInventoryOnlyUpdate() {
+    function controlsExistingCharacter() {
       return signedIn()
-        && resource.data.visibility == 'public'
-        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
-          'inventory',
-          'inventoryFolders',
-          'collapsedInventoryFolderIds',
-          'generalItems'
+        && resource.data.keys().hasAny(['controlUserIds'])
+        && resource.data.controlUserIds is list
+        && request.auth.uid in resource.data.controlUserIds;
+    }
+
+    function viewsExistingCharacter() {
+      return signedIn()
+        && resource.data.keys().hasAny(['viewUserIds'])
+        && resource.data.viewUserIds is list
+        && request.auth.uid in resource.data.viewUserIds;
+    }
+
+    function controllerSafeUpdate() {
+      return controlsExistingCharacter()
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'userId',
+          'ownerEmail',
+          'ownerTransferredAt',
+          'controlUserIds'
         ]);
     }
 
     match /characters/{characterId} {
       allow read: if isAdmin()
         || ownsExistingCharacter()
+        || controlsExistingCharacter()
+        || viewsExistingCharacter()
         || resource.data.visibility == 'public';
 
       allow create: if isAdmin() || ownsNewCharacter();
 
       allow update: if isAdmin()
         || ownsExistingCharacter()
-        || publicInventoryOnlyUpdate();
+        || controllerSafeUpdate();
 
-      allow delete: if isAdmin() || ownsExistingCharacter();
+      allow delete: if isAdmin()
+        || ownsExistingCharacter()
+        || controlsExistingCharacter();
     }
 
     match /users/{userId} {
-      allow read: if isAdmin() || (signedIn() && request.auth.uid == userId);
+      allow read: if signedIn();
 
       allow create: if signedIn()
         && request.auth.uid == userId
@@ -130,6 +147,25 @@ service cloud.firestore {
     match /skillTrees/{treeId} {
       allow read: if true;
       allow create, update, delete: if isEditor();
+    }
+
+    match /sessions/{sessionCode} {
+      allow read: if signedIn();
+
+      allow create: if signedIn()
+        && request.resource.data.createdBy == request.auth.uid
+        && request.resource.data.code == sessionCode
+        && request.resource.data.id == sessionCode;
+
+      allow update: if signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'characterIds',
+          'updatedAt'
+        ]);
+
+      allow delete: if isAdmin()
+        || (signedIn() && resource.data.createdBy == request.auth.uid);
     }
 
     match /{document=**} {

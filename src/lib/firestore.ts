@@ -153,6 +153,7 @@ export const loadAdminAccess = async (uid: string | null, email?: string | null)
 
 /** Load characters visible to `userId`:
  *  - Own characters (all visibilities)
+ *  - Characters the user can control or view
  *  - Public characters from other users
  *  - All characters when the caller is an admin
  */
@@ -178,29 +179,45 @@ export const loadCharacters = async (userId: string | null, includeAll = false):
       return Array.from(mergedMap.values());
     }
 
+    const readCharacterQuery = async (queryRef: any, label: string): Promise<CharacterData[]> => {
+      try {
+        const snap = await fs.getDocs(queryRef);
+        const result: CharacterData[] = [];
+        snap.forEach((d: any) => result.push({ id: d.id, ...d.data() }));
+        return result;
+      } catch (err) {
+        console.error(`Firestore character query failed (${label}):`, err);
+        return [];
+      }
+    };
+
     // Load own characters (all visibilities)
     const ownQ = fs.query(fs.collection(fs.db, 'characters'), fs.where('userId', '==', userId));
-    const ownSnap = await fs.getDocs(ownQ);
-    const ownChars: CharacterData[] = [];
-    ownSnap.forEach((d: any) => ownChars.push({ id: d.id, ...d.data() }));
-
-    // Load public characters from all other users
+    const controlledQ = fs.query(
+      fs.collection(fs.db, 'characters'),
+      fs.where('controlUserIds', 'array-contains', userId)
+    );
+    const viewQ = fs.query(
+      fs.collection(fs.db, 'characters'),
+      fs.where('viewUserIds', 'array-contains', userId)
+    );
     const publicQ = fs.query(
       fs.collection(fs.db, 'characters'),
       fs.where('visibility', '==', 'public')
     );
-    const publicSnap = await fs.getDocs(publicQ);
-    const publicChars: CharacterData[] = [];
-    publicSnap.forEach((d: any) => {
-      const data = { id: d.id, ...d.data() } as CharacterData;
-      if (data.userId !== userId) {
-        publicChars.push(data);
-      }
-    });
+
+    const [ownChars, controlledChars, viewChars, publicChars] = await Promise.all([
+      readCharacterQuery(ownQ, 'owner'),
+      readCharacterQuery(controlledQ, 'control'),
+      readCharacterQuery(viewQ, 'view'),
+      readCharacterQuery(publicQ, 'public'),
+    ]);
 
     // Merge: own chars take priority over public chars with same id
     const mergedMap = new Map<string, CharacterData>();
-    publicChars.forEach(c => mergedMap.set(c.id, c));
+    publicChars.filter(c => c.userId !== userId).forEach(c => mergedMap.set(c.id, c));
+    viewChars.forEach(c => mergedMap.set(c.id, c));
+    controlledChars.forEach(c => mergedMap.set(c.id, c));
     ownChars.forEach(c => mergedMap.set(c.id, c));
     localData.forEach(l => {
       if (l.userId === userId && !mergedMap.has(l.id)) {
@@ -314,7 +331,11 @@ export const reloadCharacterFromFirestore = async (
     if (!snapshot.exists()) return null;
 
     const data = { id: snapshot.id, ...snapshot.data() } as CharacterData;
-    if (data.userId !== userId && data.visibility !== 'public') {
+    const canRead = data.userId === userId
+      || data.visibility === 'public'
+      || (!!userId && (data.controlUserIds || []).includes(userId))
+      || (!!userId && (data.viewUserIds || []).includes(userId));
+    if (!canRead) {
       return null;
     }
 
@@ -364,6 +385,8 @@ export const transferCharacterOwner = async (
       ...localData[existIdx],
       userId: nextOwnerUid,
       ownerEmail: nextOwnerEmail || undefined,
+      controlUserIds: [],
+      viewUserIds: [],
     } as CharacterData;
     setLocalCharacters(localData);
   }
@@ -375,6 +398,8 @@ export const transferCharacterOwner = async (
     await fs.setDoc(fs.doc(fs.db, 'characters', characterId), {
       userId: nextOwnerUid,
       ownerEmail: nextOwnerEmail || '',
+      controlUserIds: [],
+      viewUserIds: [],
       ownerTransferredAt: Date.now(),
     }, { merge: true });
   } catch (err) {
@@ -396,7 +421,13 @@ export const loadCharacterById = async (
       if (snapshot.exists()) {
         const data = { id: snapshot.id, ...snapshot.data() } as CharacterData;
         const isOwner = !!userId && data.userId === userId;
-        if (isOwner || data.visibility === 'public' || !data.userId || data.userId === 'guest') {
+        const canRead = isOwner
+          || data.visibility === 'public'
+          || !data.userId
+          || data.userId === 'guest'
+          || (!!userId && (data.controlUserIds || []).includes(userId))
+          || (!!userId && (data.viewUserIds || []).includes(userId));
+        if (canRead) {
           return data;
         }
       }
@@ -408,7 +439,9 @@ export const loadCharacterById = async (
   if (!localMatch) return null;
   const isLocalOwner = !userId || localMatch.userId === userId || localMatch.userId === 'guest';
   const isLocalPublic = localMatch.visibility === 'public';
-  return isLocalOwner || isLocalPublic ? localMatch : null;
+  const canReadLocalAccess = !!userId
+    && ((localMatch.controlUserIds || []).includes(userId) || (localMatch.viewUserIds || []).includes(userId));
+  return isLocalOwner || isLocalPublic || canReadLocalAccess ? localMatch : null;
 };
 
 // ─── Favorites ─────────────────────────────────────────────────────────────────
