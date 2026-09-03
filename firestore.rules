@@ -85,6 +85,18 @@ service cloud.firestore {
         );
     }
 
+    function validCampaignInviteJoin() {
+      return signedIn()
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'playerUserIds',
+          'members',
+          'updatedAt',
+          'joinInviteCode'
+        ])
+        && request.auth.uid in request.resource.data.playerUserIds
+        && request.resource.data.joinInviteCode == resource.data.inviteCode;
+    }
+
     match /characters/{characterId} {
       allow read: if isAdmin()
         || ownsExistingCharacter()
@@ -170,17 +182,25 @@ service cloud.firestore {
         && request.auth.uid in request.resource.data.dmUserIds;
 
       allow update: if isAdmin()
-        || (
-          signedIn()
-          && (
-            request.auth.uid in resource.data.dmUserIds
-            || request.auth.uid in resource.data.playerUserIds
-            || request.auth.uid in request.resource.data.playerUserIds
-          )
-        );
+        || (signedIn() && request.auth.uid in resource.data.dmUserIds)
+        || validCampaignInviteJoin();
 
       allow delete: if isAdmin()
         || (signedIn() && resource.data.createdBy == request.auth.uid);
+    }
+
+    match /campaignInvites/{inviteCode} {
+      allow read: if signedIn();
+
+      allow create, update: if isAdmin()
+        || (
+          signedIn()
+          && request.resource.data.inviteCode == inviteCode
+          && isCampaignDm(request.resource.data.campaignId)
+        );
+
+      allow delete: if isAdmin()
+        || (signedIn() && isCampaignDm(resource.data.campaignId));
     }
 
     match /parties/{partyId} {

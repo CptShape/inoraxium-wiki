@@ -5,6 +5,7 @@ import {
   addCharacterToParty,
   createCampaign,
   createParty,
+  ensureCampaignInvite,
   joinCampaignByInvite,
   loadAdminAccess,
   loadCampaignsForUser,
@@ -209,6 +210,7 @@ const CampaignsPage: React.FC = () => {
 
   const handleCopyInvite = async () => {
     if (!selectedCampaign) return;
+    await ensureCampaignInvite(selectedCampaign);
     const url = buildInviteUrl(selectedCampaign);
     await navigator.clipboard.writeText(url);
     setStatusMessage('Invite link copied.');

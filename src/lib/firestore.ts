@@ -39,7 +39,7 @@ async function getFirestore() {
 
   try {
     const { initializeApp, getApps, getApp } = await import('firebase/app');
-    const { getFirestore: fbGetFirestore, collection, doc, setDoc, getDocs, getDoc, deleteDoc, query, where, or } = await import('firebase/firestore');
+    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or } = await import('firebase/firestore');
 
     const app = getApps().length > 0 ? getApp() : initializeApp({
       apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -57,11 +57,13 @@ async function getFirestore() {
       collection,
       doc,
       setDoc,
+      updateDoc,
       getDocs,
       getDoc,
       deleteDoc,
       query,
       where,
+      arrayUnion,
       or,
     };
 
@@ -619,7 +621,30 @@ export const createCampaign = async (
   };
 
   await fs.setDoc(fs.doc(fs.db, 'campaigns', id), stripUndefinedDeep(campaign));
+  await fs.setDoc(fs.doc(fs.db, 'campaignInvites', campaign.inviteCode), stripUndefinedDeep({
+    id: campaign.inviteCode,
+    campaignId: campaign.id,
+    inviteCode: campaign.inviteCode,
+    createdBy: uidValue,
+    active: true,
+    createdAt: now,
+  }));
   return campaign;
+};
+
+export const ensureCampaignInvite = async (campaign: CampaignData): Promise<void> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+
+  await fs.setDoc(fs.doc(fs.db, 'campaignInvites', campaign.inviteCode), stripUndefinedDeep({
+    id: campaign.inviteCode,
+    campaignId: campaign.id,
+    inviteCode: campaign.inviteCode,
+    createdBy: campaign.createdBy,
+    active: true,
+    createdAt: campaign.createdAt || Date.now(),
+    updatedAt: Date.now(),
+  }), { merge: true });
 };
 
 export const loadCampaignsForUser = async (uidValue: string | null, includeAll = false): Promise<CampaignData[]> => {
@@ -671,35 +696,36 @@ export const joinCampaignByInvite = async (
   uidValue: string,
   profile: { email?: string | null; displayName?: string | null },
 ): Promise<CampaignData> => {
-  const campaign = await loadCampaignById(campaignId);
-  if (!campaign || campaign.inviteCode !== inviteCode) {
-    throw new Error('Campaign invite is invalid or expired.');
-  }
-
   const fs = await getFirestore();
   if (!fs) throw new Error('Firestore is not available.');
 
-  const existingMember = campaign.members.find((member) => member.uid === uidValue);
-  const members = existingMember
-    ? campaign.members
-    : [
-        ...campaign.members,
-        {
-          uid: uidValue,
-          email: profile.email || '',
-          displayName: profile.displayName || profile.email || uidValue,
-          role: 'player' as const,
-          joinedAt: Date.now(),
-        },
-      ];
-  const updated: CampaignData = {
-    ...campaign,
-    playerUserIds: unique([...campaign.playerUserIds, uidValue].filter((id) => !campaign.dmUserIds.includes(id))),
-    members,
-    updatedAt: Date.now(),
+  const inviteSnapshot = await fs.getDoc(fs.doc(fs.db, 'campaignInvites', inviteCode));
+  if (!inviteSnapshot.exists()) {
+    throw new Error('Campaign invite is invalid or expired.');
+  }
+
+  const invite = inviteSnapshot.data() || {};
+  if (invite.active === false || invite.campaignId !== campaignId || invite.inviteCode !== inviteCode) {
+    throw new Error('Campaign invite is invalid or expired.');
+  }
+
+  const member: CampaignMember = {
+    uid: uidValue,
+    email: profile.email || '',
+    displayName: profile.displayName || profile.email || uidValue,
+    role: 'player',
+    joinedAt: Date.now(),
   };
 
-  await fs.setDoc(fs.doc(fs.db, 'campaigns', campaign.id), stripUndefinedDeep(updated), { merge: true });
+  await fs.updateDoc(fs.doc(fs.db, 'campaigns', campaignId), stripUndefinedDeep({
+    playerUserIds: fs.arrayUnion(uidValue),
+    members: fs.arrayUnion(member),
+    joinInviteCode: inviteCode,
+    updatedAt: Date.now(),
+  }));
+
+  const updated = await loadCampaignById(campaignId);
+  if (!updated) throw new Error('Joined campaign, but it could not be loaded yet. Refresh and try again.');
   return updated;
 };
 
