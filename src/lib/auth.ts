@@ -47,7 +47,7 @@ const toAuthState = (user: any): AuthState => ({
   email: user.email || null,
 });
 
-async function saveUserProfile(user: any): Promise<void> {
+async function saveUserProfile(user: any, displayNameOverride?: string): Promise<void> {
   if (!user?.uid || user.isAnonymous) return;
 
   try {
@@ -62,10 +62,11 @@ async function saveUserProfile(user: any): Promise<void> {
       appId: import.meta.env.VITE_FIREBASE_APP_ID,
     });
     const db = getFirestore(app);
+    const displayName = displayNameOverride || user.displayName || user.email || 'Google User';
     await setDoc(doc(db, 'users', user.uid), {
       uid: user.uid,
       email: user.email || '',
-      displayName: user.displayName || user.email || 'Google User',
+      displayName,
       photoURL: user.photoURL || '',
       provider: 'google',
       lastLoginAt: serverTimestamp(),
@@ -172,7 +173,7 @@ export const authProvider: AuthProvider = {
       await fb.updateProfile(auth.currentUser, { displayName: newName });
       // Re-notify
       notify({ uid: auth.currentUser.uid, displayName: newName, email: auth.currentUser.email || null });
-      await saveUserProfile(auth.currentUser);
+      await saveUserProfile(auth.currentUser, newName);
     }
   },
 

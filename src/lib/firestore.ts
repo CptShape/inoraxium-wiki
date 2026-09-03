@@ -647,6 +647,66 @@ export const ensureCampaignInvite = async (campaign: CampaignData): Promise<void
   }), { merge: true });
 };
 
+const normalizeCampaign = (id: string, data: any): CampaignData => {
+  const rawDmUserIds = Array.isArray(data.dmUserIds) ? data.dmUserIds.filter(Boolean) : [];
+  const playerUserIds = Array.isArray(data.playerUserIds) ? data.playerUserIds.filter(Boolean) : [];
+  const existingMembers = Array.isArray(data.members) ? data.members.filter((member: any) => member && member.uid) : [];
+  const dmUserIds = unique(rawDmUserIds.length > 0 ? rawDmUserIds : [data.createdBy]);
+  const memberMap = new Map<string, CampaignMember>();
+  existingMembers.forEach((member: any) => {
+    const isDm = dmUserIds.includes(member.uid);
+    memberMap.set(member.uid, {
+      uid: member.uid,
+      email: member.email || '',
+      displayName: member.displayName || member.email || member.uid,
+      role: isDm ? 'dm' : 'player',
+      joinedAt: typeof member.joinedAt === 'number' ? member.joinedAt : 0,
+    });
+  });
+  dmUserIds.forEach((uidValue) => {
+    if (!memberMap.has(uidValue)) {
+      memberMap.set(uidValue, { uid: uidValue, role: 'dm', joinedAt: typeof data.createdAt === 'number' ? data.createdAt : 0 });
+    }
+  });
+  playerUserIds.forEach((uidValue) => {
+    if (!memberMap.has(uidValue)) {
+      memberMap.set(uidValue, { uid: uidValue, role: 'player', joinedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0 });
+    }
+  });
+  const members = Array.from(memberMap.values());
+
+  return {
+    id,
+    name: data.name || 'Untitled Campaign',
+    createdBy: data.createdBy || '',
+    inviteCode: data.inviteCode || '',
+    joinInviteCode: data.joinInviteCode,
+    dmUserIds,
+    playerUserIds,
+    members,
+    createdAt: typeof data.createdAt === 'number' ? data.createdAt : 0,
+    updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0,
+  };
+};
+
+const normalizeParty = (id: string, data: any): PartyData => ({
+  id,
+  campaignId: data.campaignId || '',
+  name: data.name || 'Untitled Party',
+  createdBy: data.createdBy || '',
+  visibility: data.visibility === 'public' ? 'public' : 'private',
+  characterIds: Array.isArray(data.characterIds) ? data.characterIds.filter(Boolean) : [],
+  generalItems: Array.isArray(data.generalItems) ? data.generalItems : [],
+  inventory: Array.isArray(data.inventory) ? data.inventory : [],
+  inventoryFolders: Array.isArray(data.inventoryFolders) ? data.inventoryFolders : [],
+  spells: Array.isArray(data.spells) ? data.spells : [],
+  spellFolders: Array.isArray(data.spellFolders) ? data.spellFolders : [],
+  statuses: Array.isArray(data.statuses) ? data.statuses : [],
+  statusFolders: Array.isArray(data.statusFolders) ? data.statusFolders : [],
+  createdAt: typeof data.createdAt === 'number' ? data.createdAt : 0,
+  updatedAt: typeof data.updatedAt === 'number' ? data.updatedAt : 0,
+});
+
 export const loadCampaignsForUser = async (uidValue: string | null, includeAll = false): Promise<CampaignData[]> => {
   if (!uidValue) return [];
   const fs = await getFirestore();
@@ -656,7 +716,7 @@ export const loadCampaignsForUser = async (uidValue: string | null, includeAll =
     try {
       const snap = await fs.getDocs(queryRef);
       const result: CampaignData[] = [];
-      snap.forEach((d: any) => result.push({ id: d.id, ...d.data() }));
+      snap.forEach((d: any) => result.push(normalizeCampaign(d.id, d.data())));
       return result;
     } catch (err) {
       console.error('Campaign query failed:', err);
@@ -664,17 +724,30 @@ export const loadCampaignsForUser = async (uidValue: string | null, includeAll =
     }
   };
 
-  if (includeAll) {
-    return readCampaignQuery(fs.collection(fs.db, 'campaigns'));
+  const allCampaigns = await readCampaignQuery(fs.collection(fs.db, 'campaigns'));
+  let visibleCampaigns = includeAll
+    ? allCampaigns
+    : allCampaigns.filter((campaign) => {
+      const hasMembershipData = campaign.dmUserIds.length > 0 || campaign.playerUserIds.length > 0 || campaign.members.length > 0;
+      return (
+        campaign.dmUserIds.includes(uidValue)
+        || campaign.playerUserIds.includes(uidValue)
+        || campaign.members.some((member) => member.uid === uidValue)
+        || (!hasMembershipData && campaign.createdBy === uidValue)
+      );
+    });
+
+  if (!includeAll && visibleCampaigns.length === 0) {
+    const [dmCampaigns, playerCampaigns] = await Promise.all([
+      readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('dmUserIds', 'array-contains', uidValue))),
+      readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('playerUserIds', 'array-contains', uidValue))),
+    ]);
+    const fallbackMap = new Map<string, CampaignData>();
+    [...dmCampaigns, ...playerCampaigns].forEach((campaign) => fallbackMap.set(campaign.id, campaign));
+    visibleCampaigns = Array.from(fallbackMap.values());
   }
 
-  const [dmCampaigns, playerCampaigns] = await Promise.all([
-    readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('dmUserIds', 'array-contains', uidValue))),
-    readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('playerUserIds', 'array-contains', uidValue))),
-  ]);
-  const map = new Map<string, CampaignData>();
-  [...dmCampaigns, ...playerCampaigns].forEach((campaign) => map.set(campaign.id, campaign));
-  return Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+  return visibleCampaigns.sort((a, b) => b.updatedAt - a.updatedAt);
 };
 
 export const loadCampaignById = async (campaignId: string): Promise<CampaignData | null> => {
@@ -683,7 +756,7 @@ export const loadCampaignById = async (campaignId: string): Promise<CampaignData
 
   try {
     const snapshot = await fs.getDoc(fs.doc(fs.db, 'campaigns', campaignId));
-    return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as CampaignData) : null;
+    return snapshot.exists() ? normalizeCampaign(snapshot.id, snapshot.data()) : null;
   } catch (err) {
     console.error('Failed to load campaign:', err);
     return null;
@@ -717,16 +790,40 @@ export const joinCampaignByInvite = async (
     joinedAt: Date.now(),
   };
 
-  await fs.updateDoc(fs.doc(fs.db, 'campaigns', campaignId), stripUndefinedDeep({
-    playerUserIds: fs.arrayUnion(uidValue),
-    members: fs.arrayUnion(member),
+  const campaignSnapshot = await fs.getDoc(fs.doc(fs.db, 'campaigns', campaignId));
+  if (!campaignSnapshot.exists()) {
+    throw new Error('Campaign invite points to a campaign that no longer exists.');
+  }
+
+  const campaign = normalizeCampaign(campaignSnapshot.id, campaignSnapshot.data());
+  const nextMembers = [
+    ...campaign.members.filter((existingMember) => existingMember.uid !== uidValue),
+    member,
+  ];
+  const nextCampaign: CampaignData = {
+    ...campaign,
+    playerUserIds: unique([...campaign.playerUserIds, uidValue]),
+    members: nextMembers,
     joinInviteCode: inviteCode,
     updatedAt: Date.now(),
-  }));
+  };
+
+  try {
+    await fs.setDoc(fs.doc(fs.db, 'campaigns', campaignId), stripUndefinedDeep(nextCampaign), { merge: true });
+  } catch (err) {
+    console.error('Failed to join campaign by invite:', err);
+    throw new Error('Campaign invite was found, but joining was blocked by Firestore rules. Deploy the latest firestore.rules and try again.');
+  }
 
   const updated = await loadCampaignById(campaignId);
   if (!updated) throw new Error('Joined campaign, but it could not be loaded yet. Refresh and try again.');
   return updated;
+};
+
+export const saveCampaign = async (campaign: CampaignData): Promise<void> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+  await fs.setDoc(fs.doc(fs.db, 'campaigns', campaign.id), stripUndefinedDeep({ ...campaign, updatedAt: Date.now() }), { merge: true });
 };
 
 export const createParty = async (campaignId: string, uidValue: string, name: string): Promise<PartyData> => {
@@ -770,7 +867,7 @@ export const loadPartiesForCampaign = async (
     const snap = await fs.getDocs(fs.query(fs.collection(fs.db, 'parties'), fs.where('campaignId', '==', campaignId)));
     const result: PartyData[] = [];
     snap.forEach((d: any) => {
-      const party = { id: d.id, ...d.data() } as PartyData;
+      const party = normalizeParty(d.id, d.data());
       if (isDm || party.visibility === 'public' || party.createdBy === uidValue) {
         result.push(party);
       }

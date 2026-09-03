@@ -301,6 +301,7 @@ export interface CampaignData {
   name: string;
   createdBy: string;
   inviteCode: string;
+  joinInviteCode?: string;
   dmUserIds: string[];
   playerUserIds: string[];
   members: CampaignMember[];

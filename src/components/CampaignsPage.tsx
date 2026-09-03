@@ -11,11 +11,14 @@ import {
   loadCampaignsForUser,
   loadCharacters,
   loadPartiesForCampaign,
+  loadUserProfiles,
+  saveCampaign,
   saveCharacter,
   saveParty,
 } from '../lib/firestore';
 import {
   CampaignData,
+  CampaignMember,
   CharacterData,
   CharacterGeneralItem,
   CharacterInventoryItem,
@@ -23,6 +26,7 @@ import {
   CharacterStatus,
   PartyData,
 } from '../types/character';
+import type { UserProfile } from '../lib/firestore';
 
 type PartyTab = 'characters' | 'inventory' | 'spells' | 'statuses';
 type PartyEntrySource = 'general-item' | 'inventory-item' | 'spell' | 'status';
@@ -53,6 +57,10 @@ const openHomebrewCharacterSheet = (characterId: string) => {
   window.open(targetUrl, '_blank', 'noopener,noreferrer');
 };
 
+const isUidLikeLabel = (value?: string | null) => (
+  !!value && /^[A-Za-z0-9]{20,}$/.test(value) && !value.includes('@')
+);
+
 const CampaignsPage: React.FC = () => {
   const [authState, setAuthState] = useState<AuthState>({ uid: null, displayName: null, email: null });
   const [isAdmin, setIsAdmin] = useState(false);
@@ -61,11 +69,13 @@ const CampaignsPage: React.FC = () => {
   const [parties, setParties] = useState<PartyData[]>([]);
   const [selectedPartyId, setSelectedPartyId] = useState<string | null>(null);
   const [characters, setCharacters] = useState<CharacterData[]>([]);
+  const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
   const [newCampaignName, setNewCampaignName] = useState('');
   const [newPartyName, setNewPartyName] = useState('');
   const [partyTab, setPartyTab] = useState<PartyTab>('characters');
   const [statusMessage, setStatusMessage] = useState('');
   const [isBusy, setIsBusy] = useState(false);
+  const [selectedMemberUid, setSelectedMemberUid] = useState<string | null>(null);
 
   useEffect(() => authProvider.onAuthChange(setAuthState), []);
 
@@ -80,8 +90,16 @@ const CampaignsPage: React.FC = () => {
   }, [authState.uid, authState.email]);
 
   const selectedCampaign = campaigns.find((campaign) => campaign.id === selectedCampaignId) || null;
-  const isSelectedCampaignDm = !!authState.uid && !!selectedCampaign && (isAdmin || selectedCampaign.dmUserIds.includes(authState.uid));
+  const selectedCampaignDmUserIds = selectedCampaign?.dmUserIds || [];
+  const selectedCampaignMembers = selectedCampaign?.members || [];
+  const userProfileByUid = useMemo(() => {
+    const map = new Map<string, UserProfile>();
+    userProfiles.forEach((profile) => map.set(profile.uid, profile));
+    return map;
+  }, [userProfiles]);
+  const isSelectedCampaignDm = !!authState.uid && !!selectedCampaign && (isAdmin || selectedCampaignDmUserIds.includes(authState.uid));
   const selectedParty = parties.find((party) => party.id === selectedPartyId) || null;
+  const selectedMember = selectedCampaignMembers.find((member) => member.uid === selectedMemberUid) || null;
 
   const refreshCampaigns = async () => {
     if (!authState.uid) {
@@ -110,11 +128,11 @@ const CampaignsPage: React.FC = () => {
     joinCampaignByInvite(invite.campaignId, invite.inviteCode, authState.uid, authState)
       .then((campaign) => {
         setStatusMessage(`Joined "${campaign.name}" as player.`);
+        setCampaigns((current) => [campaign, ...current.filter((item) => item.id !== campaign.id)]);
         setSelectedCampaignId(campaign.id);
         const url = new URL(window.location.href);
         url.searchParams.delete('campaignInvite');
         window.history.replaceState(null, '', `${url.pathname}${url.search}#tools/campaigns`);
-        return refreshCampaigns();
       })
       .catch((error) => {
         console.error(error);
@@ -151,6 +169,17 @@ const CampaignsPage: React.FC = () => {
     });
   }, [authState.uid, isAdmin]);
 
+  useEffect(() => {
+    if (!authState.uid) {
+      setUserProfiles([]);
+      return;
+    }
+    loadUserProfiles().then(setUserProfiles).catch((error) => {
+      console.error(error);
+      setStatusMessage('User profiles could not be loaded.');
+    });
+  }, [authState.uid]);
+
   const addableCharacters = characters.filter((character) => (
     selectedParty
     && !selectedParty.characterIds.includes(character.id)
@@ -173,6 +202,75 @@ const CampaignsPage: React.FC = () => {
     || character.userId === authState.uid
     || (!!authState.uid && (character.controlUserIds || []).includes(authState.uid))
   ));
+
+  const getMemberDisplay = (member: CampaignMember) => {
+    const profile = userProfileByUid.get(member.uid);
+    const profileDisplayName = profile?.displayName && !isUidLikeLabel(profile.displayName) ? profile.displayName : '';
+    const memberDisplayName = member.displayName && !isUidLikeLabel(member.displayName) ? member.displayName : '';
+    return {
+      displayName: profileDisplayName || memberDisplayName || profile?.email || member.email || member.uid,
+      email: profile?.email || member.email || member.uid,
+    };
+  };
+
+  const persistSelectedCampaign = async (nextCampaign: CampaignData, message: string) => {
+    await saveCampaign(nextCampaign);
+    setCampaigns((current) => current.map((campaign) => campaign.id === nextCampaign.id ? nextCampaign : campaign));
+    setStatusMessage(message);
+  };
+
+  const updateCampaignMemberRole = async (memberUid: string, nextRole: 'dm' | 'player') => {
+    if (!selectedCampaign) return;
+    const dmIds = selectedCampaignDmUserIds;
+    const targetIsDm = dmIds.includes(memberUid);
+    if (nextRole === 'player' && targetIsDm && dmIds.length <= 1) {
+      setStatusMessage('A campaign must always have at least one DM.');
+      return;
+    }
+
+    const nextCampaign: CampaignData = {
+      ...selectedCampaign,
+      dmUserIds: nextRole === 'dm'
+        ? Array.from(new Set([...dmIds, memberUid]))
+        : dmIds.filter((uidValue) => uidValue !== memberUid),
+      playerUserIds: nextRole === 'dm'
+        ? (selectedCampaign.playerUserIds || []).filter((uidValue) => uidValue !== memberUid)
+        : Array.from(new Set([...(selectedCampaign.playerUserIds || []), memberUid])),
+      members: selectedCampaignMembers.map((member) => (
+        member.uid === memberUid ? { ...member, role: nextRole } : member
+      )),
+      updatedAt: Date.now(),
+    };
+
+    await persistSelectedCampaign(nextCampaign, nextRole === 'dm' ? 'User was granted DM.' : 'DM role was removed.');
+    setSelectedMemberUid(null);
+  };
+
+  const removeCampaignMember = async (memberUid: string) => {
+    if (!selectedCampaign) return;
+    const targetIsDm = selectedCampaignDmUserIds.includes(memberUid);
+    if (targetIsDm && selectedCampaignDmUserIds.length <= 1) {
+      setStatusMessage('A campaign must always have at least one DM.');
+      return;
+    }
+
+    const leavingSelf = memberUid === authState.uid;
+    const nextCampaign: CampaignData = {
+      ...selectedCampaign,
+      dmUserIds: selectedCampaignDmUserIds.filter((uidValue) => uidValue !== memberUid),
+      playerUserIds: (selectedCampaign.playerUserIds || []).filter((uidValue) => uidValue !== memberUid),
+      members: selectedCampaignMembers.filter((member) => member.uid !== memberUid),
+      updatedAt: Date.now(),
+    };
+
+    await persistSelectedCampaign(nextCampaign, leavingSelf ? 'You left the campaign.' : 'User was kicked from the campaign.');
+    setSelectedMemberUid(null);
+    if (leavingSelf) {
+      setCampaigns((current) => current.filter((campaign) => campaign.id !== selectedCampaign.id));
+      setSelectedCampaignId(null);
+      setSelectedPartyId(null);
+    }
+  };
 
   const handleCreateCampaign = async () => {
     if (!authState.uid) return;
@@ -362,6 +460,18 @@ const CampaignsPage: React.FC = () => {
     </div>
   );
 
+  const runCampaignAction = async (action: () => Promise<void>) => {
+    setIsBusy(true);
+    try {
+      await action();
+    } catch (error) {
+      console.error(error);
+      setStatusMessage(error instanceof Error ? error.message : 'Campaign action failed.');
+    } finally {
+      setIsBusy(false);
+    }
+  };
+
   if (!authState.uid) {
     return (
       <div className="rounded-2xl border border-sky-900/40 bg-black/30 p-8 text-sky-100">
@@ -372,6 +482,95 @@ const CampaignsPage: React.FC = () => {
 
   return (
     <div className="min-h-[calc(100vh-120px)] rounded-2xl border border-sky-900/40 bg-[#06111f] p-6 text-sky-50 shadow-2xl">
+      {selectedCampaign && selectedMember && (
+        <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/70 px-4">
+          <div className="w-full max-w-md rounded-2xl border border-sky-700/45 bg-[#07101d] p-5 shadow-2xl">
+            {(() => {
+              const { displayName, email } = getMemberDisplay(selectedMember);
+              const targetIsSelf = selectedMember.uid === authState.uid;
+              const targetIsDm = selectedCampaignDmUserIds.includes(selectedMember.uid);
+              const viewerIsDm = isSelectedCampaignDm;
+              const canRemoveDm = targetIsDm && selectedCampaignDmUserIds.length > 1;
+              return (
+                <>
+                  <div className="mb-5">
+                    <p className="text-xs uppercase tracking-[0.24em] text-cyan-300/75" style={{ fontFamily: "'Cinzel', serif" }}>Campaign User</p>
+                    <h3 className="mt-2 text-2xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{displayName}</h3>
+                    <p className="text-sm text-sky-100/55">{email}</p>
+                    {targetIsDm && selectedCampaignDmUserIds.length <= 1 && (
+                      <p className="mt-3 rounded-lg border border-amber-600/35 bg-amber-950/25 px-3 py-2 text-xs text-amber-100">
+                        This is the only DM. A campaign cannot be left without a DM.
+                      </p>
+                    )}
+                  </div>
+
+                  <div className="grid gap-2">
+                    {targetIsSelf && !viewerIsDm && (
+                      <button
+                        onClick={() => runCampaignAction(() => removeCampaignMember(selectedMember.uid))}
+                        disabled={isBusy}
+                        className="rounded-xl border border-red-700/50 bg-red-950/30 px-4 py-3 text-sm font-bold text-red-100 hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-45"
+                      >
+                        Leave Campaign
+                      </button>
+                    )}
+
+                    {targetIsSelf && viewerIsDm && (
+                      <>
+                        <button
+                          onClick={() => runCampaignAction(() => updateCampaignMemberRole(selectedMember.uid, 'player'))}
+                          disabled={isBusy || !canRemoveDm}
+                          className="rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 text-sm font-bold text-amber-100 hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          Remove DM
+                        </button>
+                        <button
+                          onClick={() => runCampaignAction(() => removeCampaignMember(selectedMember.uid))}
+                          disabled={isBusy || (targetIsDm && selectedCampaignDmUserIds.length <= 1)}
+                          className="rounded-xl border border-red-700/50 bg-red-950/30 px-4 py-3 text-sm font-bold text-red-100 hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          Leave Campaign
+                        </button>
+                      </>
+                    )}
+
+                    {!targetIsSelf && viewerIsDm && (
+                      <>
+                        <button
+                          onClick={() => runCampaignAction(() => updateCampaignMemberRole(selectedMember.uid, targetIsDm ? 'player' : 'dm'))}
+                          disabled={isBusy || (targetIsDm && !canRemoveDm)}
+                          className="rounded-xl border border-amber-700/50 bg-amber-950/30 px-4 py-3 text-sm font-bold text-amber-100 hover:bg-amber-900/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          {targetIsDm ? 'Remove DM' : 'Grant DM'}
+                        </button>
+                        <button
+                          onClick={() => runCampaignAction(() => removeCampaignMember(selectedMember.uid))}
+                          disabled={isBusy || (targetIsDm && selectedCampaignDmUserIds.length <= 1)}
+                          className="rounded-xl border border-red-700/50 bg-red-950/30 px-4 py-3 text-sm font-bold text-red-100 hover:bg-red-900/40 disabled:cursor-not-allowed disabled:opacity-45"
+                        >
+                          Kick Player
+                        </button>
+                      </>
+                    )}
+
+                    {!targetIsSelf && !viewerIsDm && (
+                      <p className="rounded-xl border border-sky-800/40 bg-black/25 p-4 text-sm text-sky-100/60">
+                        Only campaign DMs can manage other users.
+                      </p>
+                    )}
+                    <button
+                      onClick={() => setSelectedMemberUid(null)}
+                      className="rounded-xl border border-sky-800/45 bg-black/30 px-4 py-3 text-sm text-sky-100 hover:bg-sky-900/30"
+                    >
+                      Close
+                    </button>
+                  </div>
+                </>
+              );
+            })()}
+          </div>
+        </div>
+      )}
       <div className="mb-6 rounded-2xl border border-sky-800/35 bg-black/40 p-5">
         <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80" style={{ fontFamily: "'Cinzel', serif" }}>Inoraxium Tools</p>
         <h2 className="mt-2 text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Campaigns</h2>
@@ -410,7 +609,7 @@ const CampaignsPage: React.FC = () => {
                 <div key={campaign.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-900/35 bg-black/25 p-4">
                   <div>
                     <h4 className="font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{campaign.name}</h4>
-                    <p className="text-xs text-sky-100/45">{campaign.dmUserIds.includes(authState.uid!) ? 'DM' : 'Player'} • {campaign.members.length} users</p>
+                    <p className="text-xs text-sky-100/45">{(campaign.dmUserIds || []).includes(authState.uid!) ? 'DM' : 'Player'} • {(campaign.members || []).length} users</p>
                   </div>
                   <button onClick={() => setSelectedCampaignId(campaign.id)} className="rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-sm text-amber-100 hover:bg-amber-900/40">
                     Load
@@ -468,17 +667,24 @@ const CampaignsPage: React.FC = () => {
           <aside className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
             <h3 className="mb-4 text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>User List</h3>
             <div className="space-y-2">
-              {selectedCampaign.members.map((member) => (
-                <div key={member.uid} className="flex items-center justify-between gap-3 rounded-xl border border-sky-900/30 bg-black/25 p-3">
-                  <div className="min-w-0">
-                    <p className="truncate font-bold text-sky-100">{member.displayName || member.email || member.uid}</p>
-                    <p className="truncate text-xs text-sky-100/45">{member.email || member.uid}</p>
-                  </div>
-                  <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${member.role === 'dm' ? 'border-amber-600/50 text-amber-200' : 'border-sky-700/50 text-sky-200'}`}>
-                    {member.role === 'dm' ? <Crown size={12} /> : <Eye size={12} />} {member.role}
-                  </span>
-                </div>
-              ))}
+              {selectedCampaignMembers.map((member) => {
+                const { displayName, email } = getMemberDisplay(member);
+                return (
+                  <button
+                    key={member.uid}
+                    onClick={() => setSelectedMemberUid(member.uid)}
+                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-sky-900/30 bg-black/25 p-3 text-left transition-all hover:border-cyan-500/55 hover:bg-cyan-950/20"
+                  >
+                    <div className="min-w-0">
+                      <p className="truncate font-bold text-sky-100">{displayName}</p>
+                      <p className="truncate text-xs text-sky-100/45">{email}</p>
+                    </div>
+                    <span className={`inline-flex items-center gap-1 rounded-full border px-2 py-1 text-xs ${member.role === 'dm' ? 'border-amber-600/50 text-amber-200' : 'border-sky-700/50 text-sky-200'}`}>
+                      {member.role === 'dm' ? <Crown size={12} /> : <Eye size={12} />} {member.role}
+                    </span>
+                  </button>
+                );
+              })}
             </div>
           </aside>
         </div>
