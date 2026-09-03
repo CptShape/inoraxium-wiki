@@ -9,6 +9,7 @@ import { WorldMap } from './WorldMap';
 import Characters from './Characters';
 import AssetCreatorPage from './AssetCreatorPage';
 import SessionPage from './SessionPage';
+import CampaignsPage from './CampaignsPage';
 
 interface WorkspaceFolderNode {
   id: string;
@@ -661,6 +662,13 @@ export const ContentView: React.FC<ContentViewProps> = ({
             </div>
           ) : null}
 
+          {/* ── Campaigns Module (special chapter) ───────────────────────── */}
+          {activeChapter.content === 'campaigns' ? (
+            <div className="-mx-4 -mb-6">
+              <CampaignsPage />
+            </div>
+          ) : null}
+
           {/* ── Asset Creator (special chapter) ───────────────────────────── */}
           {activeChapter.content === 'asset-creator' ? (
             <div className="-mx-4 -mb-6">
@@ -669,7 +677,7 @@ export const ContentView: React.FC<ContentViewProps> = ({
           ) : null}
 
           {/* ── Markdown content ───────────────────────────────────────────── */}
-          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'session' && activeChapter.content !== 'asset-creator' && (
+          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'session' && activeChapter.content !== 'campaigns' && activeChapter.content !== 'asset-creator' && (
             <div style={{ fontFamily: "'IM Fell English', serif" }}>
               <MarkdownRenderer
                 path={activeChapter.content}

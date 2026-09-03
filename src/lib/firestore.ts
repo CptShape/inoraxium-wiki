@@ -1,4 +1,14 @@
-import { CharacterData, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem } from '../types/character';
+import {
+  CampaignData,
+  CampaignMember,
+  CharacterData,
+  CharacterEntryFolder,
+  CharacterGeneralItem,
+  CharacterInventoryItem,
+  CharacterSpell,
+  CharacterStatus,
+  PartyData,
+} from '../types/character';
 
 export interface UserProfile {
   uid: string;
@@ -114,6 +124,17 @@ const hasAdminPermission = (value: unknown): boolean => {
     : [];
   return permissions.includes('admin');
 };
+
+const uid = (prefix = '') => `${prefix}${Math.random().toString(36).slice(2, 10)}`;
+
+const unique = (values: Array<string | null | undefined>): string[] => (
+  Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
+);
+
+const cloneWithId = <T extends { id: string }>(entry: T, prefix: string): T => ({
+  ...(JSON.parse(JSON.stringify(entry)) as T),
+  id: uid(prefix),
+});
 
 export const loadAdminAccess = async (uid: string | null, email?: string | null): Promise<AdminAccess> => {
   if (!uid) return { isAdmin: false, source: null };
@@ -566,4 +587,243 @@ export const saveUserDiceSettings = async (userId: string | null, settings: User
   } catch (err) {
     console.error('Failed to save user dice settings to Firestore:', err);
   }
+};
+
+export const createCampaign = async (
+  uidValue: string,
+  profile: { email?: string | null; displayName?: string | null },
+  name: string,
+): Promise<CampaignData> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+
+  const id = uid('camp_');
+  const now = Date.now();
+  const member: CampaignMember = {
+    uid: uidValue,
+    email: profile.email || '',
+    displayName: profile.displayName || profile.email || uidValue,
+    role: 'dm',
+    joinedAt: now,
+  };
+  const campaign: CampaignData = {
+    id,
+    name: name.trim() || 'Untitled Campaign',
+    createdBy: uidValue,
+    inviteCode: uid('invite_'),
+    dmUserIds: [uidValue],
+    playerUserIds: [],
+    members: [member],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await fs.setDoc(fs.doc(fs.db, 'campaigns', id), stripUndefinedDeep(campaign));
+  return campaign;
+};
+
+export const loadCampaignsForUser = async (uidValue: string | null, includeAll = false): Promise<CampaignData[]> => {
+  if (!uidValue) return [];
+  const fs = await getFirestore();
+  if (!fs) return [];
+
+  const readCampaignQuery = async (queryRef: any): Promise<CampaignData[]> => {
+    try {
+      const snap = await fs.getDocs(queryRef);
+      const result: CampaignData[] = [];
+      snap.forEach((d: any) => result.push({ id: d.id, ...d.data() }));
+      return result;
+    } catch (err) {
+      console.error('Campaign query failed:', err);
+      return [];
+    }
+  };
+
+  if (includeAll) {
+    return readCampaignQuery(fs.collection(fs.db, 'campaigns'));
+  }
+
+  const [dmCampaigns, playerCampaigns] = await Promise.all([
+    readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('dmUserIds', 'array-contains', uidValue))),
+    readCampaignQuery(fs.query(fs.collection(fs.db, 'campaigns'), fs.where('playerUserIds', 'array-contains', uidValue))),
+  ]);
+  const map = new Map<string, CampaignData>();
+  [...dmCampaigns, ...playerCampaigns].forEach((campaign) => map.set(campaign.id, campaign));
+  return Array.from(map.values()).sort((a, b) => b.updatedAt - a.updatedAt);
+};
+
+export const loadCampaignById = async (campaignId: string): Promise<CampaignData | null> => {
+  const fs = await getFirestore();
+  if (!fs) return null;
+
+  try {
+    const snapshot = await fs.getDoc(fs.doc(fs.db, 'campaigns', campaignId));
+    return snapshot.exists() ? ({ id: snapshot.id, ...snapshot.data() } as CampaignData) : null;
+  } catch (err) {
+    console.error('Failed to load campaign:', err);
+    return null;
+  }
+};
+
+export const joinCampaignByInvite = async (
+  campaignId: string,
+  inviteCode: string,
+  uidValue: string,
+  profile: { email?: string | null; displayName?: string | null },
+): Promise<CampaignData> => {
+  const campaign = await loadCampaignById(campaignId);
+  if (!campaign || campaign.inviteCode !== inviteCode) {
+    throw new Error('Campaign invite is invalid or expired.');
+  }
+
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+
+  const existingMember = campaign.members.find((member) => member.uid === uidValue);
+  const members = existingMember
+    ? campaign.members
+    : [
+        ...campaign.members,
+        {
+          uid: uidValue,
+          email: profile.email || '',
+          displayName: profile.displayName || profile.email || uidValue,
+          role: 'player' as const,
+          joinedAt: Date.now(),
+        },
+      ];
+  const updated: CampaignData = {
+    ...campaign,
+    playerUserIds: unique([...campaign.playerUserIds, uidValue].filter((id) => !campaign.dmUserIds.includes(id))),
+    members,
+    updatedAt: Date.now(),
+  };
+
+  await fs.setDoc(fs.doc(fs.db, 'campaigns', campaign.id), stripUndefinedDeep(updated), { merge: true });
+  return updated;
+};
+
+export const createParty = async (campaignId: string, uidValue: string, name: string): Promise<PartyData> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+
+  const id = uid('party_');
+  const now = Date.now();
+  const party: PartyData = {
+    id,
+    campaignId,
+    name: name.trim() || 'Untitled Party',
+    createdBy: uidValue,
+    visibility: 'private',
+    characterIds: [],
+    generalItems: [],
+    inventory: [],
+    inventoryFolders: [],
+    spells: [],
+    spellFolders: [],
+    statuses: [],
+    statusFolders: [],
+    createdAt: now,
+    updatedAt: now,
+  };
+
+  await fs.setDoc(fs.doc(fs.db, 'parties', id), stripUndefinedDeep(party));
+  return party;
+};
+
+export const loadPartiesForCampaign = async (
+  campaignId: string,
+  uidValue: string | null,
+  isDm = false,
+): Promise<PartyData[]> => {
+  if (!uidValue) return [];
+  const fs = await getFirestore();
+  if (!fs) return [];
+
+  try {
+    const snap = await fs.getDocs(fs.query(fs.collection(fs.db, 'parties'), fs.where('campaignId', '==', campaignId)));
+    const result: PartyData[] = [];
+    snap.forEach((d: any) => {
+      const party = { id: d.id, ...d.data() } as PartyData;
+      if (isDm || party.visibility === 'public' || party.createdBy === uidValue) {
+        result.push(party);
+      }
+    });
+    return result.sort((a, b) => b.updatedAt - a.updatedAt);
+  } catch (err) {
+    console.error('Failed to load campaign parties:', err);
+    return [];
+  }
+};
+
+export const loadPartiesForCharacterTransfer = async (
+  uidValue: string | null,
+  characterId: string,
+  includeAll = false,
+): Promise<Array<{ campaign: CampaignData; party: PartyData }>> => {
+  if (!uidValue) return [];
+  const campaigns = await loadCampaignsForUser(uidValue, includeAll);
+  const result: Array<{ campaign: CampaignData; party: PartyData }> = [];
+
+  for (const campaign of campaigns) {
+    const isDm = includeAll || campaign.dmUserIds.includes(uidValue);
+    const parties = await loadPartiesForCampaign(campaign.id, uidValue, isDm);
+    parties.forEach((party) => {
+      if (party.characterIds.includes(characterId)) {
+        result.push({ campaign, party });
+      }
+    });
+  }
+
+  return result.sort((a, b) => a.campaign.name.localeCompare(b.campaign.name) || a.party.name.localeCompare(b.party.name));
+};
+
+export const saveParty = async (party: PartyData): Promise<void> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+  await fs.setDoc(fs.doc(fs.db, 'parties', party.id), stripUndefinedDeep({ ...party, updatedAt: Date.now() }), { merge: true });
+};
+
+export const addCharacterToParty = async (party: PartyData, characterId: string): Promise<PartyData> => {
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Firestore is not available.');
+
+  const campaign = await loadCampaignById(party.campaignId);
+  const nextParty: PartyData = {
+    ...party,
+    characterIds: unique([...party.characterIds, characterId]),
+    updatedAt: Date.now(),
+  };
+
+  await fs.setDoc(fs.doc(fs.db, 'parties', party.id), stripUndefinedDeep(nextParty), { merge: true });
+
+  if (campaign?.dmUserIds?.length) {
+    const charSnapshot = await fs.getDoc(fs.doc(fs.db, 'characters', characterId));
+    if (charSnapshot.exists()) {
+      const character = { id: charSnapshot.id, ...charSnapshot.data() } as CharacterData;
+      const nextViewUserIds = unique([...(character.viewUserIds || []), ...campaign.dmUserIds].filter((id) => id !== character.userId));
+      await fs.setDoc(fs.doc(fs.db, 'characters', characterId), { viewUserIds: nextViewUserIds }, { merge: true });
+    }
+  }
+
+  return nextParty;
+};
+
+export const addEntryToPartyInventory = async (
+  party: PartyData,
+  kind: 'item' | 'spell' | 'status',
+  entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
+): Promise<PartyData> => {
+  const nextParty: PartyData = { ...party, updatedAt: Date.now() };
+
+  if (kind === 'item') {
+    nextParty.generalItems = [...(party.generalItems || []), cloneWithId(entry as CharacterGeneralItem | CharacterInventoryItem, 'party_item_') as CharacterGeneralItem];
+  } else if (kind === 'spell') {
+    nextParty.spells = [...(party.spells || []), cloneWithId(entry as CharacterSpell, 'party_spell_')];
+  } else {
+    nextParty.statuses = [...(party.statuses || []), cloneWithId(entry as CharacterStatus, 'party_status_')];
+  }
+
+  await saveParty(nextParty);
+  return nextParty;
 };

@@ -4,6 +4,7 @@ import { ContentView } from './components/ContentView';
 import { VisualPageEditor } from './components/VisualPageEditor';
 import { HomebrewViewer, HomebrewViewerEntityType } from './components/HomebrewViewer';
 import { HomebrewLibraryViewer, HomebrewLibraryCategory } from './components/HomebrewLibraryViewer';
+import { HomebrewCharacterSheetViewer } from './components/HomebrewCharacterSheetViewer';
 import { gameSystems } from './data/gameSystems';
 import { Chapter, GameSystemId } from './types';
 
@@ -62,6 +63,10 @@ interface HomebrewLibraryRoute {
   characterId: string;
 }
 
+interface HomebrewCharacterSheetRoute {
+  characterId: string;
+}
+
 function App() {
   const [currentSystem, setCurrentSystem] = useState<GameSystemId>('inoraxium');
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -73,6 +78,7 @@ function App() {
   const [isEditorOpen, setIsEditorOpen] = useState(false);
   const [homebrewViewerRoute, setHomebrewViewerRoute] = useState<HomebrewViewerRoute | null>(null);
   const [homebrewLibraryRoute, setHomebrewLibraryRoute] = useState<HomebrewLibraryRoute | null>(null);
+  const [homebrewCharacterSheetRoute, setHomebrewCharacterSheetRoute] = useState<HomebrewCharacterSheetRoute | null>(null);
 
   const systemDefinition = gameSystems[currentSystem];
   const chapters = systemDefinition.chapters;
@@ -118,6 +124,7 @@ function App() {
     setIsEditorOpen(false);
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
+    setHomebrewCharacterSheetRoute(null);
     setActiveChapterId(chapterId);
 
     // If a full path is provided (from ContentView card click or timeline event), use it
@@ -156,6 +163,7 @@ function App() {
     setIsEditorOpen(false);
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
+    setHomebrewCharacterSheetRoute(null);
     setActiveChapterId(null);
     setBreadcrumb([]);
     setBreadcrumbPath([]);
@@ -176,6 +184,7 @@ function App() {
     if (path.length === 0) {
       setHomebrewViewerRoute(null);
       setHomebrewLibraryRoute(null);
+      setHomebrewCharacterSheetRoute(null);
       setActiveChapterId(null);
       setBreadcrumb([]);
       setBreadcrumbPath([]);
@@ -195,6 +204,7 @@ function App() {
       if (isSupportedEntity && characterId && entryId) {
         setHomebrewViewerRoute({ entityType, characterId, entryId });
         setHomebrewLibraryRoute(null);
+        setHomebrewCharacterSheetRoute(null);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Viewer']);
         setBreadcrumbPath(path);
@@ -214,6 +224,7 @@ function App() {
       if (isSupportedCategory && characterId) {
         setHomebrewViewerRoute(null);
         setHomebrewLibraryRoute({ category, characterId });
+        setHomebrewCharacterSheetRoute(null);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Library']);
         setBreadcrumbPath(path);
@@ -221,8 +232,23 @@ function App() {
       }
     }
 
+    if (path[0] === 'homebrew-character-sheet') {
+      const characterId = path[1] ? decodeURIComponent(path[1]) : '';
+
+      if (characterId) {
+        setHomebrewViewerRoute(null);
+        setHomebrewLibraryRoute(null);
+        setHomebrewCharacterSheetRoute({ characterId });
+        setActiveChapterId(null);
+        setBreadcrumb(['Homebrew Character Sheet']);
+        setBreadcrumbPath(path);
+        return;
+      }
+    }
+
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
+    setHomebrewCharacterSheetRoute(null);
 
     const targetId = path[path.length - 1];
     const chapter = findChapterById(allChapters, targetId);
@@ -268,6 +294,7 @@ function App() {
         setBreadcrumbPath([]);
         setHomebrewViewerRoute(null);
         setHomebrewLibraryRoute(null);
+        setHomebrewCharacterSheetRoute(null);
         clearHash();
       }
     }
@@ -334,6 +361,7 @@ function App() {
           setIsEditorOpen(false);
           setHomebrewViewerRoute(null);
           setHomebrewLibraryRoute(null);
+          setHomebrewCharacterSheetRoute(null);
           setActiveChapterId(null);
           setBreadcrumb([]);
           setBreadcrumbPath([]);
@@ -342,6 +370,9 @@ function App() {
         breadcrumb={breadcrumb}
         onOpenEditor={() => {
           setIsEditorOpen(true);
+          setHomebrewViewerRoute(null);
+          setHomebrewLibraryRoute(null);
+          setHomebrewCharacterSheetRoute(null);
           clearHash();
         }}
         isEditorOpen={isEditorOpen}
@@ -359,6 +390,11 @@ function App() {
         <HomebrewLibraryViewer
           category={homebrewLibraryRoute.category}
           characterId={homebrewLibraryRoute.characterId}
+          onBack={() => window.history.back()}
+        />
+      ) : homebrewCharacterSheetRoute ? (
+        <HomebrewCharacterSheetViewer
+          characterId={homebrewCharacterSheetRoute.characterId}
           onBack={() => window.history.back()}
         />
       ) : (

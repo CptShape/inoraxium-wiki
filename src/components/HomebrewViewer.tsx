@@ -22,6 +22,7 @@ type ViewerEntry =
 const statusDurationLabels: Record<string, string> = {
   custom: 'Custom',
   round: 'Round',
+  battle: 'Battle',
   'short-rest': 'Short Rest',
   'long-rest': 'Long Rest',
   minute: 'Minute',
@@ -55,6 +56,18 @@ const getEntityMeta = (kind: HomebrewViewerEntityType) => {
       return { label: 'Status', icon: <FlaskConical size={18} />, accent: '#b45309' };
   }
 };
+
+const getHomebrewImageUrl = (entry: ViewerEntry['entry']): string => (
+  'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
+    ? entry.homebrewImageUrl
+    : ''
+);
+
+const getHomebrewImageThumbUrl = (entry: ViewerEntry['entry']): string => (
+  'homebrewImageThumbUrl' in entry && typeof entry.homebrewImageThumbUrl === 'string'
+    ? entry.homebrewImageThumbUrl
+    : getHomebrewImageUrl(entry)
+);
 
 const renderActionBlock = (action: CharacterAction) => (
   <div
@@ -267,6 +280,18 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
             </article>
 
             <aside className="space-y-6">
+              {getHomebrewImageThumbUrl(viewerEntry.entry) && (
+                <section className={`${viewerSectionClass} overflow-hidden p-0`}>
+                  <a href={getHomebrewImageUrl(viewerEntry.entry) || getHomebrewImageThumbUrl(viewerEntry.entry)} target="_blank" rel="noreferrer">
+                    <img
+                      src={getHomebrewImageThumbUrl(viewerEntry.entry)}
+                      alt={viewerEntry.entry.name || meta.label}
+                      className="max-h-[420px] w-full object-cover"
+                    />
+                  </a>
+                </section>
+              )}
+
               <section className={viewerSectionClass}>
                 <h2 className="mb-4 text-2xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
                   Homebrew Details

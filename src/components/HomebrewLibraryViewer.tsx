@@ -1,6 +1,15 @@
 import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BookOpen, FolderOpen, Layers3, Shield, Sparkles } from 'lucide-react';
-import { CharacterData, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CharacterStatus } from '../types/character';
+import { ArrowLeft, BookOpen, FolderOpen, ImageIcon, Layers3, Search, Shield, Sparkles } from 'lucide-react';
+import {
+  CharacterAction,
+  CharacterData,
+  CharacterEntryFolder,
+  CharacterGeneralItem,
+  CharacterInventoryItem,
+  CharacterSpell,
+  CharacterStatus,
+  StatusEffect,
+} from '../types/character';
 import { loadCharacterById } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 
@@ -12,17 +21,30 @@ interface HomebrewLibraryViewerProps {
   onBack?: () => void;
 }
 
-interface FolderGroup<T> {
+type LibraryEntry =
+  | { kind: 'general-item'; entry: CharacterGeneralItem; folderLabel: string; folderId?: string | null; folderColor?: string }
+  | { kind: 'inventory-item'; entry: CharacterInventoryItem; folderLabel: string; folderId?: string | null; folderColor?: string }
+  | { kind: 'spell'; entry: CharacterSpell; folderLabel: string; folderId?: string | null; folderColor?: string }
+  | { kind: 'status'; entry: CharacterStatus; folderLabel: string; folderId?: string | null; folderColor?: string };
+
+interface FolderGroup {
   key: string;
   label: string;
   depth: number;
   color?: string;
-  entries: T[];
+  entries: LibraryEntry[];
+}
+
+interface LibraryFilterTab {
+  id: string;
+  label: string;
+  color?: string;
 }
 
 const statusDurationLabels: Record<string, string> = {
   custom: 'Custom',
   round: 'Round',
+  battle: 'Battle',
   'short-rest': 'Short Rest',
   'long-rest': 'Long Rest',
   minute: 'Minute',
@@ -52,74 +74,183 @@ const categoryMeta: Record<HomebrewLibraryCategory, { title: string; subtitle: s
     icon: <Layers3 size={18} />,
   },
   inventory: {
-    title: 'Inventory Library',
-    subtitle: 'Organized item listing with folder structure, rarity, quantity, and quick links.',
+    title: 'Inventory',
+    subtitle: 'Character inventory with item images, folders, rarity, quantity, and quick details.',
     accent: '#7c4b1f',
     icon: <Shield size={18} />,
   },
   statuses: {
-    title: 'Statuses Library',
+    title: 'Statuses',
     subtitle: 'Condition cards for the current character, collected into one browseable board.',
     accent: '#b45309',
     icon: <Sparkles size={18} />,
   },
   spells: {
-    title: 'Spells & Abilities Library',
+    title: 'Spells',
     subtitle: 'Folder-organized spell cards for quick browsing and handoff.',
     accent: '#6b21a8',
     icon: <BookOpen size={18} />,
   },
 };
 
-const openViewerTab = (entityType: 'general-item' | 'inventory-item' | 'spell' | 'status', characterId: string, entryId: string) => {
-  const targetUrl = `${window.location.origin}${window.location.pathname}#homebrew-viewer/${entityType}/${encodeURIComponent(characterId)}/${encodeURIComponent(entryId)}`;
-  window.open(targetUrl, '_blank', 'noopener,noreferrer');
+const rarityColors: Record<string, string> = {
+  common: '#78716c',
+  uncommon: '#16a34a',
+  rare: '#2563eb',
+  epic: '#9333ea',
+  legendary: '#d97706',
+  mythical: '#dc2626',
+  unique: '#0891b2',
 };
 
-const buildFolderGroups = <T extends { folderId?: string | null }>(
-  entries: T[],
-  folders: CharacterEntryFolder[],
-): FolderGroup<T>[] => {
-  const buildPath = (folderId: string | null | undefined) => {
-    if (!folderId) return { key: 'root', label: 'Unfoldered', depth: 0, color: undefined };
+const getEntryName = (entry: LibraryEntry) => entry.entry.name || 'Unnamed Entry';
 
-    const segments: CharacterEntryFolder[] = [];
-    let current = folders.find((folder) => folder.id === folderId) || null;
-    while (current) {
-      const currentFolder: CharacterEntryFolder = current;
-      segments.unshift(currentFolder);
-      current = currentFolder.parentId ? folders.find((folder) => folder.id === currentFolder.parentId) || null : null;
-    }
+const getEntryAccentColor = (entry: LibraryEntry): string => {
+  if (entry.kind === 'spell') return entry.entry.color || '#6b21a8';
+  if (entry.kind === 'status') return entry.entry.color || '#b45309';
+  if ('rarity' in entry.entry) return rarityColors[entry.entry.rarity || 'common'] || rarityColors.common;
+  return '#9a6a31';
+};
 
-    return {
-      key: folderId,
-      label: segments.map((segment) => segment.name || 'Untitled Folder').join(' / '),
-      depth: Math.max(0, segments.length - 1),
-      color: segments[segments.length - 1]?.color,
-    };
+const getEntryImageUrl = (entry: LibraryEntry['entry']): string => (
+  'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
+    ? entry.homebrewImageUrl
+    : ''
+);
+
+const getEntryThumbUrl = (entry: LibraryEntry['entry']): string => (
+  'homebrewImageThumbUrl' in entry && typeof entry.homebrewImageThumbUrl === 'string' && entry.homebrewImageThumbUrl
+    ? entry.homebrewImageThumbUrl
+    : getEntryImageUrl(entry)
+);
+
+const getFolderInfo = (folderId: string | null | undefined, folders: CharacterEntryFolder[]) => {
+  if (!folderId) return { key: 'root', label: 'Unfoldered', depth: 0, color: undefined as string | undefined };
+
+  const segments: CharacterEntryFolder[] = [];
+  let current = folders.find((folder) => folder.id === folderId) || null;
+  while (current) {
+    const currentFolder: CharacterEntryFolder = current;
+    segments.unshift(currentFolder);
+    current = currentFolder.parentId ? folders.find((folder) => folder.id === currentFolder.parentId) || null : null;
+  }
+
+  return {
+    key: folderId,
+    label: segments.map((segment) => segment.name || 'Untitled Folder').join(' / ') || 'Unfoldered',
+    depth: Math.max(0, segments.length - 1),
+    color: segments[segments.length - 1]?.color,
   };
+};
 
-  const groups = new Map<string, FolderGroup<T>>();
+const isFolderWithin = (
+  folderId: string | null | undefined,
+  targetFolderId: string,
+  folders: CharacterEntryFolder[],
+): boolean => {
+  let currentId = folderId || null;
+  while (currentId) {
+    if (currentId === targetFolderId) return true;
+    const folder = folders.find((item) => item.id === currentId);
+    currentId = folder?.parentId || null;
+  }
+  return false;
+};
+
+const getSearchHaystack = (entry: LibraryEntry): string => {
+  const base = [
+    entry.entry.name,
+    'description' in entry.entry ? entry.entry.description : '',
+    entry.folderLabel,
+  ];
+
+  if ('rarity' in entry.entry) base.push(entry.entry.rarity || '');
+  if ('level' in entry.entry) base.push(entry.entry.level || '');
+  if ('duration' in entry.entry) base.push(formatStatusDuration(entry.entry));
+
+  return base.join(' ').toLowerCase();
+};
+
+const buildFolderGroups = (entries: LibraryEntry[]): FolderGroup[] => {
+  const groups = new Map<string, FolderGroup>();
 
   entries.forEach((entry) => {
-    const path = buildPath(entry.folderId);
-    const existing = groups.get(path.key);
+    const groupKey = `${entry.folderLabel}-${entry.kind}`;
+    const existing = groups.get(groupKey);
     if (existing) {
       existing.entries.push(entry);
       return;
     }
 
-    groups.set(path.key, {
-      key: path.key,
-      label: path.label,
-      depth: path.depth,
-      color: path.color,
+    groups.set(groupKey, {
+      key: groupKey,
+      label: entry.folderLabel,
+      depth: entry.folderLabel.includes(' / ') ? entry.folderLabel.split(' / ').length - 1 : 0,
+      color: entry.folderColor,
       entries: [entry],
     });
   });
 
   return Array.from(groups.values()).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }));
 };
+
+const renderEffectPill = (effect: StatusEffect, index: number) => {
+  if (effect.effectType === 'status') {
+    return (
+      <div key={`effect-${index}`} className="rounded-xl border border-violet-900/15 bg-violet-100/40 px-3 py-2 text-sm text-stone-800">
+        <span className="font-bold text-violet-950">Status:</span> {effect.statusName || effect.targetId || 'Imported status'}
+      </div>
+    );
+  }
+
+  if (effect.effectType === 'bar-update') {
+    return (
+      <div key={`effect-${index}`} className="rounded-xl border border-sky-900/15 bg-sky-100/45 px-3 py-2 text-sm text-stone-800">
+        <span className="font-bold text-sky-950">Bar:</span> {effect.targetId || effect.barUpdateDescription || 'Target bar'} {effect.value || '0'}
+      </div>
+    );
+  }
+
+  return (
+    <div key={`effect-${index}`} className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-700/10 bg-stone-100/55 px-3 py-2 text-sm text-stone-800">
+      <span className="rounded-full border border-stone-700/15 bg-white/65 px-2 py-1 font-mono text-emerald-800">
+        {effect.targetLabel || effect.targetId || 'unknown_target'}
+      </span>
+      <span className="font-mono text-amber-900">{effect.value || '0'}</span>
+      <span className="text-xs uppercase tracking-[0.16em] text-stone-600">
+        {(effect.active ?? true) ? 'Active' : 'Inactive'}
+      </span>
+    </div>
+  );
+};
+
+const renderActionBlock = (action: CharacterAction) => (
+  <div key={action.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
+    <div className="mb-2 flex flex-wrap items-center gap-3">
+      <h4 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
+        {action.name || 'Unnamed Action'}
+      </h4>
+      {action.cost && (
+        <span className="rounded-full border border-amber-900/20 bg-amber-100/70 px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-amber-900">
+          Cost: {action.cost}
+        </span>
+      )}
+      {(action.usageRemaining || action.maxUsage) && (
+        <span className="rounded-full border border-stone-700/15 bg-stone-100/75 px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-stone-700">
+          Uses: {action.usageRemaining || '0'} / {action.maxUsage || '—'}
+        </span>
+      )}
+    </div>
+    {action.description && (
+      <p className="whitespace-pre-wrap text-[15px] leading-7 text-stone-800">{action.description}</p>
+    )}
+    {(action.effects || []).length > 0 && (
+      <div className="mt-4 space-y-2">
+        {(action.effects || []).map(renderEffectPill)}
+      </div>
+    )}
+  </div>
+);
 
 export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   category,
@@ -130,6 +261,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [character, setCharacter] = useState<CharacterData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
+  const [activeFilterId, setActiveFilterId] = useState('all');
+  const [searchTerm, setSearchTerm] = useState('');
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
 
@@ -164,129 +298,273 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
   const meta = categoryMeta[category];
 
-  const content = useMemo(() => {
-    if (!character) return null;
+  useEffect(() => {
+    setActiveFilterId('all');
+    setSearchTerm('');
+    setSelectedEntryKey(null);
+  }, [category, characterId]);
+
+  const entries = useMemo<LibraryEntry[]>(() => {
+    if (!character) return [];
 
     if (category === 'general-items') {
-      return {
-        groups: [
-          {
-            key: 'general-items',
-            label: 'General Items',
-            depth: 0,
-            color: '#9a6a31',
-            entries: character.generalItems || [],
-          },
-        ],
-      };
+      return (character.generalItems || []).map((entry) => ({
+        kind: 'general-item',
+        entry,
+        folderLabel: 'General Items',
+        folderId: null,
+        folderColor: '#9a6a31',
+      }));
     }
 
     if (category === 'inventory') {
-      return {
-        groups: buildFolderGroups<CharacterInventoryItem>(character.inventory || [], character.inventoryFolders || []),
-      };
+      const generalEntries: LibraryEntry[] = (character.generalItems || []).map((entry) => ({
+        kind: 'general-item',
+        entry,
+        folderLabel: 'General Items',
+        folderId: null,
+        folderColor: '#9a6a31',
+      }));
+      const inventoryEntries: LibraryEntry[] = (character.inventory || []).map((entry) => {
+        const folder = getFolderInfo(entry.folderId, character.inventoryFolders || []);
+        return { kind: 'inventory-item', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+      });
+      return [...generalEntries, ...inventoryEntries];
     }
 
     if (category === 'spells') {
-      return {
-        groups: buildFolderGroups<CharacterSpell>(character.spells || [], character.spellFolders || []),
-      };
+      return (character.spells || []).map((entry) => {
+        const folder = getFolderInfo(entry.folderId, character.spellFolders || []);
+        return { kind: 'spell', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+      });
     }
 
-    return {
-      groups: [
-        {
-          key: 'statuses',
-          label: 'Statuses',
-          depth: 0,
-          color: '#b45309',
-          entries: character.statuses || [],
-        },
-      ],
-    };
+    return (character.statuses || []).map((entry) => {
+      const folder = getFolderInfo(entry.folderId, character.statusFolders || []);
+      return { kind: 'status', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+    });
   }, [category, character]);
 
-  const renderCard = (entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus) => {
-    if (category === 'general-items') {
-      const item = entry as CharacterGeneralItem;
-      return (
-        <button
-          key={item.id}
-          onClick={() => openViewerTab('general-item', characterId, item.id)}
-          className="rounded-xl border border-amber-900/15 bg-white/55 px-4 py-3 text-left shadow-sm hover:bg-white/75 hover:border-amber-700/40 cursor-pointer"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>{item.name || 'Unnamed Item'}</h3>
-            <span className="rounded-full border border-amber-900/15 bg-amber-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-900">
-              x{item.quantity}
-            </span>
-          </div>
-          <div className="mt-2 text-sm text-stone-700">{item.rarity || 'common'}</div>
-        </button>
-      );
-    }
+  const filterTabs = useMemo<LibraryFilterTab[]>(() => {
+    if (!character) return [{ id: 'all', label: 'All', color: meta.accent }];
+
+    const tabs: LibraryFilterTab[] = [{ id: 'all', label: 'All', color: meta.accent }];
 
     if (category === 'inventory') {
-      const item = entry as CharacterInventoryItem;
-      return (
-        <button
-          key={item.id}
-          onClick={() => openViewerTab('inventory-item', characterId, item.id)}
-          className="rounded-xl border border-amber-900/15 bg-white/55 px-4 py-3 text-left shadow-sm hover:bg-white/75 hover:border-amber-700/40 cursor-pointer"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>{item.name || 'Unnamed Item'}</h3>
-            <span className="rounded-full border border-amber-900/15 bg-amber-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-900">
-              x{item.quantity}
-            </span>
-          </div>
-          <div className="mt-2 flex flex-wrap gap-2 text-sm text-stone-700">
-            <span>{item.rarity || 'common'}</span>
-            {item.equipped ? <span className="text-amber-900">Equipped</span> : null}
-          </div>
-        </button>
-      );
+      if ((character.generalItems || []).length > 0) {
+        tabs.push({ id: 'general-items', label: 'General Items', color: '#9a6a31' });
+      }
+      (character.inventoryFolders || [])
+        .filter((folder) => !folder.parentId && !folder.hidden)
+        .forEach((folder) => tabs.push({ id: `folder:${folder.id}`, label: folder.name || 'Untitled Folder', color: folder.color }));
+      if ((character.inventory || []).some((entry) => !entry.folderId)) {
+        tabs.push({ id: 'unfoldered', label: 'Unfoldered', color: '#78716c' });
+      }
+    } else if (category === 'spells') {
+      tabs.push({ id: 'unfoldered', label: 'General Spells', color: '#6b21a8' });
+      (character.spellFolders || [])
+        .filter((folder) => !folder.parentId && !folder.hidden)
+        .forEach((folder) => tabs.push({ id: `folder:${folder.id}`, label: folder.name || 'Untitled Folder', color: folder.color }));
+    } else if (category === 'statuses') {
+      tabs.push({ id: 'unfoldered', label: 'General Statuses', color: '#b45309' });
+      (character.statusFolders || [])
+        .filter((folder) => !folder.parentId && !folder.hidden)
+        .forEach((folder) => tabs.push({ id: `folder:${folder.id}`, label: folder.name || 'Untitled Folder', color: folder.color }));
     }
 
-    if (category === 'spells') {
-      const spell = entry as CharacterSpell;
-      return (
-        <button
-          key={spell.id}
-          onClick={() => openViewerTab('spell', characterId, spell.id)}
-          className="rounded-xl border border-amber-900/15 bg-white/55 px-4 py-3 text-left shadow-sm hover:bg-white/75 hover:border-amber-700/40 cursor-pointer"
-        >
-          <div className="flex items-center justify-between gap-3">
-            <h3 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>{spell.name || 'Unnamed Spell'}</h3>
-            <span className="rounded-full border border-violet-900/15 bg-violet-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-violet-900">
-              {spell.level || 'Level ?'}
-            </span>
-          </div>
-          <div className="mt-2 text-sm text-stone-700">{spell.magicSchool || 'No school'}</div>
-        </button>
-      );
-    }
+    return tabs;
+  }, [category, character, meta.accent]);
 
-    const status = entry as CharacterStatus;
+  const visibleEntries = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+    const folders =
+      category === 'inventory'
+        ? character?.inventoryFolders || []
+        : category === 'spells'
+          ? character?.spellFolders || []
+          : category === 'statuses'
+            ? character?.statusFolders || []
+            : [];
+
+    return entries.filter((entry) => {
+      if (activeFilterId === 'general-items' && entry.kind !== 'general-item') return false;
+      if (activeFilterId === 'unfoldered' && entry.folderId) return false;
+      if (activeFilterId.startsWith('folder:')) {
+        const folderId = activeFilterId.slice('folder:'.length);
+        if (entry.kind === 'general-item' || !isFolderWithin(entry.folderId, folderId, folders)) return false;
+      }
+      if (normalizedSearch && !getSearchHaystack(entry).includes(normalizedSearch)) return false;
+      return true;
+    });
+  }, [activeFilterId, category, character?.inventoryFolders, character?.spellFolders, character?.statusFolders, entries, searchTerm]);
+
+  const groups = useMemo(() => buildFolderGroups(visibleEntries), [visibleEntries]);
+
+  useEffect(() => {
+    setSelectedEntryKey((current) => {
+      if (current && visibleEntries.some((entry) => `${entry.kind}:${entry.entry.id}` === current)) return current;
+      const first = visibleEntries[0];
+      return first ? `${first.kind}:${first.entry.id}` : null;
+    });
+  }, [visibleEntries]);
+
+  const selectedEntry = visibleEntries.find((entry) => `${entry.kind}:${entry.entry.id}` === selectedEntryKey) || null;
+
+  const renderCard = (entry: LibraryEntry) => {
+    const thumbUrl = getEntryThumbUrl(entry.entry);
+    const accentColor = getEntryAccentColor(entry);
+    const isSelected = selectedEntryKey === `${entry.kind}:${entry.entry.id}`;
+    const isItem = entry.kind === 'general-item' || entry.kind === 'inventory-item';
+    const isSpell = entry.kind === 'spell';
+    const isStatus = entry.kind === 'status';
+
     return (
       <button
-        key={status.id}
-        onClick={() => openViewerTab('status', characterId, status.id)}
-        className="rounded-xl border border-amber-900/15 bg-white/55 px-4 py-3 text-left shadow-sm hover:bg-white/75 hover:border-amber-700/40 cursor-pointer"
+        key={`${entry.kind}-${entry.entry.id}`}
+        onClick={() => setSelectedEntryKey(`${entry.kind}:${entry.entry.id}`)}
+        className={`rounded-xl border px-3 py-3 text-left shadow-sm transition-all cursor-pointer ${
+          isSelected
+            ? 'bg-amber-100/80 ring-2 ring-amber-700/15'
+            : 'bg-white/55 hover:bg-white/75'
+        }`}
+        style={{
+          borderColor: `${accentColor}80`,
+          boxShadow: isSelected
+            ? `0 0 0 1px ${accentColor}55 inset, 0 12px 24px rgba(68,38,17,0.12)`
+            : `0 0 0 1px ${accentColor}18 inset, 0 8px 18px rgba(68,38,17,0.08)`,
+          backgroundImage: `linear-gradient(90deg, ${accentColor}16, transparent 42%)`,
+        }}
       >
-        <div className="flex items-center justify-between gap-3">
-          <h3 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>{status.name || 'Unnamed Status'}</h3>
-          <span className="rounded-full border border-amber-900/15 bg-amber-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em] text-amber-900">
-            {formatStatusDuration(status)}
-          </span>
+        <div className="grid grid-cols-[52px_1fr] gap-3">
+          <div
+            className="grid h-[52px] w-[52px] place-items-center overflow-hidden rounded-lg border bg-amber-100/45"
+            style={{ borderColor: `${accentColor}55`, color: accentColor }}
+          >
+            {thumbUrl ? (
+              <img src={thumbUrl} alt={getEntryName(entry)} className="h-full w-full object-cover" />
+            ) : (
+              <ImageIcon size={18} />
+            )}
+          </div>
+          <div className="min-w-0">
+            <div className="flex items-start justify-between gap-2">
+              <h3 className="truncate text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
+                {getEntryName(entry)}
+              </h3>
+              {isItem && (
+                <span
+                  className="shrink-0 rounded-full border bg-amber-100/70 px-2 py-1 text-[11px] uppercase tracking-[0.18em]"
+                  style={{ borderColor: `${accentColor}40`, color: accentColor }}
+                >
+                  x{(entry.entry as CharacterGeneralItem | CharacterInventoryItem).quantity}
+                </span>
+              )}
+            </div>
+            <div className="mt-2 flex flex-wrap gap-2 text-sm text-stone-700">
+              {isItem && <span style={{ color: accentColor }}>{(entry.entry as CharacterGeneralItem | CharacterInventoryItem).rarity || 'common'}</span>}
+              {entry.kind === 'inventory-item' && (entry.entry as CharacterInventoryItem).equipped ? <span className="text-amber-900">Equipped</span> : null}
+              {isSpell && <span>{(entry.entry as CharacterSpell).level || 'Level ?'}</span>}
+              {isStatus && <span>{formatStatusDuration(entry.entry as CharacterStatus)}</span>}
+            </div>
+          </div>
         </div>
       </button>
     );
   };
 
+  const renderDetail = () => {
+    if (!selectedEntry) {
+      return (
+        <aside className={`${sectionClass} sticky top-6 h-fit text-center text-stone-600`}>
+          Select something from the left to preview it here.
+        </aside>
+      );
+    }
+
+    const entry = selectedEntry.entry;
+    const imageUrl = getEntryImageUrl(entry);
+    const thumbUrl = getEntryThumbUrl(entry);
+
+    return (
+      <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto`}>
+        {thumbUrl && (
+          <a href={imageUrl || thumbUrl} target="_blank" rel="noreferrer" className="mb-5 block overflow-hidden rounded-2xl border border-amber-900/20 bg-amber-100/45">
+            <img src={thumbUrl} alt={getEntryName(selectedEntry)} className="max-h-[460px] w-full object-cover" />
+          </a>
+        )}
+
+        <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-900/20 bg-amber-100/60 px-3 py-1 text-xs uppercase tracking-[0.24em] text-amber-950">
+          {selectedEntry.kind.replace('-', ' ')}
+        </div>
+        <h2 className="text-4xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
+          {getEntryName(selectedEntry)}
+        </h2>
+
+        {'description' in entry && entry.description ? (
+          <p className="mt-4 whitespace-pre-wrap rounded-xl border border-amber-900/15 bg-white/35 p-4 text-[16px] leading-8 text-stone-800">
+            {entry.description}
+          </p>
+        ) : (
+          <p className="mt-4 rounded-xl border border-dashed border-amber-900/15 bg-white/25 p-4 text-stone-600">
+            No description has been written for this entry yet.
+          </p>
+        )}
+
+        <section className="mt-5 rounded-xl border border-amber-900/15 bg-black/5 p-4">
+          <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Details</h3>
+          <div className="space-y-2 text-[15px] leading-7 text-stone-800">
+            <div><span className="font-bold text-amber-950">Folder:</span> {selectedEntry.folderLabel}</div>
+            {'quantity' in entry && <div><span className="font-bold text-amber-950">Quantity:</span> {entry.quantity}</div>}
+            {'rarity' in entry && entry.rarity && <div><span className="font-bold text-amber-950">Rarity:</span> {entry.rarity}</div>}
+            {'equipped' in entry && <div><span className="font-bold text-amber-950">Equipped:</span> {entry.equipped ? 'Yes' : 'No'}</div>}
+            {'level' in entry && <div><span className="font-bold text-amber-950">Level:</span> {entry.level || '—'}</div>}
+            {'resourceCost' in entry && <div><span className="font-bold text-amber-950">Cost:</span> {entry.resourceCost || '—'}</div>}
+            {'usageRemaining' in entry && (
+              <div><span className="font-bold text-amber-950">Usage:</span> {entry.usageRemaining || '—'}{'totalUsage' in entry ? ` / ${entry.totalUsage || '—'}` : ''}</div>
+            )}
+            {'duration' in entry && <div><span className="font-bold text-amber-950">Duration:</span> {formatStatusDuration(entry)}</div>}
+            {'active' in entry && <div><span className="font-bold text-amber-950">Active:</span> {entry.active === false ? 'No' : 'Yes'}</div>}
+          </div>
+        </section>
+
+        {'actions' in entry && (entry.actions || []).length > 0 && (
+          <section className="mt-5">
+            <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Actions</h3>
+            <div className="space-y-3">
+              {(entry.actions || []).map(renderActionBlock)}
+            </div>
+          </section>
+        )}
+
+        {'effects' in entry && (entry.effects || []).length > 0 && (
+          <section className="mt-5">
+            <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Effects</h3>
+            <div className="space-y-2">
+              {(entry.effects || []).map(renderEffectPill)}
+            </div>
+          </section>
+        )}
+
+        {'macros' in entry && (entry.macros || []).length > 0 && (
+          <section className="mt-5">
+            <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Macros</h3>
+            <div className="space-y-3">
+              {(entry.macros || []).map((macro) => (
+                <div key={macro.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-3">
+                  <div className="font-bold text-amber-950">{macro.name || 'Unnamed Macro'}</div>
+                  <code className="mt-1 block whitespace-pre-wrap break-words text-sm text-emerald-800">{macro.formula}</code>
+                </div>
+              ))}
+            </div>
+          </section>
+        )}
+      </aside>
+    );
+  };
+
   return (
-    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 text-stone-900" style={parchmentBackground}>
-      <div className="mx-auto max-w-6xl">
+    <div className="flex-1 overflow-y-auto bg-[#efe2bd] px-4 py-6 text-stone-900 xl:px-6" style={parchmentBackground}>
+      <div className="mx-auto w-full max-w-none 2xl:max-w-[1900px]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
             onClick={() => (onBack ? onBack() : window.history.back())}
@@ -304,8 +582,6 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <div className={`${sectionClass} text-center text-lg text-stone-700`}>Loading homebrew library...</div>
         ) : error ? (
           <div className={`${sectionClass} text-center text-lg text-rose-900`}>{error}</div>
-        ) : !content ? (
-          <div className={`${sectionClass} text-center text-lg text-stone-700`}>Nothing to show here yet.</div>
         ) : (
           <div className="space-y-6">
             <section className={`${sectionClass} relative overflow-hidden`}>
@@ -321,26 +597,72 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
               <p className="mt-3 text-[16px] leading-8 text-stone-800">{meta.subtitle}</p>
             </section>
 
-            {content.groups.map((group) => (
-              <section key={group.key} className={sectionClass}>
-                <div
-                  className="mb-4 flex items-center gap-2 text-amber-950"
-                  style={{ paddingLeft: `${group.depth * 18}px` }}
-                >
-                  <FolderOpen size={18} style={{ color: group.color || meta.accent }} />
-                  <h2 className="text-2xl" style={{ fontFamily: "'Cinzel', serif" }}>{group.label}</h2>
-                </div>
-                {group.entries.length === 0 ? (
-                  <div className="rounded-xl border border-dashed border-amber-900/15 bg-white/25 px-4 py-6 text-center text-stone-600">
-                    No entries in this section yet.
+            {(filterTabs.length > 1 || category === 'inventory' || category === 'spells') && (
+              <div className="sticky top-4 z-20 rounded-2xl border border-stone-950/20 bg-stone-950/88 p-3 shadow-[0_16px_34px_rgba(68,38,17,0.22)] backdrop-blur-md">
+                <div className="flex flex-wrap items-center gap-3">
+                  <div className="flex min-w-0 flex-1 flex-wrap gap-2 py-0.5">
+                    {filterTabs.map((tab) => {
+                      const isActive = activeFilterId === tab.id;
+                      return (
+                        <button
+                          key={tab.id}
+                          onClick={() => setActiveFilterId(tab.id)}
+                          className={`shrink-0 rounded-xl border px-4 py-2 text-sm font-bold leading-none tracking-wide transition-all cursor-pointer ${
+                            isActive
+                              ? 'bg-white/10 text-amber-50 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
+                              : 'bg-black/25 text-stone-300 hover:bg-white/10 hover:text-amber-100'
+                          }`}
+                          style={{
+                            borderColor: tab.color || meta.accent,
+                            boxShadow: isActive ? `0 0 0 1px ${tab.color || meta.accent}55 inset` : undefined,
+                            fontFamily: "'Cinzel', serif",
+                          }}
+                        >
+                          {tab.label}
+                        </button>
+                      );
+                    })}
                   </div>
-                ) : (
-                  <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+
+                  {(category === 'inventory' || category === 'spells') && (
+                    <label className="flex min-w-[240px] flex-1 items-center gap-2 rounded-xl border border-amber-900/25 bg-black/35 px-3 py-2 text-sm text-amber-100 md:max-w-sm">
+                      <Search size={16} className="shrink-0 text-amber-300/75" />
+                      <input
+                        value={searchTerm}
+                        onChange={(event) => setSearchTerm(event.target.value)}
+                        placeholder={`Search ${category === 'inventory' ? 'items' : 'spells'}...`}
+                        className="min-w-0 flex-1 bg-transparent text-amber-50 placeholder:text-stone-500 focus:outline-none"
+                      />
+                    </label>
+                  )}
+                </div>
+              </div>
+            )}
+
+            <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_460px] 2xl:grid-cols-[minmax(0,1fr)_520px]">
+              <main className="space-y-6">
+
+              {groups.length === 0 ? (
+                <section className={`${sectionClass} text-center text-lg text-stone-700`}>
+                  {entries.length === 0 ? 'Nothing to show here yet.' : 'No entries match this filter.'}
+                </section>
+              ) : groups.map((group) => (
+                <section key={group.key} className={sectionClass}>
+                  <div
+                    className="mb-4 flex items-center gap-2 text-amber-950"
+                    style={{ paddingLeft: `${group.depth * 18}px` }}
+                  >
+                    <FolderOpen size={18} style={{ color: group.color || meta.accent }} />
+                    <h2 className="text-2xl" style={{ fontFamily: "'Cinzel', serif" }}>{group.label}</h2>
+                  </div>
+                  <div className="grid gap-4 lg:grid-cols-2">
                     {group.entries.map((entry) => renderCard(entry))}
                   </div>
-                )}
-              </section>
-            ))}
+                </section>
+              ))}
+            </main>
+            {renderDetail()}
+          </div>
           </div>
         )}
       </div>

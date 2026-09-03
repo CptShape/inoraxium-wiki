@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, SkillAttribute, StatusEffect } from '../types/character';
+import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload } from 'lucide-react';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 
 function evalCharFormula(formula: string, context: Record<string, number>, localContext: Record<string, number> = {}): number {
@@ -28,9 +28,10 @@ function evalCharFormula(formula: string, context: Record<string, number>, local
     return 0;
   }
 }
-import { loadAdminAccess, loadCharacters, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore, loadUserProfiles, transferCharacterOwner, UserProfile } from '../lib/firestore';
+import { addEntryToPartyInventory, loadAdminAccess, loadCharacters, loadPartiesForCharacterTransfer, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore, loadUserProfiles, transferCharacterOwner, UserProfile } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { addCombatantToBattleTracker } from '../lib/battleTracker';
+import { uploadImageToPixhost } from '../lib/pixhost';
 
 interface RollStep {
   label: string;
@@ -316,6 +317,8 @@ const normalizeLocalVariables = (variables?: CharacterLocalVariable[]): Characte
 const normalizeGeneralItem = (item: CharacterGeneralItem): CharacterGeneralItem => ({
   ...item,
   description: item.description || '',
+  homebrewImageUrl: item.homebrewImageUrl || '',
+  homebrewImageThumbUrl: item.homebrewImageThumbUrl || '',
   quantity: Number.isFinite(item.quantity) ? item.quantity : 1,
   status: item.status || (item.equipped ? 'equipped' : 'unequipped'),
   rarity: item.rarity || 'common',
@@ -628,6 +631,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [collapsedSpellFolders, setCollapsedSpellFolders] = useState<string[]>([]);
   const [expandedSpellDescriptions, setExpandedSpellDescriptions] = useState<string[]>([]);
   const [expandedSpellActionDescriptions, setExpandedSpellActionDescriptions] = useState<string[]>([]);
+  const [homebrewImageUploadTarget, setHomebrewImageUploadTarget] = useState<{ type: 'general-item' | 'inventory-item' | 'spell'; id: string } | null>(null);
+  const [homebrewImageUploadingId, setHomebrewImageUploadingId] = useState<string | null>(null);
+  const [partyTransferTarget, setPartyTransferTarget] = useState<{
+    kind: 'item' | 'spell' | 'status';
+    entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus;
+  } | null>(null);
+  const [partyTransferOptions, setPartyTransferOptions] = useState<Array<{ campaignName: string; party: PartyData }>>([]);
+  const [isLoadingPartyTransferOptions, setIsLoadingPartyTransferOptions] = useState(false);
   const [expandedBackstory, setExpandedBackstory] = useState(false);
   const [expandedNotes, setExpandedNotes] = useState(false);
   const [showPortraitPicker, setShowPortraitPicker] = useState(false);
@@ -663,6 +674,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const backstoryRef = useRef<HTMLTextAreaElement | null>(null);
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const attributeImportInputRef = useRef<HTMLInputElement | null>(null);
+  const homebrewImageInputRef = useRef<HTMLInputElement | null>(null);
   const historyCloseTimeoutRef = useRef<number | null>(null);
 
   // ── Auth & Data ──────────────────────────────────────────────────────────────
@@ -1779,6 +1791,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         id: `inv_${uid()}`,
         name: 'New Item',
         description: '',
+        homebrewImageUrl: '',
+        homebrewImageThumbUrl: '',
         quantity: 1,
         status: 'unequipped',
         rarity: 'common',
@@ -2623,6 +2637,49 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     window.open(targetUrl, '_blank', 'noopener,noreferrer');
   };
 
+  const openHomebrewCharacterSheet = () => {
+    if (!selectedCharacter?.id) return;
+    const targetUrl = `${window.location.origin}${window.location.pathname}#homebrew-character-sheet/${encodeURIComponent(selectedCharacter.id)}`;
+    window.open(targetUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  const openSendToParty = async (
+    kind: 'item' | 'spell' | 'status',
+    entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
+  ) => {
+    if (!selectedCharacter?.id || !userId || userId === 'guest') {
+      window.alert('Sign in first to send entries to a party.');
+      return;
+    }
+    setPartyTransferTarget({ kind, entry });
+    setPartyTransferOptions([]);
+    setIsLoadingPartyTransferOptions(true);
+    try {
+      const options = await loadPartiesForCharacterTransfer(userId, selectedCharacter.id, isAdmin);
+      setPartyTransferOptions(options.map(({ campaign, party }) => ({ campaignName: campaign.name, party })));
+    } catch (error) {
+      console.error(error);
+      window.alert(error instanceof Error ? error.message : 'Could not load parties.');
+    } finally {
+      setIsLoadingPartyTransferOptions(false);
+    }
+  };
+
+  const sendEntryToParty = async (party: PartyData) => {
+    if (!partyTransferTarget) return;
+    try {
+      await addEntryToPartyInventory(party, partyTransferTarget.kind, partyTransferTarget.entry);
+      setPartyTransferTarget(null);
+      setPartyTransferOptions([]);
+      setSheetSyncStatus({ tone: 'success', message: `${partyTransferTarget.entry.name || 'Entry'} copied to ${party.name}.` });
+    } catch (error) {
+      console.error(error);
+      const message = error instanceof Error ? error.message : 'Could not send this entry to party.';
+      setSheetSyncStatus({ tone: 'error', message });
+      window.alert(message);
+    }
+  };
+
   const toggleInventoryActionDescription = (actionId: string) => {
     setExpandedInventoryActionDescriptions(prev => (
       prev.includes(actionId) ? prev.filter(id => id !== actionId) : [...prev, actionId]
@@ -3115,6 +3172,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     id: `gen_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Item',
     description: typeof entry.description === 'string' ? entry.description : '',
+    homebrewImageUrl: typeof entry.homebrewImageUrl === 'string' ? entry.homebrewImageUrl : '',
+    homebrewImageThumbUrl: typeof entry.homebrewImageThumbUrl === 'string' ? entry.homebrewImageThumbUrl : '',
     quantity: Number.isFinite(entry.quantity) ? Number(entry.quantity) : 1,
     status: typeof entry.status === 'string' ? entry.status : (entry.equipped ? 'equipped' : 'unequipped'),
     rarity: entry.rarity || 'common',
@@ -3136,6 +3195,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     id: `sp_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Spell',
     description: typeof entry.description === 'string' ? entry.description : '',
+    homebrewImageUrl: typeof entry.homebrewImageUrl === 'string' ? entry.homebrewImageUrl : '',
+    homebrewImageThumbUrl: typeof entry.homebrewImageThumbUrl === 'string' ? entry.homebrewImageThumbUrl : '',
     level: typeof entry.level === 'string' ? entry.level : '',
     resourceCost: typeof entry.resourceCost === 'string' ? entry.resourceCost : '',
     usageRemaining: typeof entry.usageRemaining === 'string' ? entry.usageRemaining : '',
@@ -3543,6 +3604,107 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     input.click();
   };
 
+  const chooseHomebrewImage = (type: 'general-item' | 'inventory-item' | 'spell', id: string) => {
+    if (!isCharacterOwner && !canEditInventory) return;
+    setHomebrewImageUploadTarget({ type, id });
+    homebrewImageInputRef.current?.click();
+  };
+
+  const clearHomebrewImage = (type: 'general-item' | 'inventory-item' | 'spell', id: string) => {
+    if (!isCharacterOwner && !canEditInventory) return;
+    if (type === 'general-item') {
+      updateGeneralItem(id, current => ({ ...current, homebrewImageUrl: '', homebrewImageThumbUrl: '' }));
+    } else if (type === 'inventory-item') {
+      updateInventoryItem(id, current => ({ ...current, homebrewImageUrl: '', homebrewImageThumbUrl: '' }));
+    } else {
+      updateSpell(id, current => ({ ...current, homebrewImageUrl: '', homebrewImageThumbUrl: '' }));
+    }
+  };
+
+  const handleHomebrewImageSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    const target = homebrewImageUploadTarget;
+    setHomebrewImageUploadTarget(null);
+    if (!file || !target) return;
+
+    setHomebrewImageUploadingId(`${target.type}:${target.id}`);
+    try {
+      const upload = await uploadImageToPixhost(file);
+      if (target.type === 'general-item') {
+        updateGeneralItem(target.id, current => ({ ...current, homebrewImageUrl: upload.showUrl, homebrewImageThumbUrl: upload.thumbUrl }));
+      } else if (target.type === 'inventory-item') {
+        updateInventoryItem(target.id, current => ({ ...current, homebrewImageUrl: upload.showUrl, homebrewImageThumbUrl: upload.thumbUrl }));
+      } else {
+        updateSpell(target.id, current => ({ ...current, homebrewImageUrl: upload.showUrl, homebrewImageThumbUrl: upload.thumbUrl }));
+      }
+      setSheetSyncStatus({ tone: 'success', message: `Homebrew image uploaded for ${upload.name}. Save the character to keep it in Firestore.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Image upload failed.';
+      setSheetSyncStatus({ tone: 'error', message });
+      window.alert(message);
+    } finally {
+      setHomebrewImageUploadingId(null);
+    }
+  };
+
+  const renderHomebrewImageControls = (
+    type: 'general-item' | 'inventory-item' | 'spell',
+    id: string,
+    imageUrl?: string,
+    thumbUrl?: string,
+    canEdit = true,
+  ) => {
+    const isUploading = homebrewImageUploadingId === `${type}:${id}`;
+    return (
+      <div className="rounded-lg border border-sky-800/15 bg-black/20 p-3">
+        <div className="flex flex-wrap items-center justify-between gap-3">
+          <div className="min-w-0">
+            <label className="text-sm font-bold text-stone-300">Homebrew Image</label>
+            <p className="mt-0.5 truncate text-xs text-stone-500">
+              {imageUrl ? imageUrl : 'Only shown on the Homebrew Viewer page.'}
+            </p>
+          </div>
+          <div className="flex flex-wrap items-center gap-2">
+            {imageUrl && (
+              <a
+                href={imageUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="rounded border border-sky-800/40 px-2 py-1 text-xs text-sky-300 hover:bg-sky-900/20"
+              >
+                Open
+              </a>
+            )}
+            {canEdit && (
+              <>
+                <button
+                  onClick={() => chooseHomebrewImage(type, id)}
+                  disabled={isUploading}
+                  className="inline-flex items-center gap-1 rounded border border-cyan-800/40 px-2 py-1 text-xs text-cyan-300 hover:bg-cyan-900/20 disabled:opacity-50"
+                >
+                  <Upload size={12} /> {isUploading ? 'Uploading...' : imageUrl ? 'Replace' : 'Upload Image'}
+                </button>
+                {imageUrl && (
+                  <button
+                    onClick={() => clearHomebrewImage(type, id)}
+                    disabled={isUploading}
+                    className="rounded border border-red-800/40 px-2 py-1 text-xs text-red-300 hover:bg-red-900/20 disabled:opacity-50"
+                  >
+                    Clear
+                  </button>
+                )}
+              </>
+            )}
+          </div>
+        </div>
+        {thumbUrl && (
+          <p className="mt-2 truncate text-[11px] text-stone-600">Thumbnail: {thumbUrl}</p>
+        )}
+      </div>
+    );
+  };
+
   const importScriptConditionStatus = (scriptId: string, conditionId: string) => {
     if (!isCharacterOwner) return;
 
@@ -3881,6 +4043,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         id: `spell_${uid()}`,
         name: 'New Spell',
         description: '',
+        homebrewImageUrl: '',
+        homebrewImageThumbUrl: '',
         level: 'Cantrip',
         resourceCost: '1 AP',
         usageRemaining: '',
@@ -6760,6 +6924,56 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           onChange={handleImportAttributePresetFile}
           className="hidden"
         />
+        <input
+          ref={homebrewImageInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+          onChange={handleHomebrewImageSelected}
+          className="hidden"
+        />
+        {partyTransferTarget && (
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
+            <div className="w-full max-w-lg rounded-2xl border border-sky-800/45 bg-stone-950 p-5 shadow-2xl">
+              <div className="mb-4 flex items-start justify-between gap-3">
+                <div>
+                  <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Send to Party</h3>
+                  <p className="mt-1 text-sm text-stone-400">
+                    Copy "{partyTransferTarget.entry.name || 'Entry'}" to one of this character's parties.
+                  </p>
+                </div>
+                <button
+                  onClick={() => setPartyTransferTarget(null)}
+                  className="rounded-lg border border-stone-700/60 p-2 text-stone-400 hover:text-sky-100"
+                >
+                  <X size={16} />
+                </button>
+              </div>
+              {isLoadingPartyTransferOptions ? (
+                <p className="rounded-xl border border-sky-900/40 bg-black/25 p-4 text-sky-100/70">Loading parties...</p>
+              ) : partyTransferOptions.length === 0 ? (
+                <p className="rounded-xl border border-dashed border-sky-900/40 bg-black/25 p-4 text-sky-100/50">
+                  This character is not in any party yet.
+                </p>
+              ) : (
+                <div className="space-y-2">
+                  {partyTransferOptions.map(({ campaignName, party }) => (
+                    <button
+                      key={party.id}
+                      onClick={() => sendEntryToParty(party)}
+                      className="flex w-full items-center justify-between gap-3 rounded-xl border border-sky-900/40 bg-black/30 p-3 text-left hover:border-cyan-500/50 hover:bg-cyan-950/20"
+                    >
+                      <span>
+                        <span className="block font-bold text-sky-100">{party.name}</span>
+                        <span className="text-xs text-sky-100/45">{campaignName} • {party.visibility}</span>
+                      </span>
+                      <span className="text-sm text-cyan-200">Send</span>
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          </div>
+        )}
         <div className="sticky top-3 z-30 mb-6 border border-amber-700/40 bg-stone-950/88 backdrop-blur-md rounded-2xl px-4 py-3 shadow-[0_12px_30px_rgba(0,0,0,0.32)]">
           <div className="flex flex-wrap justify-between items-center gap-3">
           {embeddedMode ? (
@@ -7217,6 +7431,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               </div>
               <h2 className="text-3xl font-bold text-amber-200 mb-1 text-center" style={{ fontFamily: "'Cinzel', serif" }}>{editName}</h2>
               <p className="text-amber-500/70 text-lg mb-4 italic text-center">{editRace} • {editClass}</p>
+              <div className="mb-5 flex justify-center">
+                <button
+                  onClick={openHomebrewCharacterSheet}
+                  className="inline-flex items-center gap-2 rounded-lg border border-cyan-700/45 bg-cyan-950/30 px-4 py-2 text-sm font-bold text-cyan-100 hover:border-cyan-400/60 hover:bg-cyan-900/45 cursor-pointer"
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  <Share2 size={15} /> Share Web
+                </button>
+              </div>
 
               {showPortraitPicker && isCharacterOwner && (
                 <div className="mb-6 border border-amber-800/20 bg-stone-950/60 rounded-xl p-4">
@@ -8856,6 +9079,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                           >
                             Export
                           </button>
+                          <button
+                            onClick={() => openSendToParty('status', status)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-cyan-300 hover:text-cyan-200 border border-cyan-800/30 rounded hover:bg-cyan-900/20 cursor-pointer"
+                          >
+                            Send to Party
+                          </button>
                           {isCharacterOwner && (
                             <>
                               <button
@@ -9245,6 +9474,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                   >
                                     Export
                                   </button>
+                                  <button
+                                    onClick={() => openSendToParty('item', itemState)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-cyan-300 hover:text-cyan-200 border border-cyan-800/30 rounded hover:bg-cyan-900/20 cursor-pointer"
+                                  >
+                                    Send to Party
+                                  </button>
                                   {canEditInventory ? (
                                     <>
                                       <button
@@ -9358,6 +9593,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                     </button>
                                   </div>
                                 </div>
+                                {renderHomebrewImageControls(
+                                  'general-item',
+                                  item.id,
+                                  itemState.homebrewImageUrl,
+                                  itemState.homebrewImageThumbUrl,
+                                  canEditInventory
+                                )}
                                 {renderLocalVariablesEditor(
                                   itemState.localVariables,
                                   () => addGeneralLocalVariable(item.id),
@@ -9685,6 +9927,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               >
                                 Export
                               </button>
+                              <button
+                                onClick={() => openSendToParty('item', item)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-cyan-300 hover:text-cyan-200 border border-cyan-800/30 rounded hover:bg-cyan-900/20 cursor-pointer"
+                              >
+                                Send to Party
+                              </button>
                               {canEditInventory ? (
                                 <>
                                   <button
@@ -9804,6 +10052,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               </button>
                             </div>
                           </div>
+
+                          {renderHomebrewImageControls(
+                            'inventory-item',
+                            item.id,
+                            item.homebrewImageUrl,
+                            item.homebrewImageThumbUrl,
+                            canEditInventory
+                          )}
 
                           {renderLocalVariablesEditor(
                             item.localVariables,
@@ -10297,6 +10553,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               >
                                 Export
                               </button>
+                              <button
+                                onClick={() => openSendToParty('spell', spell)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-cyan-300 hover:text-cyan-200 border border-cyan-800/30 rounded hover:bg-cyan-900/20 cursor-pointer"
+                              >
+                                Send to Party
+                              </button>
                               {isCharacterOwner && (
                                 <>
                                   <button
@@ -10389,6 +10651,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               {expandedSpellDescriptions.includes(spell.id) ? 'Show More' : 'Hide'}
                             </button>
                           </div>
+
+                          {renderHomebrewImageControls(
+                            'spell',
+                            spell.id,
+                            spell.homebrewImageUrl,
+                            spell.homebrewImageThumbUrl,
+                            isCharacterOwner
+                          )}
 
                           <div className="flex flex-wrap gap-3 items-end">
                             {renderActionField('Cost', (

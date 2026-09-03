@@ -98,6 +98,8 @@ export interface CharacterSpell {
   id: string;
   name: string;
   description: string;
+  homebrewImageUrl?: string;
+  homebrewImageThumbUrl?: string;
   level: string;
   resourceCost: string;
   usageRemaining: string;
@@ -117,6 +119,8 @@ export interface CharacterGeneralItem {
   id: string;
   name: string;
   description: string;
+  homebrewImageUrl?: string;
+  homebrewImageThumbUrl?: string;
   quantity: number;
   status: string;
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical' | 'unique';
@@ -132,6 +136,8 @@ export interface CharacterInventoryItem {
   id: string;
   name: string;
   description: string;
+  homebrewImageUrl?: string;
+  homebrewImageThumbUrl?: string;
   quantity: number;
   status: string;
   rarity?: 'common' | 'uncommon' | 'rare' | 'epic' | 'legendary' | 'mythical' | 'unique';
@@ -278,4 +284,44 @@ export interface FavoriteRecord {
   userId: string;
   characterId: string;
   /** Firestore doc id is `${userId}_${characterId}` */
+}
+
+export type CampaignRole = 'dm' | 'player';
+
+export interface CampaignMember {
+  uid: string;
+  email?: string;
+  displayName?: string;
+  role: CampaignRole;
+  joinedAt: number;
+}
+
+export interface CampaignData {
+  id: string;
+  name: string;
+  createdBy: string;
+  inviteCode: string;
+  dmUserIds: string[];
+  playerUserIds: string[];
+  members: CampaignMember[];
+  createdAt: number;
+  updatedAt: number;
+}
+
+export interface PartyData {
+  id: string;
+  campaignId: string;
+  name: string;
+  createdBy: string;
+  visibility: 'private' | 'public';
+  characterIds: string[];
+  generalItems?: CharacterGeneralItem[];
+  inventory?: CharacterInventoryItem[];
+  inventoryFolders?: CharacterEntryFolder[];
+  spells?: CharacterSpell[];
+  spellFolders?: CharacterEntryFolder[];
+  statuses?: CharacterStatus[];
+  statusFolders?: CharacterEntryFolder[];
+  createdAt: number;
+  updatedAt: number;
 }
