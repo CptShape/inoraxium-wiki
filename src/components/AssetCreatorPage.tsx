@@ -12,6 +12,7 @@ import type {
   CharacterStatusDurationType,
   StatusEffect,
 } from '../types/character';
+import { exportJsonWithChoice, importJsonTextWithChoice } from '../lib/jsonTransfer';
 
 type AssetKind = 'item' | 'spell' | 'status' | 'macro';
 
@@ -62,18 +63,6 @@ const safeExportFileName = (name: string, suffix: string) => (
   `${(name || 'asset').replace(/[^a-z0-9-_]+/gi, '_').replace(/^_+|_+$/g, '').toLowerCase() || 'asset'}-${suffix}.json`
 );
 
-const downloadJsonFile = (data: unknown, fileName: string) => {
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const link = document.createElement('a');
-  link.href = url;
-  link.download = fileName;
-  document.body.appendChild(link);
-  link.click();
-  document.body.removeChild(link);
-  URL.revokeObjectURL(url);
-};
-
 const createEffect = (): StatusEffect => ({
   id: `eff_${uid()}`,
   effectType: 'attribute',
@@ -109,10 +98,11 @@ const createMacro = (): CharacterDiceMacro => ({
   formula: '1d20',
 });
 
-const createLocalVariable = (): CharacterLocalVariable => ({
+const createLocalVariable = (kind: CharacterLocalVariable['kind'] = 'variable'): CharacterLocalVariable => ({
   id: `local_${uid()}`,
   description: '',
   value: '0',
+  kind,
 });
 
 const createAction = (): CharacterAction => ({
@@ -217,6 +207,7 @@ const normalizeImportedLocalVariable = (variable: Partial<CharacterLocalVariable
   id: importString(variable.id, `local_${uid()}`),
   description: importString(variable.description, ''),
   value: importString(variable.value, '0'),
+  kind: variable.kind === 'input' ? 'input' : 'variable',
 });
 
 const normalizeImportedAction = (action: Partial<CharacterAction> = {}): CharacterAction => ({
@@ -318,24 +309,18 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
     onChange(effects.map((effect, effectIndex) => (effectIndex === index ? { ...effect, ...patch } : effect)));
   };
 
-  const importStatusEffect = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
-        if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
-          throw new Error('Please import a status export JSON file.');
-        }
-        onChange([...effects, createStatusApplyEffect(parsed.entry as Partial<CharacterStatus>)]);
-      } catch (err: unknown) {
-        window.alert(err instanceof Error ? err.message : 'Status import failed.');
+  const importStatusEffect = async () => {
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+        throw new Error('Please import a status export JSON file.');
       }
-    };
-    input.click();
+      onChange([...effects, createStatusApplyEffect(parsed.entry as Partial<CharacterStatus>)]);
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Status import failed.');
+    }
   };
 
   return (
@@ -461,22 +446,41 @@ const LocalVariablesEditor: React.FC<LocalVariablesEditorProps> = ({ variables, 
 
   return (
     <div className="space-y-3 rounded-lg border border-cyan-900/40 bg-cyan-950/10 p-3">
-      <div className="flex items-center justify-between gap-3">
+      <div className="flex flex-wrap items-center justify-between gap-3">
         <div>
           <h4 className="text-sm font-semibold text-cyan-200" style={{ fontFamily: "'Cinzel', serif" }}>Local Variables</h4>
-          <p className="text-xs text-sky-100/50">Use these as <code className="text-cyan-300">@@id</code> inside this asset's macros, actions, and effects.</p>
+          <p className="text-xs text-sky-100/50">Use variables as <code className="text-cyan-300">@@id</code>. Inputs ask for a number when rolling a macro.</p>
         </div>
-        <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable()])}>
-          <Plus size={14} /> Add Variable
-        </button>
+        <div className="flex flex-wrap gap-2">
+          <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable('variable')])}>
+            <Plus size={14} /> Add Variable
+          </button>
+          <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable('input')])}>
+            <Plus size={14} /> Add Input
+          </button>
+        </div>
       </div>
       {variables.length === 0 ? (
         <p className="text-xs italic text-stone-500">No local variables yet.</p>
       ) : variables.map((variable, index) => (
-        <div key={index} className="grid gap-2 rounded-md border border-cyan-900/30 bg-black/25 p-2 md:grid-cols-[160px_1fr_180px_auto]">
+        <div key={index} className="grid gap-2 rounded-md border border-cyan-900/30 bg-black/25 p-2 md:grid-cols-[120px_160px_1fr_180px_auto]">
+          <select
+            className={inputClass}
+            value={variable.kind || 'variable'}
+            onChange={event => updateVariable(index, { kind: event.target.value as CharacterLocalVariable['kind'] })}
+          >
+            <option value="variable">Variable</option>
+            <option value="input">Input</option>
+          </select>
           <input className={inputClass} value={variable.id} onChange={event => updateVariable(index, { id: event.target.value.replace(/^@@?/, '') })} placeholder="local_id" />
           <input className={inputClass} value={variable.description} onChange={event => updateVariable(index, { description: event.target.value })} placeholder="Description" />
-          <input className={inputClass} value={variable.value} onChange={event => updateVariable(index, { value: event.target.value })} placeholder="@dex_mod - 1" />
+          {variable.kind === 'input' ? (
+            <div className="rounded-md border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-sm italic text-amber-300/80">
+              Asked when rolling
+            </div>
+          ) : (
+            <input className={inputClass} value={variable.value} onChange={event => updateVariable(index, { value: event.target.value })} placeholder="@dex_mod - 1" />
+          )}
           <button type="button" className={dangerButtonClass} onClick={() => onChange(variables.filter((_, variableIndex) => variableIndex !== index))}>
             <Trash2 size={14} />
           </button>
@@ -602,7 +606,7 @@ const AssetCreatorPage: React.FC = () => {
     return macro;
   };
 
-  const createExport = () => {
+  const createExport = async () => {
     const entry = getCurrentEntry();
     const payload: CharacterEntryExportPayload = {
       schema: 'inoraxium-character-entry',
@@ -614,7 +618,11 @@ const AssetCreatorPage: React.FC = () => {
       entry,
     };
 
-    downloadJsonFile(payload, safeExportFileName(entry.name, selectedKind));
+    try {
+      await exportJsonWithChoice(payload, safeExportFileName(entry.name, selectedKind));
+    } catch {
+      window.alert('Export failed. Clipboard access may be blocked by the browser.');
+    }
   };
 
   const loadImportedAsset = (payload: CharacterEntryExportPayload) => {
@@ -648,21 +656,14 @@ const AssetCreatorPage: React.FC = () => {
     throw new Error('This asset type is not supported by Asset Creator.');
   };
 
-  const importAssetJson = () => {
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-
-      try {
-        loadImportedAsset(JSON.parse(await file.text()) as CharacterEntryExportPayload);
-      } catch (err: unknown) {
-        window.alert(err instanceof Error ? err.message : 'Asset import failed.');
-      }
-    };
-    input.click();
+  const importAssetJson = async () => {
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      loadImportedAsset(JSON.parse(raw) as CharacterEntryExportPayload);
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Asset import failed.');
+    }
   };
 
   const selectorCards = [

@@ -61,6 +61,7 @@ export interface CharacterLocalVariable {
   id: string;
   description: string;
   value: string;
+  kind?: 'variable' | 'input';
 }
 
 export interface CharacterDisplayStat {
@@ -92,6 +93,36 @@ export interface CharacterAttributeSectionColumns {
   other?: number;
   resistances?: number;
   bars?: number;
+}
+
+export interface CharacterOverviewValueBox {
+  id: string;
+  mode?: 'default' | 'two-sided' | 'double-value' | 'pip-counter' | 'two-sided-pip';
+  valueId: string;
+  secondaryValueId?: string;
+  barId: string;
+  secondaryBarId?: string;
+  color?: string;
+  secondaryColor?: string;
+  pipCount?: number;
+  secondaryPipCount?: number;
+  label?: string;
+}
+
+export interface CharacterOverviewSettings {
+  mainAttributeIds?: string[];
+  valueBoxes?: CharacterOverviewValueBox[];
+}
+
+export type CharacterGalleryImageTag = 'main' | 'token';
+
+export interface CharacterGalleryImage {
+  id: string;
+  url: string;
+  thumbUrl?: string;
+  label?: string;
+  tags?: CharacterGalleryImageTag[];
+  createdAt?: number;
 }
 
 export interface CharacterSpell {
@@ -225,6 +256,9 @@ export interface CharacterStatus {
   folderId?: string | null;
   scriptSourceConditionId?: string;
   scriptSourceTemplateStatusId?: string;
+  linkedStatusSourceType?: 'general-item' | 'inventory-item' | 'status';
+  linkedStatusSourceId?: string;
+  linkedStatusSourceEffectId?: string;
 }
 
 export interface CharacterData {
@@ -248,10 +282,12 @@ export interface CharacterData {
   backstory?: string;
   notes?: string;
   portraitUrl?: string;
+  gallery?: CharacterGalleryImage[];
   createdAt?: number;
   tags?: string[];
   displayStats?: CharacterDisplayStat[];
   displaySlotStates?: Record<string, 'unlocked' | 'locked' | 'blocked'>;
+  overviewSettings?: CharacterOverviewSettings;
   attributeSectionModes?: CharacterAttributeSectionModes;
   attributeSectionColumns?: CharacterAttributeSectionColumns;
   mainAttributes?: CustomAttribute[];

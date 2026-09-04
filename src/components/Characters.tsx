@@ -1,7 +1,8 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
+import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
 
 function evalCharFormula(formula: string, context: Record<string, number>, localContext: Record<string, number> = {}): number {
   if (!formula) return 0;
@@ -73,6 +74,7 @@ interface CharacterAttributePreset {
   bars: CharacterBar[];
   displayStats?: CharacterDisplayStat[];
   displaySlotStates?: Record<string, 'unlocked' | 'locked' | 'blocked'>;
+  overviewSettings?: CharacterOverviewSettings;
   attributeSectionModes?: CharacterAttributeSectionModes;
   modifierFormula: string;
   attributeSectionColumns: Required<CharacterAttributeSectionColumns>;
@@ -92,6 +94,7 @@ interface CharacterEntryExportPayload {
 
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
 type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'scripts' | 'inventory' | 'spells' | 'statuses';
+type BioSheetSubTab = 'main' | 'overview' | 'gallery';
 type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' | 'resistances' | 'unassigned';
 type MacroSheetSubTab = 'main' | 'rolls' | string;
 type ScriptSheetSubTab = 'main' | string;
@@ -310,6 +313,7 @@ const normalizeLocalVariables = (variables?: CharacterLocalVariable[]): Characte
       id: variable.id || '',
       description: variable.description || '',
       value: variable.value || '0',
+      kind: variable.kind === 'input' ? 'input' : 'variable',
     }))
     : []
 );
@@ -548,6 +552,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const previousSelectedCharacterIdRef = useRef<string | null>(null);
   const [isViewingSheet, setIsViewingSheet] = useState(false);
   const [activeSheetTab, setActiveSheetTab] = useState<CharacterSheetTab>('bio');
+  const [activeBioSubTab, setActiveBioSubTab] = useState<BioSheetSubTab>('main');
   const [activeAttributeSubTab, setActiveAttributeSubTab] = useState<AttributeSheetSubTab>('bars');
 
   // Filtering
@@ -572,8 +577,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [portraitUrl, setPortraitUrl] = useState('');
   const [portraitImportUrl, setPortraitImportUrl] = useState('');
   const [portraitLoadError, setPortraitLoadError] = useState(false);
+  const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
+  const [galleryUploading, setGalleryUploading] = useState(false);
+  const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
   const [displayStats, setDisplayStats] = useState<CharacterDisplayStat[]>([]);
   const [displaySlotStates, setDisplaySlotStates] = useState<Record<string, 'unlocked' | 'locked' | 'blocked'>>({});
+  const [overviewSettings, setOverviewSettings] = useState<CharacterOverviewSettings>({ mainAttributeIds: [], valueBoxes: [] });
   const [attributeSectionModes, setAttributeSectionModes] = useState<Required<CharacterAttributeSectionModes>>(DEFAULT_ATTRIBUTE_SECTION_MODES);
   const [attributeSectionColumns, setAttributeSectionColumns] = useState<Required<CharacterAttributeSectionColumns>>(DEFAULT_ATTRIBUTE_SECTION_COLUMNS);
   const [openAttributeHistoryId, setOpenAttributeHistoryId] = useState<string | null>(null);
@@ -675,6 +684,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const notesRef = useRef<HTMLTextAreaElement | null>(null);
   const attributeImportInputRef = useRef<HTMLInputElement | null>(null);
   const homebrewImageInputRef = useRef<HTMLInputElement | null>(null);
+  const galleryUploadInputRef = useRef<HTMLInputElement | null>(null);
   const historyCloseTimeoutRef = useRef<number | null>(null);
 
   // ── Auth & Data ──────────────────────────────────────────────────────────────
@@ -754,6 +764,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   useEffect(() => {
     if (selectedCharacter) {
+      setActiveBioSubTab('main');
       setEditName(selectedCharacter.name);
       setEditRace(selectedCharacter.race);
       setEditClass(selectedCharacter.className);
@@ -769,8 +780,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setPortraitUrl(selectedCharacter.portraitUrl || '');
       setPortraitImportUrl(selectedCharacter.portraitUrl || '');
       setPortraitLoadError(false);
+      setGalleryImages(selectedCharacter.gallery || []);
       setDisplayStats(selectedCharacter.displayStats || []);
       setDisplaySlotStates(selectedCharacter.displaySlotStates || {});
+      setOverviewSettings({
+        mainAttributeIds: selectedCharacter.overviewSettings?.mainAttributeIds || [],
+        valueBoxes: selectedCharacter.overviewSettings?.valueBoxes || [],
+      });
       setAttributeSectionModes({ ...DEFAULT_ATTRIBUTE_SECTION_MODES, ...(selectedCharacter.attributeSectionModes || {}) });
       setAttributeSectionColumns({ ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS, ...(selectedCharacter.attributeSectionColumns || {}) });
       setCharTags(selectedCharacter.tags || []);
@@ -991,42 +1007,50 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     saveUserDiceSettings(userId, mainDiceState);
   }, [userId, mainDiceState, hasLoadedMainDiceState]);
 
+  const applyAttributePresetJson = (raw: string) => {
+    const parsed = JSON.parse(raw) as Partial<CharacterAttributePreset>;
+    setMainAttrs(Array.isArray(parsed.mainAttributes) ? parsed.mainAttributes : []);
+    setSecondaryAttrs(Array.isArray(parsed.secondaryAttributes) ? parsed.secondaryAttributes : []);
+    setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
+    setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
+    setResistances(Array.isArray(parsed.resistances) ? parsed.resistances : []);
+    setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
+    setDisplayStats(Array.isArray(parsed.displayStats) ? parsed.displayStats : []);
+    setDisplaySlotStates(parsed.displaySlotStates || {});
+    setOverviewSettings({
+      mainAttributeIds: parsed.overviewSettings?.mainAttributeIds || [],
+      valueBoxes: parsed.overviewSettings?.valueBoxes || [],
+    });
+    setAttributeSectionModes({
+      ...DEFAULT_ATTRIBUTE_SECTION_MODES,
+      ...(parsed.attributeSectionModes || {}),
+    });
+    setAttributeSectionColumns({
+      ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
+      ...(parsed.attributeSectionColumns || {}),
+    });
+    if (typeof parsed.modifierFormula === 'string' && parsed.modifierFormula.trim()) {
+      setModFormula(parsed.modifierFormula);
+    }
+  };
+
   const handleImportAttributePresetFile = async (event: React.ChangeEvent<HTMLInputElement>) => {
     const file = event.target.files?.[0];
     event.target.value = '';
     if (!file) return;
 
     try {
-      const raw = await file.text();
-      const parsed = JSON.parse(raw) as Partial<CharacterAttributePreset>;
-      setMainAttrs(Array.isArray(parsed.mainAttributes) ? parsed.mainAttributes : []);
-      setSecondaryAttrs(Array.isArray(parsed.secondaryAttributes) ? parsed.secondaryAttributes : []);
-      setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
-      setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
-      setResistances(Array.isArray(parsed.resistances) ? parsed.resistances : []);
-      setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
-      setDisplayStats(Array.isArray(parsed.displayStats) ? parsed.displayStats : []);
-      setDisplaySlotStates(parsed.displaySlotStates || {});
-      setAttributeSectionModes({
-        ...DEFAULT_ATTRIBUTE_SECTION_MODES,
-        ...(parsed.attributeSectionModes || {}),
-      });
-      setAttributeSectionColumns({
-        ...DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
-        ...(parsed.attributeSectionColumns || {}),
-      });
-      if (typeof parsed.modifierFormula === 'string' && parsed.modifierFormula.trim()) {
-        setModFormula(parsed.modifierFormula);
-      }
+      applyAttributePresetJson(await file.text());
     } catch {
       window.alert('Invalid preset JSON file.');
     }
   };
 
-  const createLocalVariable = (): CharacterLocalVariable => ({
+  const createLocalVariable = (kind: CharacterLocalVariable['kind'] = 'variable'): CharacterLocalVariable => ({
     id: `local_${uid()}`,
     description: '',
     value: '0',
+    kind,
   });
 
   const getLocalVariableContext = (
@@ -1036,8 +1060,37 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     const localContext: Record<string, number> = {};
     normalizeLocalVariables(variables).forEach((variable) => {
       if (!variable.id) return;
+      if (variable.kind === 'input') return;
       localContext[variable.id] = evalCharFormula(variable.value || '0', globalContext, localContext);
     });
+    return localContext;
+  };
+
+  const getRollLocalVariableContext = (
+    variables: CharacterLocalVariable[] | undefined,
+    globalContext: Record<string, number>,
+    formula: string,
+  ): Record<string, number> | null => {
+    const normalizedVariables = normalizeLocalVariables(variables);
+    const localContext = getLocalVariableContext(normalizedVariables, globalContext);
+    const referencedInputIds = Array.from(new Set(
+      Array.from(formula.matchAll(/@@([a-zA-Z0-9_-]+)/g))
+        .map(match => match[1])
+        .filter(id => normalizedVariables.some(variable => variable.kind === 'input' && variable.id === id))
+    ));
+
+    for (const inputId of referencedInputIds) {
+      const inputVariable = normalizedVariables.find(variable => variable.id === inputId);
+      const answer = window.prompt(inputVariable?.description || `Enter value for ${inputId}`, '0');
+      if (answer === null) return null;
+      const parsed = Number(answer.trim());
+      if (!Number.isFinite(parsed)) {
+        window.alert('Please enter a valid number.');
+        return null;
+      }
+      localContext[inputId] = parsed;
+    }
+
     return localContext;
   };
 
@@ -1838,10 +1891,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setCharStatuses(prev => prev.map(status => status.id === statusId ? updater(status) : status));
   };
 
-  const addStatusLocalVariable = (statusId: string) => {
+  const addStatusLocalVariable = (statusId: string, kind: CharacterLocalVariable['kind'] = 'variable') => {
     updateStatus(statusId, status => ({
       ...status,
-      localVariables: [...(status.localVariables || []), createLocalVariable()],
+      localVariables: [...(status.localVariables || []), createLocalVariable(kind)],
     }));
   };
 
@@ -2179,10 +2232,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     }));
   };
 
-  const addInventoryLocalVariable = (itemId: string) => {
+  const addInventoryLocalVariable = (itemId: string, kind: CharacterLocalVariable['kind'] = 'variable') => {
     updateInventoryItem(itemId, item => ({
       ...item,
-      localVariables: [...(item.localVariables || []), createLocalVariable()],
+      localVariables: [...(item.localVariables || []), createLocalVariable(kind)],
     }));
   };
 
@@ -2334,7 +2387,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(status.localVariables, context);
+      const localContext = getRollLocalVariableContext(status.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${status.name}: ${action.name || 'Action'}: ${macro.name}` },
@@ -2496,10 +2550,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     }));
   };
 
-  const addGeneralLocalVariable = (itemId: string) => {
+  const addGeneralLocalVariable = (itemId: string, kind: CharacterLocalVariable['kind'] = 'variable') => {
     updateGeneralItem(itemId, item => ({
       ...item,
-      localVariables: [...(item.localVariables || []), createLocalVariable()],
+      localVariables: [...(item.localVariables || []), createLocalVariable(kind)],
     }));
   };
 
@@ -2594,7 +2648,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(item.localVariables, context);
+      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${macro.name}` }, context, ids, localContext);
       result.description = item.description || undefined;
@@ -2609,7 +2664,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(item.localVariables, context);
+      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${action.name}: ${macro.name}` }, context, ids, localContext);
       result.description = action.description || item.description || undefined;
@@ -3013,33 +3069,20 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       bars,
       displayStats,
       displaySlotStates,
+      overviewSettings,
       attributeSectionModes,
       modifierFormula: modFormula,
       attributeSectionColumns,
     };
-    const serialized = JSON.stringify(payload, null, 2);
-    const blob = new Blob([serialized], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${(editName || 'character').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase()}-attributes.json`;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    void exportJsonWithChoice(
+      payload,
+      `${(editName || 'character').replace(/[^a-z0-9-_]+/gi, '_').toLowerCase()}-attributes.json`,
+    ).catch(() => window.alert('Export failed. Clipboard access may be blocked by the browser.'));
   };
 
   const downloadJsonFile = (payload: unknown, fileName: string) => {
-    const serialized = JSON.stringify(payload, null, 2);
-    const blob = new Blob([serialized], { type: 'application/json' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = fileName;
-    document.body.appendChild(link);
-    link.click();
-    document.body.removeChild(link);
-    URL.revokeObjectURL(url);
+    void exportJsonWithChoice(payload, fileName)
+      .catch(() => window.alert('Export failed. Clipboard access may be blocked by the browser.'));
   };
 
   const safeExportFileName = (name: string, suffix: string) => (
@@ -3070,6 +3113,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     id: typeof variable.id === 'string' ? variable.id : `local_${uid()}`,
     description: typeof variable.description === 'string' ? variable.description : '',
     value: typeof variable.value === 'string' ? variable.value : '0',
+    kind: variable.kind === 'input' ? 'input' : 'variable',
   });
 
   const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => ({
@@ -3212,7 +3256,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     folderId,
   });
 
-  const buildImportedStatus = (entry: Partial<CharacterStatus>, folderId: string | null): CharacterStatus => ({
+  const buildImportedStatus = (
+    entry: Partial<CharacterStatus>,
+    folderId: string | null,
+    source?: Pick<CharacterStatus, 'linkedStatusSourceType' | 'linkedStatusSourceId' | 'linkedStatusSourceEffectId'>,
+  ): CharacterStatus => ({
     id: `st_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Status',
     duration: typeof entry.duration === 'string' ? entry.duration : '',
@@ -3229,6 +3277,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     color: typeof entry.color === 'string' ? entry.color : '#f59e0b',
     hidden: entry.hidden ?? false,
     folderId,
+    ...source,
   });
 
   const buildScriptAppliedStatus = (
@@ -3403,29 +3452,23 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     return clonedEntry;
   };
 
-  const importStatusApplyEffect = (onAdd: (effect: StatusEffect) => void) => {
+  const importStatusApplyEffect = async (onAdd: (effect: StatusEffect) => void) => {
     if (!isCharacterOwner && !canEditInventory) return;
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
-        if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
-          throw new Error('Please import a status export JSON file.');
-        }
-        const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
-        onAdd(buildStatusApplyEffect(resolvedEntry));
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Status import failed.';
-        setDiceError(message);
-        window.alert(message);
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+        throw new Error('Please import a status export JSON file.');
       }
-    };
-    input.click();
+      const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
+      onAdd(buildStatusApplyEffect(resolvedEntry));
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Status import failed.';
+      setDiceError(message);
+      window.alert(message);
+    }
   };
 
   const applyStatusEffect = (effect: StatusEffect) => {
@@ -3437,6 +3480,89 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setActiveStatusCategoryId(getRootFolderId(statusFolders, folderId) || folderId);
     }
   };
+
+  useEffect(() => {
+    type LinkedStatusSource = {
+      type: NonNullable<CharacterStatus['linkedStatusSourceType']>;
+      id: string;
+      effects?: StatusEffect[];
+      enabled: boolean;
+    };
+
+    const sources: LinkedStatusSource[] = [
+      ...charGeneralItems.map(item => ({
+        type: 'general-item' as const,
+        id: item.id,
+        effects: item.effects,
+        enabled: !!item.equipped,
+      })),
+      ...charInventory.map(item => ({
+        type: 'inventory-item' as const,
+        id: item.id,
+        effects: item.effects,
+        enabled: !!item.equipped,
+      })),
+      ...charStatuses
+        .filter(status => !status.linkedStatusSourceEffectId)
+        .map(status => ({
+          type: 'status' as const,
+          id: status.id,
+          effects: status.effects,
+          enabled: status.active ?? true,
+        })),
+    ];
+
+    const wanted = new Map<string, {
+      source: LinkedStatusSource;
+      effect: StatusEffect;
+      effectId: string;
+    }>();
+
+    sources.forEach(source => {
+      if (!source.enabled) return;
+      (source.effects || []).forEach((effect, effectIndex) => {
+        if (effect.effectType !== 'status' || !effect.statusEntry || (effect.active ?? true) === false) return;
+        const effectId = effect.id || `effect_${effectIndex}`;
+        wanted.set(`${source.type}:${source.id}:${effectId}`, { source, effect, effectId });
+      });
+    });
+
+    setCharStatuses(prev => {
+      let changed = false;
+      const existingKeys = new Set<string>();
+      const next = prev.filter(status => {
+        if (!status.linkedStatusSourceType || !status.linkedStatusSourceId || !status.linkedStatusSourceEffectId) return true;
+        const key = `${status.linkedStatusSourceType}:${status.linkedStatusSourceId}:${status.linkedStatusSourceEffectId}`;
+        if (!wanted.has(key)) {
+          changed = true;
+          return false;
+        }
+        existingKeys.add(key);
+        return true;
+      }).map(status => {
+        if (!status.linkedStatusSourceType || !status.linkedStatusSourceId || !status.linkedStatusSourceEffectId) return status;
+        const key = `${status.linkedStatusSourceType}:${status.linkedStatusSourceId}:${status.linkedStatusSourceEffectId}`;
+        const wantedEntry = wanted.get(key);
+        if (!wantedEntry) return status;
+        const nextFolderId = wantedEntry.effect.statusFolderId || null;
+        if ((status.folderId || null) === nextFolderId) return status;
+        changed = true;
+        return { ...status, folderId: nextFolderId };
+      });
+
+      wanted.forEach(({ source, effect, effectId }, key) => {
+        if (existingKeys.has(key)) return;
+        next.push(buildImportedStatus(effect.statusEntry as Partial<CharacterStatus>, effect.statusFolderId || null, {
+          linkedStatusSourceType: source.type,
+          linkedStatusSourceId: source.id,
+          linkedStatusSourceEffectId: effectId,
+        }));
+        changed = true;
+      });
+
+      return changed ? next : prev;
+    });
+  }, [charGeneralItems, charInventory, charStatuses, statusFolders]);
 
   const applyBarUpdateEffect = (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
     if (effect.effectType !== 'bar-update' || !effect.targetId) return;
@@ -3579,29 +3705,23 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setSheetDiceMacros(prev => [...prev, buildImportedDiceMacro(resolvedEntry as Partial<CharacterDiceMacro>, null)]);
   };
 
-  const importSharedEntry = (expectedKind: CharacterEntryExportKind) => {
+  const importSharedEntry = async (expectedKind: CharacterEntryExportKind) => {
     if (!canEditInventory && !isCharacterOwner) {
       window.alert('You do not have permission to import entries into this character.');
       return;
     }
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
-        await importSharedEntryPayload(parsed, expectedKind);
-        setDiceError(null);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Import failed.';
-        setDiceError(message);
-        window.alert(message);
-      }
-    };
-    input.click();
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      await importSharedEntryPayload(parsed, expectedKind);
+      setDiceError(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Import failed.';
+      setDiceError(message);
+      window.alert(message);
+    }
   };
 
   const chooseHomebrewImage = (type: 'general-item' | 'inventory-item' | 'spell', id: string) => {
@@ -3646,6 +3766,99 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     } finally {
       setHomebrewImageUploadingId(null);
     }
+  };
+
+  const addGalleryImage = (image: Omit<CharacterGalleryImage, 'id' | 'createdAt'>) => {
+    setGalleryImages(prev => [
+      ...prev,
+      {
+        id: `gallery_${uid()}`,
+        createdAt: Date.now(),
+        ...image,
+      },
+    ]);
+  };
+
+  const chooseGalleryUploadMode = async () => {
+    if (!isCharacterOwner) return;
+    const choice = await showTwoOptionModal(
+      'Image Upload',
+      'Choose how you want to add a character gallery image.',
+      'Imgur Link',
+      'imgur',
+      'Upload to Pixhost',
+      'pixhost',
+    );
+    if (!choice) return;
+    if (choice === 'imgur') {
+      const url = window.prompt('Paste the Imgur/image link');
+      if (!url?.trim()) return;
+      addGalleryImage({ url: url.trim(), thumbUrl: url.trim(), label: '', tags: [] });
+      setSheetSyncStatus({ tone: 'success', message: 'Image link added to gallery. Save the character to keep it in Firestore.' });
+      return;
+    }
+    galleryUploadInputRef.current?.click();
+  };
+
+  const handleGalleryImageSelected = async (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    event.target.value = '';
+    if (!file) return;
+
+    setGalleryUploading(true);
+    try {
+      const upload = await uploadImageToPixhost(file);
+      addGalleryImage({ url: upload.showUrl, thumbUrl: upload.thumbUrl, label: upload.name, tags: [] });
+      setSheetSyncStatus({ tone: 'success', message: `Gallery image uploaded for ${upload.name}. Save the character to keep it in Firestore.` });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Image upload failed.';
+      setSheetSyncStatus({ tone: 'error', message });
+      window.alert(message);
+    } finally {
+      setGalleryUploading(false);
+    }
+  };
+
+  const updateGalleryImage = (imageId: string, updater: (image: CharacterGalleryImage) => CharacterGalleryImage) => {
+    setGalleryImages(prev => prev.map(image => (image.id === imageId ? updater(image) : image)));
+  };
+
+  const removeGalleryImage = (imageId: string) => {
+    const removedImage = galleryImages.find(image => image.id === imageId);
+    if (removedImage?.tags?.includes('main')) {
+      setPortraitUrl('');
+      setPortraitImportUrl('');
+      setPortraitLoadError(false);
+    }
+    setGalleryImages(prev => prev.filter(image => image.id !== imageId));
+    setFullscreenGalleryImage(current => (current?.id === imageId ? null : current));
+  };
+
+  const toggleGalleryImageTag = (imageId: string, tag: CharacterGalleryImageTag) => {
+    if (tag === 'main') {
+      const selectedImage = galleryImages.find(image => image.id === imageId);
+      if (selectedImage) {
+        setPortraitUrl(selectedImage.url);
+        setPortraitImportUrl(selectedImage.url);
+        setPortraitLoadError(false);
+      }
+    }
+    setGalleryImages(prev => prev.map(image => {
+      const tags = image.tags || [];
+      if (tag === 'main') {
+        const nextTags = image.id === imageId
+          ? Array.from(new Set([...tags, 'main']))
+          : tags.filter(currentTag => currentTag !== 'main');
+        return { ...image, tags: nextTags };
+      }
+      if (image.id !== imageId) return image;
+      return {
+        ...image,
+        tags: tags.includes(tag)
+          ? tags.filter(currentTag => currentTag !== tag)
+          : [...tags, tag],
+      };
+    }));
   };
 
   const renderHomebrewImageControls = (
@@ -3705,43 +3918,37 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     );
   };
 
-  const importScriptConditionStatus = (scriptId: string, conditionId: string) => {
+  const importScriptConditionStatus = async (scriptId: string, conditionId: string) => {
     if (!isCharacterOwner) return;
 
-    const input = document.createElement('input');
-    input.type = 'file';
-    input.accept = 'application/json,.json';
-    input.onchange = async () => {
-      const file = input.files?.[0];
-      if (!file) return;
-      try {
-        const parsed = JSON.parse(await file.text()) as CharacterEntryExportPayload;
-        if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
-          throw new Error('Please import a status export JSON file.');
-        }
-
-        const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
-        const scriptStatusEntry: CharacterScriptStatusEntry = {
-          id: `script_status_${uid()}`,
-          name: typeof resolvedEntry.name === 'string' && resolvedEntry.name.trim() ? resolvedEntry.name : file.name.replace(/\.json$/i, ''),
-          entry: resolvedEntry,
-          statusFolderId: null,
-          onFalse: 'remove',
-          appliedStatusInstanceIds: [],
-        };
-
-        updateScriptCondition(scriptId, conditionId, current => ({
-          ...current,
-          statusEntries: [...(current.statusEntries || []), scriptStatusEntry],
-        }));
-        setDiceError(null);
-      } catch (err: unknown) {
-        const message = err instanceof Error ? err.message : 'Status import failed.';
-        setDiceError(message);
-        window.alert(message);
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+        throw new Error('Please import a status export JSON file.');
       }
-    };
-    input.click();
+
+      const resolvedEntry = await resolveImportTargets(parsed.entry as Partial<CharacterStatus>);
+      const scriptStatusEntry: CharacterScriptStatusEntry = {
+        id: `script_status_${uid()}`,
+        name: typeof resolvedEntry.name === 'string' && resolvedEntry.name.trim() ? resolvedEntry.name : 'Imported Status',
+        entry: resolvedEntry,
+        statusFolderId: null,
+        onFalse: 'remove',
+        appliedStatusInstanceIds: [],
+      };
+
+      updateScriptCondition(scriptId, conditionId, current => ({
+        ...current,
+        statusEntries: [...(current.statusEntries || []), scriptStatusEntry],
+      }));
+      setDiceError(null);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Status import failed.';
+      setDiceError(message);
+      window.alert(message);
+    }
   };
 
   useEffect(() => {
@@ -3856,8 +4063,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     }
   });
 
-  const importAttributePreset = () => {
-    attributeImportInputRef.current?.click();
+  const importAttributePreset = async () => {
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      applyAttributePresetJson(raw);
+    } catch {
+      window.alert('Invalid preset JSON file.');
+    }
   };
 
   const getReferenceDisplayName = (referenceId: string) => {
@@ -4011,7 +4224,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(item.localVariables, context);
+      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${item.name}: ${action.name || 'Action'}: ${macro.name}` },
@@ -4107,10 +4321,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     }));
   };
 
-  const addSpellLocalVariable = (spellId: string) => {
+  const addSpellLocalVariable = (spellId: string, kind: CharacterLocalVariable['kind'] = 'variable') => {
     updateSpell(spellId, spell => ({
       ...spell,
-      localVariables: [...(spell.localVariables || []), createLocalVariable()],
+      localVariables: [...(spell.localVariables || []), createLocalVariable(kind)],
     }));
   };
 
@@ -4259,7 +4473,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(spell.localVariables, context);
+      const localContext = getRollLocalVariableContext(spell.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${spell.name}: ${action.name || 'Action'}: ${macro.name}` },
@@ -4387,7 +4602,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(item.localVariables, context);
+      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${item.name}: ${macro.name}` },
@@ -4413,7 +4629,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getLocalVariableContext(spell.localVariables, context);
+      const localContext = getRollLocalVariableContext(spell.localVariables, context, macro.formula);
+      if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
         { ...macro, name: `${spell.name}: ${macro.name}` },
@@ -4943,6 +5160,79 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   const removeTag = (tag: string) => setFilterTags(filterTags.filter(t => t !== tag));
 
+  const toggleOverviewMainAttribute = (attributeId: string) => {
+    setOverviewSettings((current) => {
+      const currentIds = current.mainAttributeIds || [];
+      return {
+        ...current,
+        mainAttributeIds: currentIds.includes(attributeId)
+          ? currentIds.filter((id) => id !== attributeId)
+          : [...currentIds, attributeId],
+      };
+    });
+  };
+
+  const moveOverviewMainAttribute = (attributeId: string, direction: -1 | 1) => {
+    setOverviewSettings((current) => {
+      const ids = [...(current.mainAttributeIds || [])];
+      const index = ids.indexOf(attributeId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= ids.length) return current;
+      [ids[index], ids[nextIndex]] = [ids[nextIndex], ids[index]];
+      return { ...current, mainAttributeIds: ids };
+    });
+  };
+
+  const addOverviewValueBox = () => {
+    setOverviewSettings((current) => ({
+      ...current,
+      valueBoxes: [
+        ...(current.valueBoxes || []),
+        {
+          id: `overview_box_${uid()}`,
+          mode: 'default',
+          valueId: getEffectTargetOptions()[0]?.id || '',
+          secondaryValueId: getEffectTargetOptions()[1]?.id || getEffectTargetOptions()[0]?.id || '',
+          barId: bars[0]?.id || '',
+          secondaryBarId: bars[1]?.id || bars[0]?.id || '',
+          color: '#0ea5e9',
+          secondaryColor: '#a855f7',
+          pipCount: 4,
+          secondaryPipCount: 4,
+          label: '',
+        },
+      ],
+    }));
+  };
+
+  const updateOverviewValueBox = (
+    boxId: string,
+    patch: Partial<NonNullable<CharacterOverviewSettings['valueBoxes']>[number]>,
+  ) => {
+    setOverviewSettings((current) => ({
+      ...current,
+      valueBoxes: (current.valueBoxes || []).map((box) => (box.id === boxId ? { ...box, ...patch } : box)),
+    }));
+  };
+
+  const removeOverviewValueBox = (boxId: string) => {
+    setOverviewSettings((current) => ({
+      ...current,
+      valueBoxes: (current.valueBoxes || []).filter((box) => box.id !== boxId),
+    }));
+  };
+
+  const moveOverviewValueBox = (boxId: string, direction: -1 | 1) => {
+    setOverviewSettings((current) => {
+      const boxes = [...(current.valueBoxes || [])];
+      const index = boxes.findIndex((box) => box.id === boxId);
+      const nextIndex = index + direction;
+      if (index < 0 || nextIndex < 0 || nextIndex >= boxes.length) return current;
+      [boxes[index], boxes[nextIndex]] = [boxes[nextIndex], boxes[index]];
+      return { ...current, valueBoxes: boxes };
+    });
+  };
+
   // ── CRUD ─────────────────────────────────────────────────────────────────────
 
   const handleCreate = async () => {
@@ -4972,9 +5262,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       backstory: '',
       notes: '',
       portraitUrl: '',
+      gallery: [],
       tags: [],
       displayStats: [],
       displaySlotStates: {},
+      overviewSettings: { mainAttributeIds: [], valueBoxes: [] },
       attributeSectionModes: DEFAULT_ATTRIBUTE_SECTION_MODES,
       attributeSectionColumns: DEFAULT_ATTRIBUTE_SECTION_COLUMNS,
       mainAttributes: [],
@@ -5094,9 +5386,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       backstory: '',
       notes: '',
       portraitUrl: '',
+      gallery: [],
       tags: [],
       displayStats: (selectedCharacter.displayStats || []).map((stat) => ({ ...stat })),
       displaySlotStates: { ...(selectedCharacter.displaySlotStates || {}) },
+      overviewSettings: {
+        mainAttributeIds: [...(selectedCharacter.overviewSettings?.mainAttributeIds || [])],
+        valueBoxes: (selectedCharacter.overviewSettings?.valueBoxes || []).map((box) => ({ ...box })),
+      },
       attributeSectionModes: {
         ...DEFAULT_ATTRIBUTE_SECTION_MODES,
         ...(selectedCharacter.attributeSectionModes || {}),
@@ -5244,9 +5541,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       backstory,
       notes,
       portraitUrl,
+      gallery: galleryImages,
       tags: charTags,
       displayStats,
       displaySlotStates,
+      overviewSettings,
       attributeSectionModes,
       attributeSectionColumns,
       mainAttributes: mainAttrs,
@@ -6084,7 +6383,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
       const renderLocalVariablesEditor = (
         variables: CharacterLocalVariable[] | undefined,
-        onAdd: () => void,
+        onAdd: (kind?: CharacterLocalVariable['kind']) => void,
         onUpdate: (variableIndex: number, updater: (variable: CharacterLocalVariable) => CharacterLocalVariable) => void,
         onRemove: (variableIndex: number) => void,
         canEdit: boolean,
@@ -6093,12 +6392,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
             <div>
               <label className="text-sm font-bold text-stone-300">Local Variables</label>
-              <p className="text-[11px] text-stone-500">Use with <code className="text-cyan-300">@@id</code> in this asset's macros, actions, and effects.</p>
+              <p className="text-[11px] text-stone-500">Use variables with <code className="text-cyan-300">@@id</code>. Inputs ask for a number when rolling a macro.</p>
             </div>
             {canEdit && (
-              <button onClick={onAdd} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
-                + Add Variable
-              </button>
+              <div className="flex flex-wrap gap-2">
+                <button onClick={() => onAdd('variable')} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
+                  + Add Variable
+                </button>
+                <button onClick={() => onAdd('input')} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
+                  + Add Input
+                </button>
+              </div>
             )}
           </div>
           {(variables || []).length === 0 ? (
@@ -6106,7 +6410,18 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           ) : (
             <div className="space-y-2">
               {(variables || []).map((variable, variableIndex) => (
-                <div key={variableIndex} className="grid grid-cols-1 md:grid-cols-[150px_1fr_1fr_auto] gap-2 items-center">
+                <div key={variableIndex} className="grid grid-cols-1 md:grid-cols-[110px_150px_1fr_1fr_auto] gap-2 items-center">
+                  {renderActionField('Type', (
+                    <select
+                      value={variable.kind || 'variable'}
+                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, kind: e.target.value as CharacterLocalVariable['kind'] }))}
+                      disabled={!canEdit}
+                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                    >
+                      <option value="variable">Variable</option>
+                      <option value="input">Input</option>
+                    </select>
+                  ), 'min-w-0')}
                   {renderActionField('ID', (
                     <input
                       type="text"
@@ -6127,7 +6442,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                       className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
                     />
                   ), 'min-w-0')}
-                  {renderActionField('Value', (
+                  {renderActionField('Value', variable.kind === 'input' ? (
+                    <div className="rounded border border-amber-800/30 bg-amber-950/15 px-3 py-2 text-sm italic text-amber-300/80">
+                      Asked when rolling
+                    </div>
+                  ) : (
                     <input
                       type="text"
                       value={variable.value}
@@ -6160,16 +6479,22 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         targetPlaceholder = 'Target ID (e.g. str_mod)',
         valuePlaceholder = 'Value (e.g. +2)',
         localVariables?: CharacterLocalVariable[],
+        autoApplyStatusEffects = false,
       ) => {
         if (effect.effectType === 'status') {
           return (
             <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_1fr_220px_auto] gap-2 items-center">
               <button
-                onClick={() => applyStatusEffect(effect)}
-                disabled={!canEdit || !effect.statusEntry}
-                className="h-8 min-w-[4.5rem] px-2 rounded border text-xs font-bold cursor-pointer justify-self-start bg-indigo-900/30 border-indigo-700/50 text-indigo-200 hover:bg-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed"
+                onClick={() => autoApplyStatusEffects ? undefined : applyStatusEffect(effect)}
+                disabled={autoApplyStatusEffects || !canEdit || !effect.statusEntry}
+                className={`h-8 min-w-[4.5rem] px-2 rounded border text-xs font-bold justify-self-start ${
+                  autoApplyStatusEffects
+                    ? 'bg-emerald-900/25 border-emerald-700/45 text-emerald-200 cursor-default'
+                    : 'bg-indigo-900/30 border-indigo-700/50 text-indigo-200 hover:bg-indigo-900/50 disabled:opacity-40 disabled:cursor-not-allowed cursor-pointer'
+                }`}
+                title={autoApplyStatusEffects ? 'Automatically applied while the parent item/status is active' : 'Apply this status now'}
               >
-                Apply
+                {autoApplyStatusEffects ? 'Auto' : 'Apply'}
               </button>
               <input
                 type="text"
@@ -6514,7 +6839,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                             canEdit,
                             'Target ID (e.g. str_mod)',
                             'Value (e.g. @@bonus)',
-                            status.localVariables
+                            status.localVariables,
+                            true
                           ))}
                         </div>
                       )}
@@ -6931,6 +7257,42 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           onChange={handleHomebrewImageSelected}
           className="hidden"
         />
+        <input
+          ref={galleryUploadInputRef}
+          type="file"
+          accept="image/jpeg,image/png,image/gif,image/webp,image/avif"
+          onChange={handleGalleryImageSelected}
+          className="hidden"
+        />
+        {fullscreenGalleryImage && (
+          <div
+            className="fixed inset-0 z-[80] flex items-center justify-center bg-black/90 p-4"
+            onClick={() => setFullscreenGalleryImage(null)}
+          >
+            <button
+              onClick={(event) => {
+                event.stopPropagation();
+                setFullscreenGalleryImage(null);
+              }}
+              className="absolute right-5 top-5 rounded-xl border border-stone-700/70 bg-stone-950/80 p-2 text-stone-200 shadow-xl hover:border-cyan-400/60 hover:text-cyan-100"
+            >
+              <X size={18} />
+            </button>
+            <div className="flex max-h-[92vh] max-w-[94vw] flex-col items-center gap-3">
+              <img
+                src={fullscreenGalleryImage.url}
+                alt={fullscreenGalleryImage.label || editName || 'Gallery image'}
+                className="max-h-[86vh] max-w-[94vw] rounded-2xl border border-cyan-700/35 object-contain shadow-[0_24px_80px_rgba(0,0,0,0.65)]"
+                onClick={(event) => event.stopPropagation()}
+              />
+              {fullscreenGalleryImage.label && (
+                <p className="rounded-full border border-cyan-700/35 bg-stone-950/80 px-4 py-2 text-sm font-bold text-cyan-100">
+                  {fullscreenGalleryImage.label}
+                </p>
+              )}
+            </div>
+          </div>
+        )}
         {partyTransferTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div className="w-full max-w-lg rounded-2xl border border-sky-800/45 bg-stone-950 p-5 shadow-2xl">
@@ -7110,6 +7472,34 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             </div>
           </div>
         </div>
+
+        {activeSheetTab === 'bio' && (
+          <div className="sticky top-[9.6rem] z-20 mb-4 rounded-2xl border border-amber-800/30 bg-stone-950/86 px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.24)] backdrop-blur-md overflow-visible">
+            <div className="flex gap-2 overflow-x-auto overflow-y-visible py-0.5">
+              {[
+                { key: 'main', label: 'Main' },
+                { key: 'overview', label: 'Character Overview' },
+                { key: 'gallery', label: 'Gallery' },
+              ].map((tab) => {
+                const isActive = activeBioSubTab === tab.key;
+                return (
+                  <button
+                    key={tab.key}
+                    onClick={() => setActiveBioSubTab(tab.key as BioSheetSubTab)}
+                    className={`shrink-0 rounded-xl border px-4 py-2 text-xs font-bold uppercase tracking-[0.14em] transition-all cursor-pointer ${
+                      isActive
+                        ? 'border-amber-400/60 bg-amber-900/42 text-amber-100 shadow-[0_0_18px_rgba(251,191,36,0.16)]'
+                        : 'border-stone-700/60 bg-stone-900/55 text-stone-400 hover:border-amber-700/45 hover:text-amber-200'
+                    }`}
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    {tab.label}
+                  </button>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {activeSheetTab === 'attributes' && (
           <div className="sticky top-[9.6rem] z-20 mb-4 rounded-2xl border border-amber-800/30 bg-stone-950/86 px-3 py-3 shadow-[0_12px_28px_rgba(0,0,0,0.24)] backdrop-blur-md overflow-visible">
@@ -7409,7 +7799,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         )}
 
         <div className="space-y-8">
-          {activeSheetTab === 'bio' && (
+          {activeSheetTab === 'bio' && activeBioSubTab === 'main' && (
           <div className="border border-amber-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
             <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
             <div className="relative z-10">
@@ -7845,6 +8235,508 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   ))}
                   {charTags.length === 0 && <span className="text-[10px] text-stone-600 italic">No tags added yet.</span>}
                 </div>
+              </div>
+            </div>
+          </div>
+          )}
+
+          {activeSheetTab === 'bio' && activeBioSubTab === 'gallery' && (
+          <div className="border border-cyan-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
+            <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
+            <div className="relative z-10 space-y-5">
+              <div className="flex flex-wrap items-start justify-between gap-3 border-b border-cyan-800/25 pb-4">
+                <div>
+                  <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-300" style={{ fontFamily: "'Cinzel', serif" }}>
+                    Gallery
+                  </p>
+                  <h3 className="mt-2 text-2xl font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                    Character Images
+                  </h3>
+                  <p className="mt-2 max-w-3xl text-sm leading-relaxed text-stone-400">
+                    Add portraits, reference art, and tokens. The image tagged as Main becomes this character's default portrait.
+                  </p>
+                </div>
+                <button
+                  onClick={chooseGalleryUploadMode}
+                  disabled={!isCharacterOwner || galleryUploading}
+                  className="inline-flex items-center gap-2 rounded-xl border border-cyan-700/45 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  <Upload size={16} />
+                  {galleryUploading ? 'Uploading...' : 'Image Upload'}
+                </button>
+              </div>
+
+              {galleryImages.length === 0 ? (
+                <div className="rounded-2xl border border-dashed border-cyan-800/35 bg-stone-950/35 p-8 text-center text-sm italic text-stone-500">
+                  No gallery images yet.
+                </div>
+              ) : (
+                <div className="grid gap-4 sm:grid-cols-2 xl:grid-cols-3">
+                  {galleryImages.map((image) => {
+                    const tags = image.tags || [];
+                    const isMain = tags.includes('main');
+                    const isToken = tags.includes('token');
+                    return (
+                      <div
+                        key={image.id}
+                        className={`overflow-hidden rounded-2xl border bg-stone-950/45 shadow-lg ${
+                          isMain ? 'border-amber-400/55 ring-1 ring-amber-300/35' : 'border-cyan-900/35'
+                        }`}
+                      >
+                        <button
+                          type="button"
+                          onClick={() => setFullscreenGalleryImage(image)}
+                          className="group relative block aspect-[4/3] w-full overflow-hidden bg-black/35"
+                        >
+                          <img
+                            src={image.thumbUrl || image.url}
+                            alt={image.label || editName || 'Gallery image'}
+                            className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
+                          />
+                          <div className="absolute left-3 top-3 flex flex-wrap gap-2">
+                            {isMain && (
+                              <span className="rounded-full border border-amber-300/50 bg-amber-950/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-amber-100">
+                                Main
+                              </span>
+                            )}
+                            {isToken && (
+                              <span className="rounded-full border border-cyan-300/50 bg-cyan-950/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-100">
+                                Token
+                              </span>
+                            )}
+                          </div>
+                        </button>
+                        <div className="space-y-3 p-3">
+                          <label className="block">
+                            <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Label</span>
+                            <input
+                              value={image.label || ''}
+                              onChange={(event) => updateGalleryImage(image.id, current => ({ ...current, label: event.target.value }))}
+                              disabled={!isCharacterOwner}
+                              placeholder="Portrait, scene, token..."
+                              className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50 disabled:opacity-60"
+                            />
+                          </label>
+                          <div className="flex flex-wrap items-center gap-2">
+                            {(['main', 'token'] as CharacterGalleryImageTag[]).map((tag) => {
+                              const active = tags.includes(tag);
+                              return (
+                                <button
+                                  key={tag}
+                                  type="button"
+                                  onClick={() => toggleGalleryImageTag(image.id, tag)}
+                                  disabled={!isCharacterOwner}
+                                  className={`rounded-lg border px-3 py-1.5 text-xs font-bold uppercase tracking-[0.12em] transition disabled:cursor-not-allowed disabled:opacity-50 ${
+                                    active
+                                      ? 'border-amber-300/60 bg-amber-500/20 text-amber-100'
+                                      : 'border-stone-700/60 bg-stone-900/60 text-stone-400 hover:border-cyan-500/50 hover:text-cyan-100'
+                                  }`}
+                                >
+                                  {tag === 'main' ? 'Main' : 'Token'}
+                                </button>
+                              );
+                            })}
+                            {isCharacterOwner && (
+                              <button
+                                type="button"
+                                onClick={() => removeGalleryImage(image.id)}
+                                className="ml-auto inline-flex items-center gap-1.5 rounded-lg border border-red-800/45 bg-red-950/20 px-3 py-1.5 text-xs font-bold text-red-200 hover:bg-red-900/35"
+                              >
+                                <Trash2 size={13} />
+                                Delete
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          </div>
+          )}
+
+          {activeSheetTab === 'bio' && activeBioSubTab === 'overview' && (
+          <div className="border border-cyan-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
+            <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
+            <div className="relative z-10 space-y-6">
+              <div>
+                <p className="text-xs font-bold uppercase tracking-[0.24em] text-cyan-300" style={{ fontFamily: "'Cinzel', serif" }}>
+                  Character Overview
+                </p>
+                <h3 className="mt-2 text-2xl font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                  Homebrew Overview Settings
+                </h3>
+                <p className="mt-2 max-w-3xl text-sm leading-relaxed text-stone-400">
+                  Karakter overview'da gözükecek attribute'ları sırası ile seç. Soldaki bölüm main attribute modifier kutularını,
+                  sağdaki bölüm ise value + bar yüzdesi ile dolan overview kutularını kontrol eder.
+                </p>
+              </div>
+
+              <div className="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1.2fr)]">
+                <section className="rounded-2xl border border-amber-800/25 bg-stone-950/45 p-4">
+                  <div className="mb-4">
+                    <h4 className="text-lg font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>Main Attribute Diamonds</h4>
+                    <p className="text-xs text-stone-500">Seçilen sırayla homebrew kartının solunda görünür.</p>
+                  </div>
+                  <div className="space-y-2">
+                    {mainAttrs.length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-stone-700/60 p-4 text-center text-sm italic text-stone-500">No main attributes yet.</p>
+                    ) : mainAttrs.map((attr) => {
+                      const selectedIds = overviewSettings.mainAttributeIds || [];
+                      const isSelected = selectedIds.includes(attr.id);
+                      const orderIndex = selectedIds.indexOf(attr.id);
+                      return (
+                        <div key={attr.id} className={`flex items-center gap-2 rounded-xl border p-3 ${isSelected ? 'border-amber-500/45 bg-amber-950/25' : 'border-stone-800 bg-black/20'}`}>
+                          <button
+                            onClick={() => toggleOverviewMainAttribute(attr.id)}
+                            className={`h-6 w-6 rounded border text-xs font-bold ${isSelected ? 'border-amber-300 bg-amber-500/30 text-amber-100' : 'border-stone-600 text-stone-500'}`}
+                          >
+                            {isSelected ? '✓' : ''}
+                          </button>
+                          <div className="min-w-0 flex-1">
+                            <p className="truncate text-sm font-bold text-amber-100">{attr.name || attr.id}</p>
+                            <p className="truncate text-[11px] text-stone-500">{attr.id}</p>
+                          </div>
+                          {isSelected && (
+                            <>
+                              <span className="rounded-full border border-amber-800/35 px-2 py-1 text-[11px] text-amber-200">#{orderIndex + 1}</span>
+                              <button
+                                onClick={() => moveOverviewMainAttribute(attr.id, -1)}
+                                disabled={orderIndex <= 0}
+                                className="rounded border border-stone-700/60 p-1 text-stone-400 hover:text-amber-200 disabled:opacity-30"
+                              >
+                                <ArrowUp size={13} />
+                              </button>
+                              <button
+                                onClick={() => moveOverviewMainAttribute(attr.id, 1)}
+                                disabled={orderIndex >= selectedIds.length - 1}
+                                className="rounded border border-stone-700/60 p-1 text-stone-400 hover:text-amber-200 disabled:opacity-30"
+                              >
+                                <ArrowDown size={13} />
+                              </button>
+                            </>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
+
+                <section className="rounded-2xl border border-cyan-800/25 bg-stone-950/45 p-4">
+                  <div className="mb-4 flex items-start justify-between gap-3">
+                    <div>
+                      <h4 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>Overview Value Boxes</h4>
+                      <p className="text-xs text-stone-500">Her kutu bir value gösterir ve seçilen bar yüzdesi kadar dolar.</p>
+                    </div>
+                    <button
+                      onClick={addOverviewValueBox}
+                      className="rounded-lg border border-cyan-700/45 bg-cyan-950/35 px-3 py-2 text-xs font-bold text-cyan-100 hover:bg-cyan-900/45"
+                    >
+                      + Add Box
+                    </button>
+                  </div>
+                  <div className="space-y-3">
+                    {(overviewSettings.valueBoxes || []).length === 0 ? (
+                      <p className="rounded-xl border border-dashed border-stone-700/60 p-4 text-center text-sm italic text-stone-500">No overview boxes yet.</p>
+                    ) : (overviewSettings.valueBoxes || []).map((box, boxIndex) => {
+                      const boxMode = box.mode || 'default';
+                      const targetOptions = getEffectTargetOptions();
+                      const overviewBoxCount = (overviewSettings.valueBoxes || []).length;
+                      return (
+                        <div key={box.id} className="grid gap-3 rounded-xl border border-cyan-900/35 bg-black/25 p-3 lg:grid-cols-6">
+                          <label className="block">
+                            <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Label</span>
+                            <input
+                              value={box.label || ''}
+                              onChange={(e) => updateOverviewValueBox(box.id, { label: e.target.value })}
+                              placeholder="HP, AC, Speed..."
+                              className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                            />
+                          </label>
+                          <label className="block">
+                            <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Mode</span>
+                            <select
+                              value={boxMode}
+                              onChange={(e) => updateOverviewValueBox(box.id, { mode: e.target.value as NonNullable<CharacterOverviewSettings['valueBoxes']>[number]['mode'] })}
+                              className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                            >
+                              <option value="default">Default</option>
+                              <option value="two-sided">Two-Sided</option>
+                              <option value="double-value">Double Value</option>
+                              <option value="pip-counter">Pip Counter</option>
+                              <option value="two-sided-pip">Two-Sided Pip</option>
+                            </select>
+                          </label>
+                          {boxMode === 'default' ? (
+                            <>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Value</span>
+                                <select
+                                  value={box.valueId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { valueId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose value...</option>
+                                  {targetOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Fill Bar</span>
+                                <select
+                                  value={box.barId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { barId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="__color">Color</option>
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                                {box.barId === '__color' && (
+                                  <input
+                                    type="color"
+                                    value={box.color || '#0ea5e9'}
+                                    onChange={(e) => updateOverviewValueBox(box.id, { color: e.target.value })}
+                                    className="mt-2 h-9 w-full rounded-lg border border-stone-800 bg-stone-900 p-1"
+                                  />
+                                )}
+                              </label>
+                            </>
+                          ) : boxMode === 'two-sided' ? (
+                            <>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Left Bar</span>
+                                <select
+                                  value={box.barId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { barId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="__color">Color</option>
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                                {box.barId === '__color' && (
+                                  <input
+                                    type="color"
+                                    value={box.color || '#0ea5e9'}
+                                    onChange={(e) => updateOverviewValueBox(box.id, { color: e.target.value })}
+                                    className="mt-2 h-9 w-full rounded-lg border border-stone-800 bg-stone-900 p-1"
+                                  />
+                                )}
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Right Bar</span>
+                                <select
+                                  value={box.secondaryBarId || ''}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { secondaryBarId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="__color">Color</option>
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                                {box.secondaryBarId === '__color' && (
+                                  <input
+                                    type="color"
+                                    value={box.secondaryColor || '#ef4444'}
+                                    onChange={(e) => updateOverviewValueBox(box.id, { secondaryColor: e.target.value })}
+                                    className="mt-2 h-9 w-full rounded-lg border border-stone-800 bg-stone-900 p-1"
+                                  />
+                                )}
+                              </label>
+                            </>
+                          ) : boxMode === 'double-value' ? (
+                            <>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Value A</span>
+                                <select
+                                  value={box.valueId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { valueId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose value...</option>
+                                  {targetOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Bar A</span>
+                                <select
+                                  value={box.barId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { barId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="__color">Color</option>
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                                {box.barId === '__color' && (
+                                  <input
+                                    type="color"
+                                    value={box.color || '#0ea5e9'}
+                                    onChange={(e) => updateOverviewValueBox(box.id, { color: e.target.value })}
+                                    className="mt-2 h-9 w-full rounded-lg border border-stone-800 bg-stone-900 p-1"
+                                  />
+                                )}
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Value B</span>
+                                <select
+                                  value={box.secondaryValueId || ''}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { secondaryValueId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose value...</option>
+                                  {targetOptions.map((option) => (
+                                    <option key={option.id} value={option.id}>{option.label}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Bar B</span>
+                                <select
+                                  value={box.secondaryBarId || ''}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { secondaryBarId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="__color">Color</option>
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                                {box.secondaryBarId === '__color' && (
+                                  <input
+                                    type="color"
+                                    value={box.secondaryColor || '#a855f7'}
+                                    onChange={(e) => updateOverviewValueBox(box.id, { secondaryColor: e.target.value })}
+                                    className="mt-2 h-9 w-full rounded-lg border border-stone-800 bg-stone-900 p-1"
+                                  />
+                                )}
+                              </label>
+                            </>
+                          ) : boxMode === 'pip-counter' ? (
+                            <>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Bar</span>
+                                <select
+                                  value={box.barId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { barId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Pips</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={20}
+                                  value={box.pipCount || 4}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { pipCount: Math.max(1, Number(e.target.value) || 1) })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                />
+                              </label>
+                            </>
+                          ) : (
+                            <>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Left Bar</span>
+                                <select
+                                  value={box.barId}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { barId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Left Pips</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={20}
+                                  value={box.pipCount || 4}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { pipCount: Math.max(1, Number(e.target.value) || 1) })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                />
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Right Bar</span>
+                                <select
+                                  value={box.secondaryBarId || ''}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { secondaryBarId: e.target.value })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                >
+                                  <option value="">Choose bar...</option>
+                                  {bars.map((bar) => (
+                                    <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                  ))}
+                                </select>
+                              </label>
+                              <label className="block">
+                                <span className="mb-1 block text-[10px] font-bold uppercase tracking-[0.16em] text-cyan-300/70">Right Pips</span>
+                                <input
+                                  type="number"
+                                  min={1}
+                                  max={20}
+                                  value={box.secondaryPipCount || 4}
+                                  onChange={(e) => updateOverviewValueBox(box.id, { secondaryPipCount: Math.max(1, Number(e.target.value) || 1) })}
+                                  className="w-full rounded-lg border border-stone-800 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-cyan-500/50"
+                                />
+                              </label>
+                            </>
+                          )}
+                          <div className="flex items-end justify-end gap-1">
+                            <button
+                              onClick={() => moveOverviewValueBox(box.id, -1)}
+                              disabled={boxIndex <= 0}
+                              className="grid h-10 w-10 place-items-center rounded-lg border border-stone-700/60 bg-stone-900/60 text-stone-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-30"
+                              title="Move overview box up"
+                            >
+                              <ArrowUp size={15} />
+                            </button>
+                            <button
+                              onClick={() => moveOverviewValueBox(box.id, 1)}
+                              disabled={boxIndex >= overviewBoxCount - 1}
+                              className="grid h-10 w-10 place-items-center rounded-lg border border-stone-700/60 bg-stone-900/60 text-stone-400 hover:text-cyan-200 disabled:cursor-not-allowed disabled:opacity-30"
+                              title="Move overview box down"
+                            >
+                              <ArrowDown size={15} />
+                            </button>
+                            <button
+                              onClick={() => removeOverviewValueBox(box.id)}
+                              className="grid h-10 w-10 place-items-center rounded-lg border border-red-800/45 bg-red-950/25 text-red-200 hover:bg-red-900/35"
+                              title="Remove overview box"
+                            >
+                              <Trash2 size={15} />
+                            </button>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                </section>
               </div>
             </div>
           </div>
@@ -9267,7 +10159,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
                       {renderLocalVariablesEditor(
                         status.localVariables,
-                        () => addStatusLocalVariable(status.id),
+                        (kind) => addStatusLocalVariable(status.id, kind),
                         (variableIndex, updater) => updateStatusLocalVariable(status.id, variableIndex, updater),
                         (variableIndex) => removeStatusLocalVariable(status.id, variableIndex),
                         isCharacterOwner
@@ -9602,7 +10494,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                 )}
                                 {renderLocalVariablesEditor(
                                   itemState.localVariables,
-                                  () => addGeneralLocalVariable(item.id),
+                                  (kind) => addGeneralLocalVariable(item.id, kind),
                                   (variableIndex, updater) => updateGeneralLocalVariable(item.id, variableIndex, updater),
                                   (variableIndex) => removeGeneralLocalVariable(item.id, variableIndex),
                                   canEditInventory
@@ -9791,7 +10683,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                         canEditInventory,
                                         'Target ID (e.g. str_mod)',
                                         'Value (e.g. +2)',
-                                        itemState.localVariables
+                                        itemState.localVariables,
+                                        true
                                       ))}
                                     </div>
                                   )}
@@ -10063,7 +10956,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
                           {renderLocalVariablesEditor(
                             item.localVariables,
-                            () => addInventoryLocalVariable(item.id),
+                            (kind) => addInventoryLocalVariable(item.id, kind),
                             (variableIndex, updater) => updateInventoryLocalVariable(item.id, variableIndex, updater),
                             (variableIndex) => removeInventoryLocalVariable(item.id, variableIndex),
                             canEditInventory
@@ -10336,7 +11229,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                   canEditInventory,
                                   'Target ID (e.g. str_mod)',
                                   'Value (e.g. +2)',
-                                  item.localVariables
+                                  item.localVariables,
+                                  true
                                 ))}
                               </div>
                             )}
@@ -10724,7 +11618,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
                           {renderLocalVariablesEditor(
                             spell.localVariables,
-                            () => addSpellLocalVariable(spell.id),
+                            (kind) => addSpellLocalVariable(spell.id, kind),
                             (variableIndex, updater) => updateSpellLocalVariable(spell.id, variableIndex, updater),
                             (variableIndex) => removeSpellLocalVariable(spell.id, variableIndex),
                             isCharacterOwner
