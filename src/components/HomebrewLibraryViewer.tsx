@@ -400,6 +400,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [diceSettings, setDiceSettings] = useState<UserDiceSettings>({ macros: [], webhookUrl: '', autoSend: false });
   const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
+  const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
+  const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
+  const [localInputError, setLocalInputError] = useState('');
   const rollPopupTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
@@ -619,6 +622,51 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     return localContext;
   }, []);
 
+  const requestLocalInputValues = useCallback((
+    variables: CharacterLocalVariable[],
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => (
+    new Promise((resolve) => {
+      setLocalInputDrafts(variables.reduce<Record<string, string>>((drafts, variable) => {
+        drafts[variable.id] = '0';
+        return drafts;
+      }, {}));
+      setLocalInputError('');
+      setLocalInputRequest({
+        title,
+        variables,
+        resolve: (values) => {
+          setLocalInputRequest(null);
+          setLocalInputError('');
+          resolve(values);
+        },
+      });
+    })
+  ), []);
+
+  const getLocalVariableContextWithInputs = useCallback(async (
+    variables: CharacterLocalVariable[] | undefined,
+    globalContext: Record<string, number>,
+    formula: string,
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => {
+    const normalizedVariables = variables || [];
+    const localContext = getLocalVariableContext(normalizedVariables, globalContext);
+    const referencedInputIds = Array.from(new Set(
+      Array.from(formula.matchAll(/@@([a-zA-Z0-9_-]+)/g))
+        .map(match => match[1])
+        .filter(id => normalizedVariables.some(variable => variable.kind === 'input' && variable.id === id))
+    ));
+    if (referencedInputIds.length === 0) return localContext;
+
+    const inputVariables = referencedInputIds
+      .map(inputId => normalizedVariables.find(variable => variable.kind === 'input' && variable.id === inputId))
+      .filter((variable): variable is CharacterLocalVariable => !!variable);
+    const inputValues = await requestLocalInputValues(inputVariables, title);
+    if (!inputValues) return null;
+    return { ...localContext, ...inputValues };
+  }, [getLocalVariableContext, requestLocalInputValues]);
+
   const executeMacro = useCallback((macro: CharacterDiceMacro, context: Record<string, number>, localContext: Record<string, number>): RollResult => {
     const steps: RollStep[] = [];
     const resolvedParts: string[] = [];
@@ -657,10 +705,18 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   }, []);
 
   const rollMacro = useCallback(async (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => {
+    const context = getCharacterContext();
+    const localContext = await getLocalVariableContextWithInputs(
+      localVariables,
+      context,
+      macro.formula || '',
+      `${namePrefix || macro.name || 'Roll'} Input Values`,
+    );
+    if (!localContext) return;
     const result = executeMacro(
       { ...macro, name: namePrefix ? `${namePrefix}: ${macro.name || 'Roll'}` : macro.name },
-      getCharacterContext(),
-      getLocalVariableContext(localVariables, getCharacterContext()),
+      context,
+      localContext,
     );
     result.description = description || undefined;
     showRollPopup(result);
@@ -668,7 +724,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       const discordErr = await sendToDiscord(diceSettings.webhookUrl || '', character?.name || characterId, result);
       setActionMessage(discordErr ? `Discord: ${discordErr}` : null);
     }
-  }, [character?.name, characterId, diceSettings.autoSend, diceSettings.webhookUrl, executeMacro, getCharacterContext, getLocalVariableContext, showRollPopup]);
+  }, [character?.name, characterId, diceSettings.autoSend, diceSettings.webhookUrl, executeMacro, getCharacterContext, getLocalVariableContextWithInputs, showRollPopup]);
 
   const applyStatusEffect = useCallback(async (effect: StatusEffect) => {
     if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
@@ -696,6 +752,21 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     const saveResult = await saveCharacter(nextCharacter);
     setActionMessage(saveResult.localSaved || saveResult.remoteSaved ? 'Status applied to character.' : 'Status could not be saved.');
   }, [canControlCharacter, character]);
+
+  const submitLocalInputs = () => {
+    if (!localInputRequest) return;
+    const values: Record<string, number> = {};
+    for (const variable of localInputRequest.variables) {
+      const rawValue = localInputDrafts[variable.id] ?? '';
+      const parsed = Number(rawValue.trim().replace(',', '.'));
+      if (!Number.isFinite(parsed)) {
+        setLocalInputError(`${variable.description || variable.id} needs a valid number.`);
+        return;
+      }
+      values[variable.id] = parsed;
+    }
+    localInputRequest.resolve(values);
+  };
 
   const renderCard = (entry: LibraryEntry) => {
     const thumbUrl = getEntryThumbUrl(entry.entry);
@@ -922,6 +993,64 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             </div>
           </div>
         </button>
+      )}
+      {localInputRequest && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+            <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+              {localInputRequest.title}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-stone-300">
+              This roll needs temporary local input values.
+            </p>
+            <div className="mt-4 space-y-3">
+              {localInputRequest.variables.map((variable, index) => (
+                <label key={variable.id} className="block rounded-xl border border-cyan-900/35 bg-cyan-950/15 p-3">
+                  <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/70">
+                    {variable.description || 'Input Value'}
+                  </span>
+                  <span className="mt-1 block font-mono text-xs text-stone-400">@@{variable.id}</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={localInputDrafts[variable.id] ?? ''}
+                    onChange={(event) => {
+                      setLocalInputDrafts(prev => ({ ...prev, [variable.id]: event.target.value.replace(',', '.').replace(/[^\d.-]/g, '') }));
+                      setLocalInputError('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') submitLocalInputs();
+                      if (event.key === 'Escape') localInputRequest.resolve(null);
+                    }}
+                    autoFocus={index === 0}
+                    className="mt-2 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 focus:border-cyan-500/60 focus:outline-none"
+                    placeholder="0"
+                  />
+                </label>
+              ))}
+            </div>
+            {localInputError && (
+              <div className="mt-4 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                {localInputError}
+              </div>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => localInputRequest.resolve(null)}
+                className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitLocalInputs}
+                className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Roll
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       <div className="mx-auto w-full max-w-none 2xl:max-w-[1900px]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
