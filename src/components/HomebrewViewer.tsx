@@ -1,7 +1,7 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, AlertTriangle, BookOpen, FlaskConical, Shield, Sparkles } from 'lucide-react';
-import { CharacterAction, CharacterData, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CharacterStatus } from '../types/character';
-import { loadCharacterById } from '../lib/firestore';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, AlertTriangle, BookOpen, Dices, FlaskConical, Shield, Sparkles } from 'lucide-react';
+import { CharacterAction, CharacterBar, CharacterData, CharacterDiceMacro, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterSpell, CharacterStatus, CustomAttribute, SkillAttribute, StatusEffect } from '../types/character';
+import { loadCharacterById, saveCharacter } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
@@ -19,6 +19,29 @@ type ViewerEntry =
   | { kind: 'inventory-item'; entry: CharacterInventoryItem }
   | { kind: 'spell'; entry: CharacterSpell }
   | { kind: 'status'; entry: CharacterStatus };
+
+interface RollStep {
+  label: string;
+  value: number;
+  detail?: string;
+}
+
+interface RollResult {
+  macroName: string;
+  formula: string;
+  steps: RollStep[];
+  total: number;
+  timestamp: number;
+  description?: string;
+}
+
+interface DiceRoll {
+  notation: string;
+  rolls: number[];
+  kept: number[];
+  dropped: number[];
+  sum: number;
+}
 
 const statusDurationLabels: Record<string, string> = {
   custom: 'Custom',
@@ -44,6 +67,159 @@ const parchmentBackground = {
 
 const viewerSectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-5 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+const getBarMode = (bar: CharacterBar) => bar.mode || 'default';
+
+const splitFormulaArgs = (argsString: string): string[] => {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let i = 0; i < argsString.length; i += 1) {
+    const char = argsString[i];
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      args.push(argsString.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  args.push(argsString.slice(start).trim());
+  return args;
+};
+
+const findFormulaFunctionCall = (expr: string, functionNames: string[]) => {
+  const lower = expr.toLowerCase();
+
+  for (let i = 0; i < expr.length; i += 1) {
+    for (const functionName of functionNames) {
+      const nameLength = functionName.length;
+      if (lower.slice(i, i + nameLength) !== functionName) continue;
+      const before = i > 0 ? expr[i - 1] : '';
+      const after = expr[i + nameLength] || '';
+      if (/[a-zA-Z0-9_]/.test(before) || after !== '(') continue;
+
+      let depth = 0;
+      for (let j = i + nameLength; j < expr.length; j += 1) {
+        if (expr[j] === '(') depth += 1;
+        if (expr[j] === ')') {
+          depth -= 1;
+          if (depth === 0) {
+            return {
+              name: functionName,
+              start: i,
+              end: j + 1,
+              argsString: expr.slice(i + nameLength + 1, j),
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+const normalizeFormulaConditionOperators = (expr: string): string => (
+  expr
+    .replace(/=</g, '<=')
+    .replace(/=>/g, '>=')
+    .replace(/(^|[^<>=!])=(?!=)/g, '$1===')
+);
+
+const resolveBasicExpression = (expr: string): number => {
+  if (!/^[\d\s+\-*/.()]+$/.test(expr)) throw new Error('Invalid formula');
+  const fn = new Function(`"use strict"; return (${expr});`);
+  const result = fn();
+  if (typeof result !== 'number' || !Number.isFinite(result)) throw new Error('Invalid formula result');
+  return result;
+};
+
+const resolveConditionExpression = (expr: string): boolean => {
+  const normalizedExpr = normalizeFormulaConditionOperators(expr);
+  if (!/^[\d\s+\-*/.()<>=!&|]+$/.test(normalizedExpr)) throw new Error('Invalid condition');
+  const fn = new Function(`"use strict"; return (${normalizedExpr});`);
+  return Boolean(fn());
+};
+
+const evaluateMathFunctions = (expr: string): string => {
+  let result = expr;
+  let match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+
+  while (match) {
+    const funcName = match.name.toLowerCase();
+    const argStrings = splitFormulaArgs(match.argsString);
+
+    if (funcName === 'if') {
+      if (argStrings.length !== 3) throw new Error('if() needs condition, true value, and false value.');
+      const condition = resolveConditionExpression(evaluateMathFunctions(argStrings[0]));
+      const resultValue = resolveBasicExpression(evaluateMathFunctions(condition ? argStrings[1] : argStrings[2]));
+      result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+      match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+      continue;
+    }
+
+    const args = argStrings.map(arg => resolveBasicExpression(evaluateMathFunctions(arg)));
+    const resultValue = funcName === 'roundup'
+      ? Math.ceil(args[0])
+      : funcName === 'rounddown'
+        ? Math.floor(args[0])
+        : funcName === 'round'
+          ? Math.round(args[0])
+          : funcName === 'max'
+            ? Math.max(...args)
+            : Math.min(...args);
+    result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+    match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+  }
+
+  return result;
+};
+
+const evalFormula = (
+  formula: string,
+  context: Record<string, number>,
+  localContext: Record<string, number> = {},
+): number => {
+  if (!formula) return 0;
+  let expr = formula.replace(/@@([a-zA-Z0-9_-]+)/g, (_match, id) => String(localContext[id] ?? 0));
+  expr = expr.replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`);
+  try {
+    const withMathEvaluated = evaluateMathFunctions(expr);
+    const sanitized = withMathEvaluated.replace(/[^0-9+\-*/().\s]/g, '');
+    return Math.round(resolveBasicExpression(sanitized) * 100) / 100;
+  } catch {
+    return 0;
+  }
+};
+
+const rollDice = (notation: string): DiceRoll => {
+  const match = notation.match(/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i);
+  if (!match) throw new Error(`Invalid dice notation: ${notation}`);
+
+  const count = parseInt(match[1] || '1', 10);
+  const sides = parseInt(match[2], 10);
+  const keepMode = match[3]?.toLowerCase();
+  const keepCount = match[4] ? parseInt(match[4], 10) : 0;
+  if (count < 1 || count > 100) throw new Error('Dice count 1-100');
+  if (sides < 2 || sides > 1000) throw new Error('Dice sides 2-1000');
+
+  const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+  let kept = [...rolls];
+  let dropped: number[] = [];
+  if (keepMode && keepCount > 0 && keepCount < count) {
+    const indexed = rolls.map((value, index) => ({ value, index }));
+    indexed.sort((left, right) => keepMode === 'kh' ? right.value - left.value : left.value - right.value);
+    const keptIndices = new Set(indexed.slice(0, keepCount).map(item => item.index));
+    kept = rolls.filter((_value, index) => keptIndices.has(index));
+    dropped = rolls.filter((_value, index) => !keptIndices.has(index));
+  }
+
+  return { notation, rolls, kept, dropped, sum: kept.reduce((sum, value) => sum + value, 0) };
+};
 
 const getEntityMeta = (kind: HomebrewViewerEntityType) => {
   switch (kind) {
@@ -77,7 +253,62 @@ const getHomebrewImageThumbUrl = (entry: ViewerEntry['entry']): string => (
     : getHomebrewImageUrl(entry)
 );
 
-const renderActionBlock = (action: CharacterAction) => (
+const renderStatusEffect = (
+  effect: StatusEffect,
+  key: string,
+  canApplyStatuses: boolean,
+  onApplyStatus: (effect: StatusEffect) => void,
+) => {
+  if (effect.effectType === 'status') {
+    return (
+      <div key={key} className="flex flex-wrap items-center gap-2 text-sm text-stone-800">
+        <button
+          type="button"
+          onClick={() => onApplyStatus(effect)}
+          disabled={!canApplyStatuses || !effect.statusEntry}
+          className="rounded-lg border border-indigo-800/30 bg-indigo-100/65 px-3 py-1.5 text-xs font-bold text-indigo-900 transition hover:bg-indigo-200/70 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Apply
+        </button>
+        <span className="font-bold text-indigo-950">{effect.statusName || effect.statusEntry?.name || 'Imported Status'}</span>
+        {!canApplyStatuses && (
+          <span className="text-xs italic text-stone-500">Control access needed</span>
+        )}
+      </div>
+    );
+  }
+
+  if (effect.effectType === 'bar-update') {
+    return (
+      <div key={key} className="flex flex-wrap items-center gap-2 text-sm text-stone-800">
+        <span className="rounded-full border border-sky-700/15 bg-sky-100/70 px-2 py-1 font-mono text-sky-800">
+          {effect.targetId || 'target_bar'}
+        </span>
+        <span className="font-mono text-amber-900">{effect.value || '0'}</span>
+      </div>
+    );
+  }
+
+  return (
+    <div key={key} className="flex flex-wrap items-center gap-2 text-sm text-stone-800">
+      <span className="rounded-full border border-stone-700/15 bg-stone-100/70 px-2 py-1 font-mono text-emerald-800">
+        {effect.targetId || 'unknown_target'}
+      </span>
+      <span className="font-mono text-amber-900">{effect.value || '0'}</span>
+      <span className="text-xs uppercase tracking-[0.16em] text-stone-600">
+        {(effect.active ?? true) ? 'Active' : 'Inactive'}
+      </span>
+    </div>
+  );
+};
+
+const renderActionBlock = (
+  action: CharacterAction,
+  localVariables: CharacterLocalVariable[] | undefined,
+  canApplyStatuses: boolean,
+  onRollMacro: (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => void,
+  onApplyStatus: (effect: StatusEffect) => void,
+) => (
   <div
     key={action.id}
     className="rounded-xl border border-amber-900/15 bg-black/5 p-4"
@@ -100,20 +331,32 @@ const renderActionBlock = (action: CharacterAction) => (
     {action.description && (
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-stone-800">{action.description}</p>
     )}
+    {(action.macros || []).length > 0 && (
+      <div className="mt-4">
+        <h5 className="mb-2 text-xs font-bold uppercase tracking-[0.18em] text-amber-900/75">Macros</h5>
+        <div className="space-y-2">
+          {(action.macros || []).map((macro) => (
+            <div key={macro.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-900/15 bg-white/35 p-2">
+              <button
+                type="button"
+                onClick={() => onRollMacro(macro, localVariables, action.name || 'Action', action.description || undefined)}
+                className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/25 bg-amber-100/75 px-3 py-1.5 text-xs font-bold text-amber-950 transition hover:bg-amber-200/70"
+              >
+                <Dices size={14} /> Roll
+              </button>
+              <span className="font-bold text-amber-950">{macro.name || 'Unnamed Macro'}</span>
+              <code className="min-w-0 flex-1 truncate text-sm text-emerald-800">{macro.formula}</code>
+            </div>
+          ))}
+        </div>
+      </div>
+    )}
     {(action.effects || []).length > 0 && (
       <div className="mt-4">
         <h5 className="text-xs font-bold uppercase tracking-[0.18em] text-amber-900/75 mb-2">Effects</h5>
         <div className="space-y-2">
           {(action.effects || []).map((effect, effectIndex) => (
-            <div key={`${action.id}-effect-${effectIndex}`} className="flex flex-wrap items-center gap-2 text-sm text-stone-800">
-              <span className="rounded-full border border-stone-700/15 bg-stone-100/70 px-2 py-1 font-mono text-emerald-800">
-                {effect.targetId || 'unknown_target'}
-              </span>
-              <span className="font-mono text-amber-900">{effect.value || '0'}</span>
-              <span className="text-xs uppercase tracking-[0.16em] text-stone-600">
-                {(effect.active ?? true) ? 'Active' : 'Inactive'}
-              </span>
-            </div>
+            renderStatusEffect(effect, `${action.id}-effect-${effectIndex}`, canApplyStatuses, onApplyStatus)
           ))}
         </div>
       </div>
@@ -131,8 +374,37 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
   const [character, setCharacter] = useState<CharacterData | null>(null);
   const [isLoading, setIsLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
+  const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
+  const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
+  const [localInputError, setLocalInputError] = useState('');
+  const rollPopupTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
+
+  const dismissRollPopup = useCallback(() => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+      rollPopupTimeoutRef.current = null;
+    }
+    setRollPopupResult(null);
+  }, []);
+
+  const showRollPopup = useCallback((result: RollResult) => {
+    setRollPopupResult(result);
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+    rollPopupTimeoutRef.current = window.setTimeout(() => {
+      setRollPopupResult(null);
+      rollPopupTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  useEffect(() => () => {
+    if (rollPopupTimeoutRef.current) window.clearTimeout(rollPopupTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -188,9 +460,322 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
   }, [character, entityType, entryId]);
 
   const meta = getEntityMeta(entityType);
+  const canControlCharacter = !!character && (
+    !character.userId
+    || character.userId === 'guest'
+    || (!!userId && (character.userId === userId || (character.controlUserIds || []).includes(userId)))
+  );
+
+  const getCharacterContext = useCallback((): Record<string, number> => {
+    if (!character) return {};
+    const context: Record<string, number> = {};
+    const mainAttributes = character.mainAttributes || [];
+    const allAttributes: Array<CustomAttribute | SkillAttribute> = [
+      ...mainAttributes,
+      ...(character.secondaryAttributes || []),
+      ...(character.skills || []),
+      ...(character.otherAttributes || []),
+      ...(character.resistances || []),
+    ];
+
+    allAttributes.forEach((attribute) => {
+      if (!attribute.id) return;
+      context[attribute.id] = evalFormula(attribute.value || '0', context);
+    });
+    mainAttributes.forEach((attribute) => {
+      if (!attribute.id) return;
+      context[`${attribute.id}_mod`] = Math.floor(((context[attribute.id] ?? 0) - 10) / 2);
+    });
+    (character.bars || []).forEach((bar) => {
+      if (!bar.id) return;
+      context[`${bar.id}_current`] = evalFormula(bar.currentValue || '0', context);
+      if (getBarMode(bar) === 'resource') {
+        context[`${bar.id}_reset`] = evalFormula(bar.resetValue || '0', context);
+      } else {
+        context[`${bar.id}_max`] = evalFormula(bar.maxValue || '0', context);
+      }
+    });
+
+    return context;
+  }, [character]);
+
+  const getLocalVariableContext = useCallback((
+    variables: CharacterLocalVariable[] | undefined,
+    globalContext: Record<string, number>,
+  ): Record<string, number> => {
+    const localContext: Record<string, number> = {};
+    (variables || []).forEach((variable) => {
+      if (!variable.id || variable.kind === 'input') return;
+      if (variable.kind === 'resource') {
+        const parsed = Number.parseFloat(variable.value || '0');
+        localContext[variable.id] = Number.isFinite(parsed) ? parsed : 0;
+        return;
+      }
+      localContext[variable.id] = evalFormula(variable.value || '0', globalContext, localContext);
+    });
+    return localContext;
+  }, []);
+
+  const requestLocalInputValues = useCallback((
+    variables: CharacterLocalVariable[],
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => (
+    new Promise((resolve) => {
+      setLocalInputDrafts(variables.reduce<Record<string, string>>((drafts, variable) => {
+        drafts[variable.id] = '0';
+        return drafts;
+      }, {}));
+      setLocalInputError('');
+      setLocalInputRequest({
+        title,
+        variables,
+        resolve: (values) => {
+          setLocalInputRequest(null);
+          setLocalInputError('');
+          resolve(values);
+        },
+      });
+    })
+  ), []);
+
+  const getLocalVariableContextWithInputs = useCallback(async (
+    variables: CharacterLocalVariable[] | undefined,
+    globalContext: Record<string, number>,
+    formula: string,
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => {
+    const normalizedVariables = variables || [];
+    const localContext = getLocalVariableContext(normalizedVariables, globalContext);
+    const referencedInputIds = Array.from(new Set(
+      Array.from(formula.matchAll(/@@([a-zA-Z0-9_-]+)/g))
+        .map(match => match[1])
+        .filter(id => normalizedVariables.some(variable => variable.kind === 'input' && variable.id === id))
+    ));
+    if (referencedInputIds.length === 0) return localContext;
+
+    const inputVariables = referencedInputIds
+      .map(inputId => normalizedVariables.find(variable => variable.kind === 'input' && variable.id === inputId))
+      .filter((variable): variable is CharacterLocalVariable => !!variable);
+    const inputValues = await requestLocalInputValues(inputVariables, title);
+    if (!inputValues) return null;
+    return { ...localContext, ...inputValues };
+  }, [getLocalVariableContext, requestLocalInputValues]);
+
+  const executeMacro = useCallback((
+    macro: CharacterDiceMacro,
+    context: Record<string, number>,
+    localContext: Record<string, number> = {},
+  ): RollResult => {
+    const steps: RollStep[] = [];
+    const parts = (macro.formula || '').trim().split(/(\d*d\d+(?:kh|kl)?\d*|@@[a-zA-Z0-9_-]+|@[a-zA-Z0-9_-]+)/gi);
+    const resolvedParts: string[] = [];
+
+    parts.forEach((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return;
+      if (/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i.test(trimmed)) {
+        const dice = rollDice(trimmed);
+        steps.push({
+          label: trimmed,
+          value: dice.sum,
+          detail: dice.rolls.length > 1 ? `[${dice.rolls.join(', ')}]` : `${dice.sum}`,
+        });
+        resolvedParts.push(String(dice.sum));
+        return;
+      }
+      const localRef = trimmed.match(/^@@([a-zA-Z0-9_-]+)$/);
+      if (localRef) {
+        const value = localContext[localRef[1]] ?? 0;
+        steps.push({ label: `@@${localRef[1]}`, value, detail: `${localRef[1]} = ${value}` });
+        resolvedParts.push(String(value));
+        return;
+      }
+      const globalRef = trimmed.match(/^@([a-zA-Z0-9_-]+)$/);
+      if (globalRef) {
+        const value = context[globalRef[1]] ?? 0;
+        steps.push({ label: `@${globalRef[1]}`, value, detail: `${globalRef[1]} = ${value}` });
+        resolvedParts.push(String(value));
+        return;
+      }
+      resolvedParts.push(trimmed);
+    });
+
+    const total = evalFormula(resolvedParts.join(' '), {}, {});
+    return {
+      macroName: macro.name || 'Roll',
+      formula: macro.formula || '',
+      steps,
+      total,
+      timestamp: Date.now(),
+    };
+  }, []);
+
+  const rollMacro = useCallback(async (
+    macro: CharacterDiceMacro,
+    localVariables?: CharacterLocalVariable[],
+    namePrefix?: string,
+    description?: string,
+  ) => {
+    setActionMessage(null);
+    const context = getCharacterContext();
+    const localContext = await getLocalVariableContextWithInputs(localVariables, context, macro.formula || '', `${namePrefix || macro.name || 'Roll'} Input Values`);
+    if (!localContext) return;
+    const result = executeMacro(
+      { ...macro, name: namePrefix ? `${namePrefix}: ${macro.name || 'Roll'}` : macro.name },
+      context,
+      localContext,
+    );
+    result.description = description || undefined;
+    showRollPopup(result);
+  }, [executeMacro, getCharacterContext, getLocalVariableContextWithInputs, showRollPopup]);
+
+  const buildAppliedStatus = useCallback((template: Partial<CharacterStatus>, folderId: string | null): CharacterStatus => ({
+    id: `st_${uid()}`,
+    name: template.name || 'Imported Status',
+    duration: template.duration || '',
+    durationType: template.durationType || 'custom',
+    durationEndBehavior: template.durationEndBehavior || 'delete',
+    maxDuration: template.maxDuration || '',
+    replenishTrigger: template.replenishTrigger || 'custom',
+    replenishAmount: template.replenishAmount || '',
+    description: template.description || '',
+    effects: (template.effects || []) as StatusEffect[],
+    actions: (template.actions || []) as CharacterAction[],
+    localVariables: (template.localVariables || []) as CharacterLocalVariable[],
+    scripts: template.scripts || [],
+    active: true,
+    color: template.color || '#f59e0b',
+    hidden: template.hidden ?? false,
+    folderId,
+  }), []);
+
+  const applyStatusEffect = useCallback(async (effect: StatusEffect) => {
+    if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
+    const nextCharacter = {
+      ...character,
+      statuses: [
+        ...(character.statuses || []),
+        buildAppliedStatus(effect.statusEntry as Partial<CharacterStatus>, effect.statusFolderId || null),
+      ],
+    };
+    setCharacter(nextCharacter);
+    const result = await saveCharacter(nextCharacter);
+    setActionMessage(result.remoteSaved || result.localSaved ? 'Status applied to character.' : 'Status could not be saved.');
+  }, [buildAppliedStatus, canControlCharacter, character]);
+
+  const submitLocalInputs = () => {
+    if (!localInputRequest) return;
+    const values: Record<string, number> = {};
+    for (const variable of localInputRequest.variables) {
+      const rawValue = localInputDrafts[variable.id] ?? '';
+      const parsed = Number(rawValue.trim().replace(',', '.'));
+      if (!Number.isFinite(parsed)) {
+        setLocalInputError(`${variable.description || variable.id} needs a valid number.`);
+        return;
+      }
+      values[variable.id] = parsed;
+    }
+    localInputRequest.resolve(values);
+  };
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 text-stone-900" style={parchmentBackground}>
+      {rollPopupResult && (
+        <button
+          type="button"
+          onClick={dismissRollPopup}
+          className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-amber-500/60 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-amber-200/10 backdrop-blur transition hover:border-amber-300"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-amber-800/30 bg-amber-900/25 px-4 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Dices size={17} className="shrink-0 text-amber-300" />
+              <span className="truncate text-sm font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.macroName || 'Roll Result'}
+              </span>
+            </div>
+            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.total}
+            </span>
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {rollPopupResult.formula}
+            </code>
+            {rollPopupResult.description && (
+              <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
+            )}
+            <div className="space-y-1">
+              {rollPopupResult.steps.slice(0, 3).map((step, index) => (
+                <div key={`${rollPopupResult.timestamp}-${index}`} className="flex items-center gap-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-stone-400">{step.label}</span>
+                  <span className="font-mono font-bold text-amber-200">{step.value}</span>
+                </div>
+              ))}
+              {rollPopupResult.steps.length > 3 && (
+                <p className="text-xs text-stone-500">+{rollPopupResult.steps.length - 3} more step</p>
+              )}
+            </div>
+          </div>
+        </button>
+      )}
+      {localInputRequest && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+            <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+              {localInputRequest.title}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-stone-300">
+              This roll needs temporary local input values.
+            </p>
+            <div className="mt-4 space-y-3">
+              {localInputRequest.variables.map((variable, index) => (
+                <label key={variable.id} className="block rounded-xl border border-cyan-900/35 bg-cyan-950/15 p-3">
+                  <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/70">
+                    {variable.description || 'Input Value'}
+                  </span>
+                  <span className="mt-1 block font-mono text-xs text-stone-400">@@{variable.id}</span>
+                  <input
+                    type="text"
+                    inputMode="decimal"
+                    value={localInputDrafts[variable.id] ?? ''}
+                    onChange={(event) => {
+                      setLocalInputDrafts(prev => ({ ...prev, [variable.id]: event.target.value.replace(',', '.').replace(/[^\d.-]/g, '') }));
+                      setLocalInputError('');
+                    }}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter') submitLocalInputs();
+                      if (event.key === 'Escape') localInputRequest.resolve(null);
+                    }}
+                    autoFocus={index === 0}
+                    className="mt-2 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 focus:border-cyan-500/60 focus:outline-none"
+                    placeholder="0"
+                  />
+                </label>
+              ))}
+            </div>
+            {localInputError && (
+              <div className="mt-4 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                {localInputError}
+              </div>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => localInputRequest.resolve(null)}
+                className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={submitLocalInputs}
+                className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                Roll
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mx-auto max-w-5xl">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
@@ -204,6 +789,11 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
             Source Character: <span className="font-bold text-amber-950">{character?.name || characterId}</span>
           </div>
         </div>
+        {actionMessage && (
+          <div className="mb-4 rounded-xl border border-emerald-900/20 bg-emerald-100/65 px-4 py-3 text-sm font-semibold text-emerald-950">
+            {actionMessage}
+          </div>
+        )}
 
         {isLoading ? (
           <div className={`${viewerSectionClass} text-center text-lg text-stone-700`}>Loading homebrew entry...</div>
@@ -257,7 +847,13 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                     <h2 className="text-2xl" style={{ fontFamily: "'Cinzel', serif" }}>Actions</h2>
                   </div>
                   <div className="space-y-3">
-                    {(viewerEntry.entry.actions || []).map(renderActionBlock)}
+                    {(viewerEntry.entry.actions || []).map(action => renderActionBlock(
+                      action,
+                      'localVariables' in viewerEntry.entry ? viewerEntry.entry.localVariables : undefined,
+                      canControlCharacter,
+                      (macro, localVariables, namePrefix, description) => void rollMacro(macro, localVariables, namePrefix, description),
+                      (effect) => void applyStatusEffect(effect),
+                    ))}
                   </div>
                 </section>
               )}
@@ -271,15 +867,7 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                   <div className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
                     <div className="space-y-2">
                       {(viewerEntry.entry.effects || []).map((effect, index) => (
-                        <div key={`${viewerEntry.entry.id}-effect-${index}`} className="flex flex-wrap items-center gap-2 text-[15px] text-stone-800">
-                          <span className="rounded-full border border-stone-700/15 bg-stone-100/70 px-2 py-1 font-mono text-emerald-800">
-                            {effect.targetId || 'unknown_target'}
-                          </span>
-                          <span className="font-mono text-amber-900">{effect.value || '0'}</span>
-                          <span className="text-xs uppercase tracking-[0.16em] text-stone-600">
-                            {(effect.active ?? true) ? 'Active' : 'Inactive'}
-                          </span>
-                        </div>
+                        renderStatusEffect(effect, `${viewerEntry.entry.id}-effect-${index}`, canControlCharacter, (entryEffect) => void applyStatusEffect(entryEffect))
                       ))}
                     </div>
                   </div>
@@ -348,9 +936,21 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                   </h2>
                   <div className="space-y-3">
                     {(viewerEntry.entry.macros || []).map((macro) => (
-                      <div key={macro.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-3">
+                      <div key={macro.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-900/15 bg-black/5 p-3">
+                        <button
+                          type="button"
+                          onClick={() => void rollMacro(
+                            macro,
+                            'localVariables' in viewerEntry.entry ? viewerEntry.entry.localVariables : undefined,
+                            viewerEntry.entry.name || meta.label,
+                            'description' in viewerEntry.entry ? viewerEntry.entry.description : undefined,
+                          )}
+                          className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/25 bg-amber-100/75 px-3 py-1.5 text-xs font-bold text-amber-950 transition hover:bg-amber-200/70"
+                        >
+                          <Dices size={14} /> Roll
+                        </button>
                         <div className="font-bold text-amber-950">{macro.name || 'Unnamed Macro'}</div>
-                        <code className="mt-1 block whitespace-pre-wrap break-words text-sm text-emerald-800">
+                        <code className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-emerald-800">
                           {macro.formula}
                         </code>
                       </div>

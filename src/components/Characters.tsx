@@ -749,6 +749,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [scriptValueTargetRequest, setScriptValueTargetRequest] = useState<{ label: string; localVariables: CharacterLocalVariable[]; resolve: (targetId: string | null) => void } | null>(null);
   const [scriptValueGlobalDraft, setScriptValueGlobalDraft] = useState('');
   const [scriptValueLocalDraft, setScriptValueLocalDraft] = useState('');
+  const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
+  const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
+  const [localInputError, setLocalInputError] = useState('');
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
   const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeStatusCategoryId, setActiveStatusCategoryId] = useState<string | null>(null);
@@ -795,6 +798,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [scriptTriggerEvent, setScriptTriggerEvent] = useState<{ trigger: CharacterScriptTrigger; nonce: number } | null>(null);
   const [mainDiceState, setMainDiceState] = useState<UserDiceSettings>(DEFAULT_CHARACTER_DICE_STATE);
   const [rollResults, setRollResults] = useState<RollResult[]>([]);
+  const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
   const [editingMacroId, setEditingMacroId] = useState<string | null>(null);
   const [macroEditBuffer, setMacroEditBuffer] = useState<Partial<CharacterDiceMacro>>({});
   const [diceError, setDiceError] = useState<string | null>(null);
@@ -818,6 +822,40 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const homebrewImageInputRef = useRef<HTMLInputElement | null>(null);
   const galleryUploadInputRef = useRef<HTMLInputElement | null>(null);
   const historyCloseTimeoutRef = useRef<number | null>(null);
+  const rollPopupTimeoutRef = useRef<number | null>(null);
+
+  const dismissRollPopup = useCallback(() => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+      rollPopupTimeoutRef.current = null;
+    }
+    setRollPopupResult(null);
+  }, []);
+
+  const showRollPopup = useCallback((result: RollResult) => {
+    setRollPopupResult(result);
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+    rollPopupTimeoutRef.current = window.setTimeout(() => {
+      setRollPopupResult(null);
+      rollPopupTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  const addRollResults = useCallback((results: RollResult | RollResult[]) => {
+    const nextResults = Array.isArray(results) ? results : [results];
+    if (nextResults.length === 0) return;
+    setRollResults(prev => [...nextResults, ...prev]);
+    showRollPopup(nextResults[0]);
+    window.setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }, [showRollPopup]);
+
+  useEffect(() => () => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+  }, []);
 
   // ── Auth & Data ──────────────────────────────────────────────────────────────
 
@@ -1207,11 +1245,35 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     return localContext;
   };
 
-  const getRollLocalVariableContext = (
+  const requestLocalInputValues = (
+    variables: CharacterLocalVariable[],
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => (
+    new Promise((resolve) => {
+      const drafts = variables.reduce<Record<string, string>>((next, variable) => {
+        next[variable.id] = '0';
+        return next;
+      }, {});
+      setLocalInputDrafts(drafts);
+      setLocalInputError('');
+      setLocalInputRequest({
+        title,
+        variables,
+        resolve: (values) => {
+          setLocalInputRequest(null);
+          setLocalInputError('');
+          resolve(values);
+        },
+      });
+    })
+  );
+
+  const getLocalVariableContextWithInputs = async (
     variables: CharacterLocalVariable[] | undefined,
     globalContext: Record<string, number>,
     formula: string,
-  ): Record<string, number> | null => {
+    title = 'Input Values',
+  ): Promise<Record<string, number> | null> => {
     const normalizedVariables = normalizeLocalVariables(variables);
     const localContext = getLocalVariableContext(normalizedVariables, globalContext);
     const referencedInputIds = Array.from(new Set(
@@ -1220,17 +1282,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         .filter(id => normalizedVariables.some(variable => variable.kind === 'input' && variable.id === id))
     ));
 
-    for (const inputId of referencedInputIds) {
-      const inputVariable = normalizedVariables.find(variable => variable.id === inputId);
-      const answer = window.prompt(inputVariable?.description || `Enter value for ${inputId}`, '0');
-      if (answer === null) return null;
-      const parsed = Number(answer.trim());
-      if (!Number.isFinite(parsed)) {
-        window.alert('Please enter a valid number.');
-        return null;
-      }
-      localContext[inputId] = parsed;
-    }
+    if (referencedInputIds.length === 0) return localContext;
+
+    const inputVariables = referencedInputIds
+      .map(inputId => normalizedVariables.find(variable => variable.kind === 'input' && variable.id === inputId))
+      .filter((variable): variable is CharacterLocalVariable => !!variable);
+    const inputValues = await requestLocalInputValues(inputVariables, title);
+    if (!inputValues) return null;
+    Object.assign(localContext, inputValues);
 
     return localContext;
   };
@@ -2627,7 +2686,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(status.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(status.localVariables, context, macro.formula, `${status.name || 'Status'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
@@ -2637,8 +2696,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         localContext
       );
       result.description = action.description || status.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -2889,13 +2947,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(item.localVariables, context, macro.formula, `${item.name || 'Item'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${macro.name}` }, context, ids, localContext);
       result.description = item.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
     } catch (err: unknown) {
       setDiceError(err instanceof Error ? err.message : 'Roll failed');
     }
@@ -2905,13 +2962,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(item.localVariables, context, macro.formula, `${item.name || 'Item'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro({ ...macro, name: `${item.name}: ${action.name}: ${macro.name}` }, context, ids, localContext);
       result.description = action.description || item.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
     } catch (err: unknown) {
       setDiceError(err instanceof Error ? err.message : 'Roll failed');
     }
@@ -4081,11 +4137,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
   }, [selectedCharacter, charGeneralItems, charInventory, charStatuses]);
 
-  const applyBarUpdateEffect = (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
+  const applyBarUpdateEffect = async (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
     if (effect.effectType !== 'bar-update' || !effect.targetId) return;
 
     const context = getCharacterContext();
-    const localContext = getLocalVariableContext(localVariables, context);
+    const localContext = await getLocalVariableContextWithInputs(
+      localVariables,
+      context,
+      effect.value || '0',
+      'Bar Update Input Values',
+    );
+    if (!localContext) return;
     const delta = evalCharFormula(effect.value || '0', context, localContext);
     if (!Number.isFinite(delta)) return;
 
@@ -4879,7 +4941,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(item.localVariables, context, macro.formula, `${item.name || 'Item'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
@@ -4889,8 +4951,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         localContext
       );
       result.description = action.description || item.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -5128,7 +5189,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(spell.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(spell.localVariables, context, macro.formula, `${spell.name || 'Spell'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
@@ -5138,8 +5199,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         localContext
       );
       result.description = action.description || spell.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -5240,8 +5300,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       const context = getCharacterContext();
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(macro, context, ids);
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode(mode);
       if (activeDiceState.autoSend) {
@@ -5257,7 +5316,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(item.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(item.localVariables, context, macro.formula, `${item.name || 'Item'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
@@ -5267,8 +5326,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         localContext
       );
       result.description = item.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -5284,7 +5342,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setDiceError(null);
     try {
       const context = getCharacterContext();
-      const localContext = getRollLocalVariableContext(spell.localVariables, context, macro.formula);
+      const localContext = await getLocalVariableContextWithInputs(spell.localVariables, context, macro.formula, `${spell.name || 'Spell'} Input Values`);
       if (!localContext) return;
       const ids = getCharacterReferenceIds();
       const result = executeCharacterMacro(
@@ -5294,8 +5352,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         localContext
       );
       result.description = spell.description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -5318,8 +5375,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         ids
       );
       result.description = description || undefined;
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
 
       const activeDiceState = getDiceStateForMode('sheet');
       if (activeDiceState.autoSend) {
@@ -5339,8 +5395,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       const activeDiceState = getDiceStateForMode(mode);
       const macrosToRoll = macrosOverride || activeDiceState.macros;
       const results = macrosToRoll.map((macro) => executeCharacterMacro(macro, context, ids));
-      setRollResults(prev => [...results.reverse(), ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults([...results].reverse());
 
       if (activeDiceState.autoSend) {
         for (const result of results) {
@@ -5603,8 +5658,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                       description: quickDescription.trim() || undefined,
                     };
 
-                    setRollResults(prev => [finalResult, ...prev]);
-                    setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                    addRollResults(finalResult);
 
                     if (activeDiceState.autoSend) {
                       const discordErr = await sendToDiscord(activeDiceState.webhookUrl || '', selectedCharacter.name, finalResult);
@@ -6668,6 +6722,83 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               style={{ fontFamily: "'Cinzel', serif" }}
             >
               Use This Attribute
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderLocalInputModal = () => {
+    if (!localInputRequest) return null;
+
+    const submitInputs = () => {
+      const values: Record<string, number> = {};
+      for (const variable of localInputRequest.variables) {
+        const rawValue = localInputDrafts[variable.id] ?? '';
+        const parsed = Number(rawValue.trim().replace(',', '.'));
+        if (!Number.isFinite(parsed)) {
+          setLocalInputError(`${variable.description || variable.id} needs a valid number.`);
+          return;
+        }
+        values[variable.id] = parsed;
+      }
+      localInputRequest.resolve(values);
+    };
+
+    return (
+      <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+          <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            {localInputRequest.title}
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            This action needs temporary local input values before it can be applied.
+          </p>
+          <div className="mt-4 space-y-3">
+            {localInputRequest.variables.map((variable, index) => (
+              <label key={variable.id} className="block rounded-xl border border-cyan-900/35 bg-cyan-950/15 p-3">
+                <span className="block text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/70">
+                  {variable.description || 'Input Value'}
+                </span>
+                <span className="mt-1 block font-mono text-xs text-stone-400">@@{variable.id}</span>
+                <input
+                  type="text"
+                  inputMode="decimal"
+                  value={localInputDrafts[variable.id] ?? ''}
+                  onChange={(event) => {
+                    setLocalInputDrafts(prev => ({ ...prev, [variable.id]: sanitizeNumberInput(event.target.value) }));
+                    setLocalInputError('');
+                  }}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter') submitInputs();
+                    if (event.key === 'Escape') localInputRequest.resolve(null);
+                  }}
+                  autoFocus={index === 0}
+                  className="mt-2 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 focus:border-cyan-500/60 focus:outline-none"
+                  placeholder="0"
+                />
+              </label>
+            ))}
+          </div>
+          {localInputError && (
+            <div className="mt-4 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+              {localInputError}
+            </div>
+          )}
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => localInputRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={submitInputs}
+              className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Apply
             </button>
           </div>
         </div>
@@ -8121,7 +8252,46 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px]" style={{ fontFamily: "'IM Fell English', serif" }}>
         {renderBarTargetResolverModal()}
         {renderEffectTargetResolverModal()}
+        {renderLocalInputModal()}
         {renderScriptValueTargetResolverModal()}
+        {rollPopupResult && (
+          <button
+            type="button"
+            onClick={dismissRollPopup}
+            className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-amber-400/55 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-amber-200/10 backdrop-blur transition hover:border-amber-300"
+          >
+            <div className="flex items-center justify-between gap-3 border-b border-amber-800/30 bg-amber-900/25 px-4 py-2">
+              <div className="flex min-w-0 items-center gap-2">
+                <Dices size={17} className="shrink-0 text-amber-300" />
+                <span className="truncate text-sm font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                  {rollPopupResult.macroName || 'Roll Result'}
+                </span>
+              </div>
+              <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.total}
+              </span>
+            </div>
+            <div className="space-y-2 px-4 py-3">
+              <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+                {rollPopupResult.formula}
+              </code>
+              {rollPopupResult.description && (
+                <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
+              )}
+              <div className="space-y-1">
+                {rollPopupResult.steps.slice(0, 3).map((step, index) => (
+                  <div key={`${rollPopupResult.timestamp}-${index}`} className="flex items-center gap-2 text-xs">
+                    <span className="min-w-0 flex-1 truncate text-stone-400">{step.label}</span>
+                    <span className="font-mono font-bold text-amber-200">{step.value}</span>
+                  </div>
+                ))}
+                {rollPopupResult.steps.length > 3 && (
+                  <p className="text-xs text-stone-500">+{rollPopupResult.steps.length - 3} more step</p>
+                )}
+              </div>
+            </div>
+          </button>
+        )}
         <input
           ref={attributeImportInputRef}
           type="file"
@@ -12910,7 +13080,46 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     <div className="w-full flex flex-col gap-6" style={{ fontFamily: "'IM Fell English', serif" }}>
       {renderBarTargetResolverModal()}
       {renderEffectTargetResolverModal()}
+      {renderLocalInputModal()}
       {renderScriptValueTargetResolverModal()}
+      {rollPopupResult && (
+        <button
+          type="button"
+          onClick={dismissRollPopup}
+          className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-amber-400/55 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-amber-200/10 backdrop-blur transition hover:border-amber-300"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-amber-800/30 bg-amber-900/25 px-4 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Dices size={17} className="shrink-0 text-amber-300" />
+              <span className="truncate text-sm font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.macroName || 'Roll Result'}
+              </span>
+            </div>
+            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.total}
+            </span>
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {rollPopupResult.formula}
+            </code>
+            {rollPopupResult.description && (
+              <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
+            )}
+            <div className="space-y-1">
+              {rollPopupResult.steps.slice(0, 3).map((step, index) => (
+                <div key={`${rollPopupResult.timestamp}-${index}`} className="flex items-center gap-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-stone-400">{step.label}</span>
+                  <span className="font-mono font-bold text-amber-200">{step.value}</span>
+                </div>
+              ))}
+              {rollPopupResult.steps.length > 3 && (
+                <p className="text-xs text-stone-500">+{rollPopupResult.steps.length - 3} more step</p>
+              )}
+            </div>
+          </div>
+        </button>
+      )}
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-amber-900/30 pb-4">
         <div>

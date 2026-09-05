@@ -420,6 +420,7 @@ function getMacroRefs(macro: DiceMacro, modifiers: Modifier[]): Modifier[] {
 export const DiceMacros: React.FC = () => {
   const [state, setState] = useState<DiceMacrosState>(loadState);
   const [rollResults, setRollResults] = useState<RollResult[]>([]);
+  const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
   const [editingModId, setEditingModId] = useState<string | null>(null);
   const [editingMacroId, setEditingMacroId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -427,6 +428,40 @@ export const DiceMacros: React.FC = () => {
   const [macroEditBuffer, setMacroEditBuffer] = useState<Partial<DiceMacro>>({});
   const fileInputRef = useRef<HTMLInputElement>(null);
   const resultsRef = useRef<HTMLDivElement>(null);
+  const rollPopupTimeoutRef = useRef<number | null>(null);
+
+  const dismissRollPopup = useCallback(() => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+      rollPopupTimeoutRef.current = null;
+    }
+    setRollPopupResult(null);
+  }, []);
+
+  const showRollPopup = useCallback((result: RollResult) => {
+    setRollPopupResult(result);
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+    rollPopupTimeoutRef.current = window.setTimeout(() => {
+      setRollPopupResult(null);
+      rollPopupTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  const addRollResults = useCallback((results: RollResult | RollResult[]) => {
+    const nextResults = Array.isArray(results) ? results : [results];
+    if (nextResults.length === 0) return;
+    setRollResults(prev => [...nextResults, ...prev]);
+    showRollPopup(nextResults[0]);
+    window.setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+  }, [showRollPopup]);
+
+  useEffect(() => () => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+  }, []);
   
   // Structured state for Quick Roll
   const [quickDice, setQuickDice] = useState<Record<number, number>>({});
@@ -553,8 +588,7 @@ export const DiceMacros: React.FC = () => {
     setError(null);
     try {
       const result = executeMacro(macro, state.modifiers);
-      setRollResults(prev => [result, ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults(result);
       
       // Send to Discord if enabled
       if (state.autoSend) {
@@ -570,8 +604,7 @@ export const DiceMacros: React.FC = () => {
     setError(null);
     try {
       const results = state.macros.map(m => executeMacro(m, state.modifiers));
-      setRollResults(prev => [...results.reverse(), ...prev]);
-      setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+      addRollResults([...results].reverse());
       
       // Send to Discord if enabled
       if (state.autoSend) {
@@ -703,6 +736,44 @@ export const DiceMacros: React.FC = () => {
 
   return (
     <div className="w-full" style={{ fontFamily: "'IM Fell English', serif" }}>
+      {rollPopupResult && (
+        <button
+          type="button"
+          onClick={dismissRollPopup}
+          className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-amber-400/55 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-amber-200/10 backdrop-blur transition hover:border-amber-300"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-amber-800/30 bg-amber-900/25 px-4 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Dices size={17} className="shrink-0 text-amber-300" />
+              <span className="truncate text-sm font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.macroName || 'Roll Result'}
+              </span>
+            </div>
+            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.total}
+            </span>
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {rollPopupResult.formula}
+            </code>
+            {rollPopupResult.description && (
+              <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
+            )}
+            <div className="space-y-1">
+              {rollPopupResult.steps.slice(0, 3).map((step, index) => (
+                <div key={`${rollPopupResult.timestamp}-${index}`} className="flex items-center gap-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-stone-400">{step.label}</span>
+                  <span className="font-mono font-bold text-amber-200">{step.value}</span>
+                </div>
+              ))}
+              {rollPopupResult.steps.length > 3 && (
+                <p className="text-xs text-stone-500">+{rollPopupResult.steps.length - 3} more step</p>
+              )}
+            </div>
+          </div>
+        </button>
+      )}
       {/* Header */}
       <div className="flex items-center justify-between mb-6 flex-wrap gap-3">
         <div>
@@ -907,8 +978,7 @@ export const DiceMacros: React.FC = () => {
                   description: quickDescription.trim() || undefined
                 };
                 
-                setRollResults(prev => [finalResult, ...prev]);
-                setTimeout(() => resultsRef.current?.scrollIntoView({ behavior: 'smooth', block: 'start' }), 50);
+                addRollResults(finalResult);
                 
                 if (state.autoSend) {
                   sendToDiscord(state.webhookUrl || '', state.characterName || '', finalResult).then(discordErr => {

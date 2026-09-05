@@ -1,16 +1,21 @@
-import React, { useEffect, useMemo, useState } from 'react';
-import { ArrowLeft, BookOpen, FolderOpen, ImageIcon, Layers3, Search, Shield, Sparkles } from 'lucide-react';
+import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import { ArrowLeft, BookOpen, Dices, FolderOpen, ImageIcon, Layers3, Search, Shield, Sparkles } from 'lucide-react';
 import {
   CharacterAction,
+  CharacterBar,
+  CharacterDiceMacro,
   CharacterData,
   CharacterEntryFolder,
   CharacterGeneralItem,
   CharacterInventoryItem,
+  CharacterLocalVariable,
   CharacterSpell,
   CharacterStatus,
+  CustomAttribute,
+  SkillAttribute,
   StatusEffect,
 } from '../types/character';
-import { loadCharacterById } from '../lib/firestore';
+import { loadCharacterById, saveCharacter } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
@@ -27,6 +32,29 @@ type LibraryEntry =
   | { kind: 'inventory-item'; entry: CharacterInventoryItem; folderLabel: string; folderId?: string | null; folderColor?: string }
   | { kind: 'spell'; entry: CharacterSpell; folderLabel: string; folderId?: string | null; folderColor?: string }
   | { kind: 'status'; entry: CharacterStatus; folderLabel: string; folderId?: string | null; folderColor?: string };
+
+interface RollStep {
+  label: string;
+  value: number;
+  detail?: string;
+}
+
+interface RollResult {
+  macroName: string;
+  formula: string;
+  steps: RollStep[];
+  total: number;
+  timestamp: number;
+  description?: string;
+}
+
+interface DiceRoll {
+  notation: string;
+  rolls: number[];
+  kept: number[];
+  dropped: number[];
+  sum: number;
+}
 
 interface FolderGroup {
   key: string;
@@ -66,6 +94,53 @@ const parchmentBackground = {
 
 const sectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-5 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
+
+const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+
+const getBarMode = (bar: CharacterBar) => bar.mode || 'default';
+
+const evalFormula = (
+  formula: string,
+  context: Record<string, number>,
+  localContext: Record<string, number> = {},
+): number => {
+  if (!formula) return 0;
+  const expr = formula
+    .replace(/@@([a-zA-Z0-9_-]+)/g, (_match, id) => String(localContext[id] ?? 0))
+    .replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`)
+    .replace(/roundup/g, 'Math.ceil')
+    .replace(/rounddown/g, 'Math.floor')
+    .replace(/round/g, 'Math.round')
+    .replace(/max/g, 'Math.max')
+    .replace(/min/g, 'Math.min');
+
+  try {
+    const result = new Function(`"use strict"; return (${expr});`)();
+    return typeof result === 'number' && Number.isFinite(result) ? Math.round(result * 100) / 100 : 0;
+  } catch {
+    return 0;
+  }
+};
+
+const rollDice = (notation: string): DiceRoll => {
+  const match = notation.match(/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i);
+  if (!match) throw new Error(`Invalid dice notation: ${notation}`);
+  const count = parseInt(match[1] || '1', 10);
+  const sides = parseInt(match[2], 10);
+  const keepMode = match[3]?.toLowerCase();
+  const keepCount = match[4] ? parseInt(match[4], 10) : 0;
+  const rolls = Array.from({ length: count }, () => Math.floor(Math.random() * sides) + 1);
+  let kept = [...rolls];
+  let dropped: number[] = [];
+  if (keepMode && keepCount > 0 && keepCount < count) {
+    const indexed = rolls.map((value, index) => ({ value, index }));
+    indexed.sort((left, right) => keepMode === 'kh' ? right.value - left.value : left.value - right.value);
+    const keptIndices = new Set(indexed.slice(0, keepCount).map(item => item.index));
+    kept = rolls.filter((_value, index) => keptIndices.has(index));
+    dropped = rolls.filter((_value, index) => !keptIndices.has(index));
+  }
+  return { notation, rolls, kept, dropped, sum: kept.reduce((sum, value) => sum + value, 0) };
+};
 
 const categoryMeta: Record<HomebrewLibraryCategory, { title: string; subtitle: string; accent: string; icon: React.ReactNode }> = {
   'general-items': {
@@ -202,10 +277,23 @@ const buildFolderGroups = (entries: LibraryEntry[]): FolderGroup[] => {
   return Array.from(groups.values()).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }));
 };
 
-const renderEffectPill = (effect: StatusEffect, index: number) => {
+const renderEffectPill = (
+  effect: StatusEffect,
+  index: number,
+  canApplyStatuses = false,
+  onApplyStatus?: (effect: StatusEffect) => void,
+) => {
   if (effect.effectType === 'status') {
     return (
-      <div key={`effect-${index}`} className="rounded-xl border border-violet-900/15 bg-violet-100/40 px-3 py-2 text-sm text-stone-800">
+      <div key={`effect-${index}`} className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-900/15 bg-violet-100/40 px-3 py-2 text-sm text-stone-800">
+        <button
+          type="button"
+          onClick={() => onApplyStatus?.(effect)}
+          disabled={!canApplyStatuses || !effect.statusEntry}
+          className="rounded-lg border border-violet-800/30 bg-violet-100/70 px-3 py-1.5 text-xs font-bold text-violet-950 transition hover:bg-violet-200/80 disabled:cursor-not-allowed disabled:opacity-45"
+        >
+          Apply
+        </button>
         <span className="font-bold text-violet-950">Status:</span> {effect.statusName || effect.targetId || 'Imported status'}
       </div>
     );
@@ -232,7 +320,13 @@ const renderEffectPill = (effect: StatusEffect, index: number) => {
   );
 };
 
-const renderActionBlock = (action: CharacterAction) => (
+const renderActionBlock = (
+  action: CharacterAction,
+  localVariables: CharacterLocalVariable[] | undefined,
+  canApplyStatuses: boolean,
+  onRollMacro: (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => void,
+  onApplyStatus: (effect: StatusEffect) => void,
+) => (
   <div key={action.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
     <div className="mb-2 flex flex-wrap items-center gap-3">
       <h4 className="text-lg font-bold text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
@@ -252,9 +346,26 @@ const renderActionBlock = (action: CharacterAction) => (
     {action.description && (
       <p className="whitespace-pre-wrap text-[15px] leading-7 text-stone-800">{action.description}</p>
     )}
+    {(action.macros || []).length > 0 && (
+      <div className="mt-4 space-y-2">
+        {(action.macros || []).map((macro) => (
+          <div key={macro.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-900/15 bg-white/35 p-2">
+            <button
+              type="button"
+              onClick={() => onRollMacro(macro, localVariables, action.name || 'Action', action.description || undefined)}
+              className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/25 bg-amber-100/75 px-3 py-1.5 text-xs font-bold text-amber-950 transition hover:bg-amber-200/70"
+            >
+              <Dices size={14} /> Roll
+            </button>
+            <span className="font-bold text-amber-950">{macro.name || 'Unnamed Macro'}</span>
+            <code className="min-w-0 flex-1 truncate text-sm text-emerald-800">{macro.formula}</code>
+          </div>
+        ))}
+      </div>
+    )}
     {(action.effects || []).length > 0 && (
       <div className="mt-4 space-y-2">
-        {(action.effects || []).map(renderEffectPill)}
+        {(action.effects || []).map((effect, effectIndex) => renderEffectPill(effect, effectIndex, canApplyStatuses, onApplyStatus))}
       </div>
     )}
   </div>
@@ -272,8 +383,34 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const [activeFilterId, setActiveFilterId] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
+  const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
+  const rollPopupTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
+
+  const dismissRollPopup = useCallback(() => {
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+      rollPopupTimeoutRef.current = null;
+    }
+    setRollPopupResult(null);
+  }, []);
+
+  const showRollPopup = useCallback((result: RollResult) => {
+    setRollPopupResult(result);
+    if (rollPopupTimeoutRef.current) {
+      window.clearTimeout(rollPopupTimeoutRef.current);
+    }
+    rollPopupTimeoutRef.current = window.setTimeout(() => {
+      setRollPopupResult(null);
+      rollPopupTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  useEffect(() => () => {
+    if (rollPopupTimeoutRef.current) window.clearTimeout(rollPopupTimeoutRef.current);
+  }, []);
 
   useEffect(() => {
     let isMounted = true;
@@ -417,6 +554,125 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   }, [visibleEntries]);
 
   const selectedEntry = visibleEntries.find((entry) => `${entry.kind}:${entry.entry.id}` === selectedEntryKey) || null;
+  const canControlCharacter = !!character && (
+    !character.userId
+    || character.userId === 'guest'
+    || (!!userId && (character.userId === userId || (character.controlUserIds || []).includes(userId)))
+  );
+
+  const getCharacterContext = useCallback((): Record<string, number> => {
+    if (!character) return {};
+    const context: Record<string, number> = {};
+    const mainAttributes = character.mainAttributes || [];
+    const allAttributes: Array<CustomAttribute | SkillAttribute> = [
+      ...mainAttributes,
+      ...(character.secondaryAttributes || []),
+      ...(character.skills || []),
+      ...(character.otherAttributes || []),
+      ...(character.resistances || []),
+    ];
+    allAttributes.forEach((attribute) => {
+      if (attribute.id) context[attribute.id] = evalFormula(attribute.value || '0', context);
+    });
+    mainAttributes.forEach((attribute) => {
+      if (attribute.id) context[`${attribute.id}_mod`] = Math.floor(((context[attribute.id] ?? 0) - 10) / 2);
+    });
+    (character.bars || []).forEach((bar) => {
+      if (!bar.id) return;
+      context[`${bar.id}_current`] = evalFormula(bar.currentValue || '0', context);
+      if (getBarMode(bar) === 'resource') {
+        context[`${bar.id}_reset`] = evalFormula(bar.resetValue || '0', context);
+      } else {
+        context[`${bar.id}_max`] = evalFormula(bar.maxValue || '0', context);
+      }
+    });
+    return context;
+  }, [character]);
+
+  const getLocalVariableContext = useCallback((variables?: CharacterLocalVariable[], globalContext: Record<string, number> = {}) => {
+    const localContext: Record<string, number> = {};
+    (variables || []).forEach((variable) => {
+      if (!variable.id || variable.kind === 'input') return;
+      localContext[variable.id] = variable.kind === 'resource'
+        ? Number.parseFloat(variable.value || '0') || 0
+        : evalFormula(variable.value || '0', globalContext, localContext);
+    });
+    return localContext;
+  }, []);
+
+  const executeMacro = useCallback((macro: CharacterDiceMacro, context: Record<string, number>, localContext: Record<string, number>): RollResult => {
+    const steps: RollStep[] = [];
+    const resolvedParts: string[] = [];
+    (macro.formula || '').split(/(\d*d\d+(?:kh|kl)?\d*|@@[a-zA-Z0-9_-]+|@[a-zA-Z0-9_-]+)/gi).forEach((part) => {
+      const trimmed = part.trim();
+      if (!trimmed) return;
+      if (/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i.test(trimmed)) {
+        const dice = rollDice(trimmed);
+        steps.push({ label: trimmed, value: dice.sum, detail: dice.rolls.join(', ') });
+        resolvedParts.push(String(dice.sum));
+        return;
+      }
+      const localMatch = trimmed.match(/^@@([a-zA-Z0-9_-]+)$/);
+      if (localMatch) {
+        const value = localContext[localMatch[1]] ?? 0;
+        steps.push({ label: `@@${localMatch[1]}`, value });
+        resolvedParts.push(String(value));
+        return;
+      }
+      const globalMatch = trimmed.match(/^@([a-zA-Z0-9_-]+)$/);
+      if (globalMatch) {
+        const value = context[globalMatch[1]] ?? 0;
+        steps.push({ label: `@${globalMatch[1]}`, value });
+        resolvedParts.push(String(value));
+        return;
+      }
+      resolvedParts.push(trimmed);
+    });
+    return {
+      macroName: macro.name || 'Roll',
+      formula: macro.formula || '',
+      steps,
+      total: evalFormula(resolvedParts.join(' '), {}, {}),
+      timestamp: Date.now(),
+    };
+  }, []);
+
+  const rollMacro = useCallback((macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => {
+    const result = executeMacro(
+      { ...macro, name: namePrefix ? `${namePrefix}: ${macro.name || 'Roll'}` : macro.name },
+      getCharacterContext(),
+      getLocalVariableContext(localVariables, getCharacterContext()),
+    );
+    result.description = description || undefined;
+    showRollPopup(result);
+  }, [executeMacro, getCharacterContext, getLocalVariableContext, showRollPopup]);
+
+  const applyStatusEffect = useCallback(async (effect: StatusEffect) => {
+    if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
+    const newStatus: CharacterStatus = {
+      id: `st_${uid()}`,
+      name: effect.statusEntry.name || effect.statusName || 'Imported Status',
+      duration: effect.statusEntry.duration || '',
+      durationType: effect.statusEntry.durationType || 'custom',
+      durationEndBehavior: effect.statusEntry.durationEndBehavior || 'delete',
+      maxDuration: effect.statusEntry.maxDuration || '',
+      replenishTrigger: effect.statusEntry.replenishTrigger || 'custom',
+      replenishAmount: effect.statusEntry.replenishAmount || '',
+      description: effect.statusEntry.description || '',
+      effects: effect.statusEntry.effects || [],
+      actions: effect.statusEntry.actions || [],
+      localVariables: effect.statusEntry.localVariables || [],
+      scripts: effect.statusEntry.scripts || [],
+      active: true,
+      color: effect.statusEntry.color || '#f59e0b',
+      hidden: false,
+      folderId: effect.statusFolderId || null,
+    };
+    const nextCharacter = { ...character, statuses: [...(character.statuses || []), newStatus] };
+    setCharacter(nextCharacter);
+    const saveResult = await saveCharacter(nextCharacter);
+    setActionMessage(saveResult.localSaved || saveResult.remoteSaved ? 'Status applied to character.' : 'Status could not be saved.');
+  }, [canControlCharacter, character]);
 
   const renderCard = (entry: LibraryEntry) => {
     const thumbUrl = getEntryThumbUrl(entry.entry);
@@ -558,7 +814,13 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <section className="mt-5">
             <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Actions</h3>
             <div className="space-y-3">
-              {(entry.actions || []).map(renderActionBlock)}
+              {(entry.actions || []).map(action => renderActionBlock(
+                action,
+                'localVariables' in entry ? entry.localVariables : undefined,
+                canControlCharacter,
+                rollMacro,
+                (effect) => void applyStatusEffect(effect),
+              ))}
             </div>
           </section>
         )}
@@ -567,7 +829,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <section className="mt-5">
             <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Effects</h3>
             <div className="space-y-2">
-              {(entry.effects || []).map(renderEffectPill)}
+              {(entry.effects || []).map((effect, index) => renderEffectPill(effect, index, canControlCharacter, (entryEffect) => void applyStatusEffect(entryEffect)))}
             </div>
           </section>
         )}
@@ -577,9 +839,21 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Macros</h3>
             <div className="space-y-3">
               {(entry.macros || []).map((macro) => (
-                <div key={macro.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-3">
+                <div key={macro.id} className="flex flex-wrap items-center gap-2 rounded-xl border border-amber-900/15 bg-black/5 p-3">
+                  <button
+                    type="button"
+                    onClick={() => rollMacro(
+                      macro,
+                      'localVariables' in entry ? entry.localVariables : undefined,
+                      getEntryName(selectedEntry),
+                      'description' in entry ? entry.description : undefined,
+                    )}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-amber-800/25 bg-amber-100/75 px-3 py-1.5 text-xs font-bold text-amber-950 transition hover:bg-amber-200/70"
+                  >
+                    <Dices size={14} /> Roll
+                  </button>
                   <div className="font-bold text-amber-950">{macro.name || 'Unnamed Macro'}</div>
-                  <code className="mt-1 block whitespace-pre-wrap break-words text-sm text-emerald-800">{macro.formula}</code>
+                  <code className="min-w-0 flex-1 whitespace-pre-wrap break-words text-sm text-emerald-800">{macro.formula}</code>
                 </div>
               ))}
             </div>
@@ -591,6 +865,41 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#efe2bd] px-4 py-6 text-stone-900 xl:px-6" style={parchmentBackground}>
+      {rollPopupResult && (
+        <button
+          type="button"
+          onClick={dismissRollPopup}
+          className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-amber-500/60 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-amber-200/10 backdrop-blur transition hover:border-amber-300"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-amber-800/30 bg-amber-900/25 px-4 py-2">
+            <div className="flex min-w-0 items-center gap-2">
+              <Dices size={17} className="shrink-0 text-amber-300" />
+              <span className="truncate text-sm font-bold text-amber-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.macroName || 'Roll Result'}
+              </span>
+            </div>
+            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.total}
+            </span>
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {rollPopupResult.formula}
+            </code>
+            {rollPopupResult.description && (
+              <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
+            )}
+            <div className="space-y-1">
+              {rollPopupResult.steps.slice(0, 3).map((step, index) => (
+                <div key={`${rollPopupResult.timestamp}-${index}`} className="flex items-center gap-2 text-xs">
+                  <span className="min-w-0 flex-1 truncate text-stone-400">{step.label}</span>
+                  <span className="font-mono font-bold text-amber-200">{step.value}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        </button>
+      )}
       <div className="mx-auto w-full max-w-none 2xl:max-w-[1900px]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
@@ -604,6 +913,11 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             Source Character: <span className="font-bold text-amber-950">{character?.name || characterId}</span>
           </div>
         </div>
+        {actionMessage && (
+          <div className="mb-4 rounded-xl border border-emerald-900/20 bg-emerald-100/65 px-4 py-3 text-sm font-semibold text-emerald-950">
+            {actionMessage}
+          </div>
+        )}
 
         {isLoading ? (
           <div className={`${sectionClass} text-center text-lg text-stone-700`}>Loading homebrew library...</div>
