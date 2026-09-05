@@ -4,6 +4,7 @@ import { CharacterBar, CharacterData, CharacterLocalVariable, CustomAttribute, S
 import { loadCharacterById } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { HomebrewLibraryCategory } from './HomebrewLibraryViewer';
+import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
 interface HomebrewCharacterSheetViewerProps {
   characterId: string;
@@ -22,6 +23,78 @@ const openLibrary = (category: HomebrewLibraryCategory, characterId: string) => 
   window.location.hash = `#homebrew-library/${category}/${encodeURIComponent(characterId)}`;
 };
 
+const splitFormulaArgs = (argsString: string): string[] => {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let i = 0; i < argsString.length; i += 1) {
+    const char = argsString[i];
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      args.push(argsString.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  args.push(argsString.slice(start).trim());
+  return args;
+};
+
+const findFormulaFunctionCall = (expr: string, functionNames: string[]) => {
+  const lower = expr.toLowerCase();
+
+  for (let i = 0; i < expr.length; i += 1) {
+    for (const functionName of functionNames) {
+      const nameLength = functionName.length;
+      if (lower.slice(i, i + nameLength) !== functionName) continue;
+      const before = i > 0 ? expr[i - 1] : '';
+      const after = expr[i + nameLength] || '';
+      if (/[a-zA-Z0-9_]/.test(before) || after !== '(') continue;
+
+      let depth = 0;
+      for (let j = i + nameLength; j < expr.length; j += 1) {
+        if (expr[j] === '(') depth += 1;
+        if (expr[j] === ')') {
+          depth -= 1;
+          if (depth === 0) {
+            return {
+              start: i,
+              end: j + 1,
+              argsString: expr.slice(i + nameLength + 1, j),
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+const normalizeFormulaConditionOperators = (expr: string): string => (
+  expr
+    .replace(/=</g, '<=')
+    .replace(/=>/g, '>=')
+    .replace(/(^|[^<>=!])=(?!=)/g, '$1===')
+);
+
+function transformIfFunctions(expr: string): string {
+  let result = expr;
+  let match = findFormulaFunctionCall(result, ['if']);
+
+  while (match) {
+    const args = splitFormulaArgs(match.argsString);
+    if (args.length !== 3) return result;
+    const condition = normalizeFormulaConditionOperators(transformIfFunctions(args[0]));
+    result = `${result.slice(0, match.start)}((${condition}) ? (${transformIfFunctions(args[1])}) : (${transformIfFunctions(args[2])}))${result.slice(match.end)}`;
+    match = findFormulaFunctionCall(result, ['if']);
+  }
+
+  return result;
+}
+
 const evalFormula = (
   formula: string,
   context: Record<string, number>,
@@ -31,7 +104,9 @@ const evalFormula = (
 
   let expr = formula.replace(/@@([a-zA-Z0-9_-]+)/g, (_match, id) => String(localContext[id] ?? 0));
   expr = expr
-    .replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`)
+    .replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`);
+  expr = transformIfFunctions(expr);
+  expr = expr
     .replace(/roundup/g, 'Math.ceil')
     .replace(/rounddown/g, 'Math.floor')
     .replace(/round/g, 'Math.round')
@@ -48,6 +123,30 @@ const evalFormula = (
 
 const getBarMode = (bar: CharacterBar) => bar.mode || 'default';
 
+const getCharacterPortraitUrl = (character: CharacterData): string => {
+  if (character.portraitUrl && isDirectImageUrl(character.portraitUrl)) return character.portraitUrl;
+  const mainGalleryImage = (character.gallery || []).find(image => (image.tags || []).includes('main'));
+  if (mainGalleryImage?.thumbUrl) return getPixhostDirectImageUrl(mainGalleryImage.url || mainGalleryImage.thumbUrl, mainGalleryImage.thumbUrl);
+  return character.portraitUrl || '';
+};
+
+const getCharacterPortraitFallbackUrl = (character: CharacterData): string => (
+  (character.gallery || []).find(image => (image.tags || []).includes('main'))?.thumbUrl || ''
+);
+
+const getGalleryDisplayUrl = (image: NonNullable<CharacterData['gallery']>[number]): string => (
+  image.thumbUrl ? getPixhostDirectImageUrl(image.url || image.thumbUrl, image.thumbUrl) : image.url
+);
+
+const getCharacterSplashArtUrl = (character: CharacterData, fallbackUrl: string): string => {
+  const splashArtImage = (character.gallery || []).find(image => (image.tags || []).includes('splash-art'));
+  return splashArtImage ? getGalleryDisplayUrl(splashArtImage) : fallbackUrl;
+};
+
+const getCharacterSplashArtFallbackUrl = (character: CharacterData): string => (
+  (character.gallery || []).find(image => (image.tags || []).includes('splash-art'))?.thumbUrl || getCharacterPortraitFallbackUrl(character)
+);
+
 const getLocalVariableContext = (
   variables: CharacterLocalVariable[] | undefined,
   globalContext: Record<string, number>,
@@ -56,6 +155,11 @@ const getLocalVariableContext = (
   (variables || []).forEach((variable) => {
     if (!variable.id) return;
     if (variable.kind === 'input') return;
+    if (variable.kind === 'resource') {
+      const parsed = Number.parseFloat(variable.value || '0');
+      localContext[variable.id] = Number.isFinite(parsed) ? parsed : 0;
+      return;
+    }
     localContext[variable.id] = evalFormula(variable.value || '0', globalContext, localContext);
   });
   return localContext;
@@ -364,6 +468,8 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
     },
   ];
   const overviewContext = character ? buildHomebrewContext(character) : {};
+  const portraitUrl = character ? getCharacterPortraitUrl(character) : '';
+  const splashArtUrl = character ? getCharacterSplashArtUrl(character, portraitUrl) : '';
   const overviewMainAttributes = character
     ? (character.overviewSettings?.mainAttributeIds || [])
       .map((id) => (character.mainAttributes || []).find((attr) => attr.id === id))
@@ -460,8 +566,18 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
               <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-800 via-amber-600 to-transparent" />
               <div className="grid gap-6 md:grid-cols-[140px_1fr] md:items-center">
                 <div className="grid h-32 w-32 place-items-center overflow-hidden rounded-3xl border border-amber-900/25 bg-amber-100/45 text-amber-900 shadow-inner">
-                  {character.portraitUrl ? (
-                    <img src={character.portraitUrl} alt={character.name} className="h-full w-full object-cover" />
+                  {portraitUrl ? (
+                    <img
+                      src={portraitUrl}
+                      alt={character.name}
+                      className="h-full w-full object-cover"
+                      onError={(event) => {
+                        const fallbackUrl = getCharacterPortraitFallbackUrl(character);
+                        if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                          event.currentTarget.src = fallbackUrl;
+                        }
+                      }}
+                    />
                   ) : (
                     <UserRound size={48} />
                   )}
@@ -501,10 +617,30 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                   </div>
                 </div>
                 <div className="relative min-h-[620px] overflow-hidden bg-stone-900">
-                  {character.portraitUrl ? (
+                  {splashArtUrl ? (
                     <>
-                      <img src={character.portraitUrl} alt="" className="absolute inset-0 h-full w-full scale-105 object-cover opacity-25 blur-xl" />
-                      <img src={character.portraitUrl} alt="" className="absolute inset-0 h-full w-full object-contain object-center opacity-95" />
+                      <img
+                        src={splashArtUrl}
+                        alt=""
+                        className="absolute inset-0 h-full w-full scale-105 object-cover opacity-25 blur-xl"
+                        onError={(event) => {
+                          const fallbackUrl = getCharacterSplashArtFallbackUrl(character);
+                          if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                            event.currentTarget.src = fallbackUrl;
+                          }
+                        }}
+                      />
+                      <img
+                        src={splashArtUrl}
+                        alt=""
+                        className="absolute inset-0 h-full w-full object-contain object-center opacity-95"
+                        onError={(event) => {
+                          const fallbackUrl = getCharacterSplashArtFallbackUrl(character);
+                          if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                            event.currentTarget.src = fallbackUrl;
+                          }
+                        }}
+                      />
                     </>
                   ) : (
                     <div className="absolute inset-0 bg-gradient-to-br from-amber-950 via-stone-800 to-emerald-950" />

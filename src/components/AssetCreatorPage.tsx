@@ -6,6 +6,13 @@ import type {
   CharacterInventoryItem,
   CharacterLocalVariable,
   CharacterReplenishTrigger,
+  CharacterScript,
+  CharacterScriptBarUpdateEntry,
+  CharacterScriptCondition,
+  CharacterScriptConditionOperator,
+  CharacterScriptPlaceholder,
+  CharacterScriptStatusEntry,
+  CharacterScriptTrigger,
   CharacterSpell,
   CharacterStatusDurationEndBehavior,
   CharacterStatus,
@@ -14,7 +21,7 @@ import type {
 } from '../types/character';
 import { exportJsonWithChoice, importJsonTextWithChoice } from '../lib/jsonTransfer';
 
-type AssetKind = 'item' | 'spell' | 'status' | 'macro';
+type AssetKind = 'item' | 'spell' | 'status' | 'macro' | 'script';
 
 interface CharacterEntryExportPayload {
   schema: 'inoraxium-character-entry';
@@ -23,7 +30,7 @@ interface CharacterEntryExportPayload {
   exportedAt: string;
   sourceCharacterName?: string;
   folderName?: string | null;
-  entry: CharacterInventoryItem | CharacterSpell | CharacterStatus | CharacterDiceMacro;
+  entry: CharacterInventoryItem | CharacterSpell | CharacterStatus | CharacterDiceMacro | CharacterScript;
 }
 
 type Rarity = NonNullable<CharacterInventoryItem['rarity']>;
@@ -48,6 +55,25 @@ const replenishTriggerOptions: Array<{ value: CharacterReplenishTrigger; label: 
   { value: 'battle', label: 'Battle' },
   { value: 'round', label: 'Round' },
 ];
+const scriptTriggerOptions: Array<{ value: CharacterScriptTrigger; label: string }> = [
+  { value: 'short-rest', label: 'Short Rest' },
+  { value: 'long-rest', label: 'Long Rest' },
+  { value: 'round-end', label: 'Round End' },
+  { value: 'battle-end', label: 'Battle End' },
+];
+const scriptOperatorOptions: Array<{ value: CharacterScriptConditionOperator; label: string }> = [
+  { value: 'lte', label: 'is less/equal' },
+  { value: 'lt', label: 'is less' },
+  { value: 'gte', label: 'is greater/equal' },
+  { value: 'gt', label: 'is greater' },
+  { value: 'eq', label: 'equals' },
+  { value: 'neq', label: 'does not equal' },
+  { value: 'between', label: 'is between' },
+  { value: 'outside', label: 'is outside' },
+];
+
+const SCRIPT_PLACEHOLDER_PREFIX = '__script_placeholder__:';
+const getScriptPlaceholderValue = (placeholderId: string) => `${SCRIPT_PLACEHOLDER_PREFIX}${placeholderId}`;
 
 const uid = () => (
   globalThis.crypto?.randomUUID?.() || `${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 9)}`
@@ -56,6 +82,15 @@ const uid = () => (
 const titleCase = (value: string) => value.replace(/(^|\s|-)\S/g, letter => letter.toUpperCase());
 
 const sanitizeWholeNumberInput = (value: string): string => value.replace(/\D/g, '');
+
+const sanitizeNumberInput = (value: string): string => {
+  const normalized = value.replace(',', '.').replace(/[^\d.-]/g, '');
+  const sign = normalized.startsWith('-') ? '-' : '';
+  const unsigned = normalized.replace(/-/g, '');
+  const [integer = '', ...decimalParts] = unsigned.split('.');
+  const decimal = decimalParts.join('');
+  return `${sign}${integer}${decimalParts.length > 0 ? `.${decimal}` : ''}`;
+};
 
 const parseWholeNumberInput = (value: string): number => Number.parseInt(sanitizeWholeNumberInput(value) || '0', 10);
 
@@ -103,7 +138,57 @@ const createLocalVariable = (kind: CharacterLocalVariable['kind'] = 'variable'):
   description: '',
   value: '0',
   kind,
+  replenishTrigger: 'custom',
+  replenishMode: 'gain',
+  replenishAmount: '0',
+  maxValue: '',
 });
+
+const createScriptPlaceholder = (kind: CharacterScriptPlaceholder['kind'] = 'value'): CharacterScriptPlaceholder => {
+  const id = `ph_${uid()}`;
+  return {
+    id,
+    kind,
+    label: kind === 'bar' ? 'Choose target bar for this script.' : 'Choose control value for this script.',
+  };
+};
+
+const createScriptBarUpdate = (placeholderId?: string): CharacterScriptBarUpdateEntry => ({
+  id: `script_bar_${uid()}`,
+  targetId: placeholderId ? getScriptPlaceholderValue(placeholderId) : '',
+  value: '0',
+  lastMatched: false,
+});
+
+const createScriptCondition = (placeholderId?: string): CharacterScriptCondition => ({
+  id: `cond_${uid()}`,
+  leftId: placeholderId ? getScriptPlaceholderValue(placeholderId) : '',
+  operator: 'lte',
+  compareValue: '0',
+  minValue: '0',
+  maxValue: '0',
+  statusEntries: [],
+  barUpdates: [],
+  statusIds: [],
+  onFalse: 'remove',
+  appliedStatusInstanceIds: [],
+});
+
+const createScript = (): CharacterScript => {
+  const valuePlaceholder = createScriptPlaceholder('value');
+  return {
+    id: `script_${uid()}`,
+    name: 'New Script',
+    watchIds: [getScriptPlaceholderValue(valuePlaceholder.id)],
+    triggerIds: [],
+    conditions: [createScriptCondition(valuePlaceholder.id)],
+    placeholders: [valuePlaceholder],
+    active: true,
+    color: '#06b6d4',
+    hidden: false,
+    folderId: null,
+  };
+};
 
 const createAction = (): CharacterAction => ({
   id: `act_${uid()}`,
@@ -130,6 +215,7 @@ const createItem = (): CharacterInventoryItem => ({
   effects: [],
   actions: [],
   localVariables: [],
+  scripts: [],
   hidden: false,
   folderId: null,
 });
@@ -166,6 +252,7 @@ const createStatus = (): CharacterStatus => ({
   effects: [],
   actions: [],
   localVariables: [],
+  scripts: [],
   active: true,
   color: '#22c55e',
   hidden: false,
@@ -207,7 +294,74 @@ const normalizeImportedLocalVariable = (variable: Partial<CharacterLocalVariable
   id: importString(variable.id, `local_${uid()}`),
   description: importString(variable.description, ''),
   value: importString(variable.value, '0'),
-  kind: variable.kind === 'input' ? 'input' : 'variable',
+  kind: variable.kind === 'input' || variable.kind === 'resource' ? variable.kind : 'variable',
+  replenishTrigger: variable.replenishTrigger || 'custom',
+  replenishMode: variable.replenishMode === 'set' ? 'set' : 'gain',
+  replenishAmount: importString(variable.replenishAmount, '0'),
+  maxValue: importString(variable.maxValue, ''),
+});
+
+const normalizeImportedScriptPlaceholder = (placeholder: Partial<CharacterScriptPlaceholder> = {}): CharacterScriptPlaceholder => ({
+  id: importString(placeholder.id, `ph_${uid()}`),
+  kind: placeholder.kind === 'bar' || placeholder.kind === 'status-folder' ? placeholder.kind : 'value',
+  label: importString(placeholder.label, 'Choose a value for this script.'),
+});
+
+const normalizeImportedScriptStatusEntry = (entry: Partial<CharacterScriptStatusEntry> = {}): CharacterScriptStatusEntry => ({
+  id: importString(entry.id, `script_status_${uid()}`),
+  name: importString(entry.name, entry.entry?.name || 'Imported Status'),
+  entry: entry.entry ? normalizeImportedStatus(entry.entry) : normalizeImportedStatus({}),
+  statusFolderId: typeof entry.statusFolderId === 'string' ? entry.statusFolderId : null,
+  onFalse: entry.onFalse === 'keep' ? 'keep' : 'remove',
+  appliedStatusInstanceIds: [],
+});
+
+const normalizeImportedScriptBarUpdate = (entry: Partial<CharacterScriptBarUpdateEntry> = {}): CharacterScriptBarUpdateEntry => ({
+  id: importString(entry.id, `script_bar_${uid()}`),
+  targetId: importString(entry.targetId, ''),
+  value: importString(entry.value, '0'),
+  lastMatched: false,
+});
+
+const normalizeImportedScriptCondition = (condition: Partial<CharacterScriptCondition> = {}): CharacterScriptCondition => ({
+  id: importString(condition.id, `cond_${uid()}`),
+  leftId: importString(condition.leftId, ''),
+  operator: condition.operator || 'lte',
+  compareValue: importString(condition.compareValue, '0'),
+  minValue: importString(condition.minValue, '0'),
+  maxValue: importString(condition.maxValue, '0'),
+  statusEntries: Array.isArray(condition.statusEntries)
+    ? condition.statusEntries.map(entry => normalizeImportedScriptStatusEntry(entry as Partial<CharacterScriptStatusEntry>))
+    : [],
+  barUpdates: Array.isArray(condition.barUpdates)
+    ? condition.barUpdates.map(entry => normalizeImportedScriptBarUpdate(entry as Partial<CharacterScriptBarUpdateEntry>))
+    : [],
+  statusIds: [],
+  onFalse: condition.onFalse === 'keep' ? 'keep' : 'remove',
+  appliedStatusInstanceIds: [],
+});
+
+const normalizeImportedScript = (script: Partial<CharacterScript> = {}): CharacterScript => ({
+  id: importString(script.id, `script_${uid()}`),
+  name: importString(script.name, 'Imported Script'),
+  watchIds: Array.isArray(script.watchIds) ? script.watchIds.filter((id): id is string => typeof id === 'string') : [],
+  triggerIds: Array.isArray(script.triggerIds)
+    ? script.triggerIds.filter((id): id is CharacterScriptTrigger => scriptTriggerOptions.some(option => option.value === id))
+    : [],
+  conditions: Array.isArray(script.conditions)
+    ? script.conditions.map(condition => normalizeImportedScriptCondition(condition as Partial<CharacterScriptCondition>))
+    : [],
+  importedValueLabels: script.importedValueLabels || {},
+  placeholders: Array.isArray(script.placeholders)
+    ? script.placeholders.map(placeholder => normalizeImportedScriptPlaceholder(placeholder as Partial<CharacterScriptPlaceholder>))
+    : [],
+  localVariables: Array.isArray(script.localVariables)
+    ? script.localVariables.map(variable => normalizeImportedLocalVariable(variable as Partial<CharacterLocalVariable>))
+    : [],
+  active: script.active ?? true,
+  color: importString(script.color, '#06b6d4'),
+  hidden: importBoolean(script.hidden, false),
+  folderId: null,
 });
 
 const normalizeImportedAction = (action: Partial<CharacterAction> = {}): CharacterAction => ({
@@ -237,6 +391,7 @@ const normalizeImportedItem = (entry: Partial<CharacterInventoryItem> = {}): Cha
   effects: Array.isArray(entry.effects) ? entry.effects.map(effect => normalizeImportedEffect(effect as Partial<StatusEffect>)) : [],
   actions: Array.isArray(entry.actions) ? entry.actions.map(action => normalizeImportedAction(action as Partial<CharacterAction>)) : [],
   localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(variable => normalizeImportedLocalVariable(variable as Partial<CharacterLocalVariable>)) : [],
+  scripts: Array.isArray(entry.scripts) ? entry.scripts.map(script => normalizeImportedScript(script as Partial<CharacterScript>)) : [],
   hidden: importBoolean(entry.hidden, false),
   folderId: null,
 });
@@ -277,6 +432,7 @@ const normalizeImportedStatus = (entry: Partial<CharacterStatus> = {}): Characte
   effects: Array.isArray(entry.effects) ? entry.effects.map(effect => normalizeImportedEffect(effect as Partial<StatusEffect>)) : [],
   actions: Array.isArray(entry.actions) ? entry.actions.map(action => normalizeImportedAction(action as Partial<CharacterAction>)) : [],
   localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(variable => normalizeImportedLocalVariable(variable as Partial<CharacterLocalVariable>)) : [],
+  scripts: Array.isArray(entry.scripts) ? entry.scripts.map(script => normalizeImportedScript(script as Partial<CharacterScript>)) : [],
   active: entry.active ?? true,
   color: importString(entry.color, '#22c55e'),
   hidden: importBoolean(entry.hidden, false),
@@ -455,6 +611,9 @@ const LocalVariablesEditor: React.FC<LocalVariablesEditorProps> = ({ variables, 
           <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable('variable')])}>
             <Plus size={14} /> Add Variable
           </button>
+          <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable('resource')])}>
+            <Plus size={14} /> Add Resource
+          </button>
           <button type="button" className={smallButtonClass} onClick={() => onChange([...variables, createLocalVariable('input')])}>
             <Plus size={14} /> Add Input
           </button>
@@ -467,9 +626,13 @@ const LocalVariablesEditor: React.FC<LocalVariablesEditorProps> = ({ variables, 
           <select
             className={inputClass}
             value={variable.kind || 'variable'}
-            onChange={event => updateVariable(index, { kind: event.target.value as CharacterLocalVariable['kind'] })}
+            onChange={event => updateVariable(index, {
+              kind: event.target.value as CharacterLocalVariable['kind'],
+              value: event.target.value === 'resource' ? sanitizeNumberInput(variable.value || '0') || '0' : variable.value,
+            })}
           >
             <option value="variable">Variable</option>
+            <option value="resource">Local Resource Variable</option>
             <option value="input">Input</option>
           </select>
           <input className={inputClass} value={variable.id} onChange={event => updateVariable(index, { id: event.target.value.replace(/^@@?/, '') })} placeholder="local_id" />
@@ -478,12 +641,66 @@ const LocalVariablesEditor: React.FC<LocalVariablesEditorProps> = ({ variables, 
             <div className="rounded-md border border-amber-800/30 bg-amber-950/20 px-3 py-2 text-sm italic text-amber-300/80">
               Asked when rolling
             </div>
+          ) : variable.kind === 'resource' ? (
+            <input
+              className={inputClass}
+              inputMode="decimal"
+              value={variable.value}
+              onChange={event => updateVariable(index, { value: sanitizeNumberInput(event.target.value) })}
+              placeholder="0"
+            />
           ) : (
             <input className={inputClass} value={variable.value} onChange={event => updateVariable(index, { value: event.target.value })} placeholder="@dex_mod - 1" />
           )}
           <button type="button" className={dangerButtonClass} onClick={() => onChange(variables.filter((_, variableIndex) => variableIndex !== index))}>
             <Trash2 size={14} />
           </button>
+          {variable.kind === 'resource' && (
+            <div className="grid gap-2 rounded-md border border-emerald-900/30 bg-emerald-950/10 p-2 md:col-span-5 md:grid-cols-[1fr_120px_1fr_1fr]">
+              <div className="space-y-1">
+                <FieldLabel>Replenish On</FieldLabel>
+                <select
+                  className={inputClass}
+                  value={variable.replenishTrigger || 'custom'}
+                  onChange={event => updateVariable(index, { replenishTrigger: event.target.value as CharacterReplenishTrigger })}
+                >
+                  {replenishTriggerOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+                </select>
+              </div>
+              <div className="space-y-1">
+                <FieldLabel>Mode</FieldLabel>
+                <select
+                  className={inputClass}
+                  value={variable.replenishMode || 'gain'}
+                  onChange={event => updateVariable(index, { replenishMode: event.target.value as NonNullable<CharacterLocalVariable['replenishMode']> })}
+                >
+                  <option value="gain">Gain</option>
+                  <option value="set">Set</option>
+                </select>
+              </div>
+              <div className="space-y-1">
+                <FieldLabel>Replenish Value</FieldLabel>
+                <input
+                  className={inputClass}
+                  inputMode="decimal"
+                  value={variable.replenishAmount || ''}
+                  onChange={event => updateVariable(index, { replenishAmount: sanitizeNumberInput(event.target.value) })}
+                  placeholder="0"
+                />
+              </div>
+              <div className="space-y-1">
+                <FieldLabel>Max Value</FieldLabel>
+                <input
+                  className={inputClass}
+                  inputMode="decimal"
+                  value={variable.maxValue || ''}
+                  onChange={event => updateVariable(index, { maxValue: sanitizeNumberInput(event.target.value) })}
+                  disabled={(variable.replenishMode || 'gain') !== 'gain'}
+                  placeholder={(variable.replenishMode || 'gain') === 'gain' ? 'Optional cap' : 'Gain only'}
+                />
+              </div>
+            </div>
+          )}
         </div>
       ))}
     </div>
@@ -584,12 +801,320 @@ const ActionsEditor: React.FC<ActionsEditorProps> = ({ actions, onChange }) => {
   );
 };
 
+interface EmbeddedScriptsEditorProps {
+  scripts: CharacterScript[];
+  onChange: (scripts: CharacterScript[]) => void;
+}
+
+const EmbeddedScriptsEditor: React.FC<EmbeddedScriptsEditorProps> = ({ scripts, onChange }) => {
+  const importScript = async () => {
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'script' || !parsed.entry) {
+        throw new Error('Please import a script export JSON file.');
+      }
+      onChange([...scripts, normalizeImportedScript(parsed.entry as Partial<CharacterScript>)]);
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Script import failed.');
+    }
+  };
+
+  return (
+    <div className="space-y-3 rounded-lg border border-cyan-900/40 bg-cyan-950/10 p-3">
+      <div className="flex items-center justify-between gap-3">
+        <h4 className="text-sm font-semibold text-cyan-200" style={{ fontFamily: "'Cinzel', serif" }}>Scripts</h4>
+        <button type="button" className={smallButtonClass} onClick={importScript}>
+          <Plus size={14} /> Import Script
+        </button>
+      </div>
+      {scripts.length === 0 ? (
+        <p className="text-xs italic text-stone-500">No scripts imported.</p>
+      ) : scripts.map((script, index) => (
+        <div key={script.id || index} className="grid gap-2 rounded-md border border-cyan-900/30 bg-black/25 p-2 md:grid-cols-[1fr_auto]">
+          <div>
+            <div className="text-sm font-semibold text-cyan-100">{script.name || 'Imported Script'}</div>
+            <div className="text-xs text-sky-100/50">{(script.triggerIds || []).join(', ') || 'Value controlled'} · {(script.conditions || []).length} IF</div>
+          </div>
+          <button type="button" className={dangerButtonClass} onClick={() => onChange(scripts.filter((_, scriptIndex) => scriptIndex !== index))}>
+            <Trash2 size={14} />
+          </button>
+        </div>
+      ))}
+    </div>
+  );
+};
+
+interface ScriptEditorProps {
+  script: CharacterScript;
+  onChange: (script: CharacterScript) => void;
+}
+
+const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onChange }) => {
+  const updateCondition = (conditionIndex: number, patch: Partial<CharacterScriptCondition>) => {
+    onChange({
+      ...script,
+      conditions: (script.conditions || []).map((condition, index) => index === conditionIndex ? { ...condition, ...patch } : condition),
+    });
+  };
+  const valuePlaceholders = (script.placeholders || []).filter(placeholder => placeholder.kind === 'value');
+  const barPlaceholders = (script.placeholders || []).filter(placeholder => placeholder.kind === 'bar');
+  const firstValuePlaceholder = valuePlaceholders[0]?.id;
+  const firstBarPlaceholder = barPlaceholders[0]?.id;
+  const appendValuePlaceholder = (value: string, placeholderId: string) => (
+    `${value || ''}${value ? ' ' : ''}${getScriptPlaceholderValue(placeholderId)}`.trim()
+  );
+
+  const addPlaceholder = (kind: CharacterScriptPlaceholder['kind']) => {
+    const placeholder = createScriptPlaceholder(kind);
+    onChange({ ...script, placeholders: [...(script.placeholders || []), placeholder] });
+  };
+
+  const importConditionStatus = async (conditionIndex: number) => {
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'status' || !parsed.entry) {
+        throw new Error('Please import a status export JSON file.');
+      }
+      const statusEntry = normalizeImportedStatus(parsed.entry as Partial<CharacterStatus>);
+      const currentCondition = script.conditions?.[conditionIndex];
+      if (!currentCondition) return;
+      updateCondition(conditionIndex, {
+        statusEntries: [
+          ...(currentCondition.statusEntries || []),
+          {
+            id: `script_status_${uid()}`,
+            name: statusEntry.name || 'Imported Status',
+            entry: statusEntry,
+            statusFolderId: null,
+            onFalse: 'remove',
+            appliedStatusInstanceIds: [],
+          },
+        ],
+      });
+    } catch (err: unknown) {
+      window.alert(err instanceof Error ? err.message : 'Status import failed.');
+    }
+  };
+
+  return (
+    <div className="space-y-4">
+      <div className="grid gap-3 md:grid-cols-[1fr_160px]">
+        <div className="space-y-1">
+          <FieldLabel>Name</FieldLabel>
+          <input className={inputClass} value={script.name} onChange={event => onChange({ ...script, name: event.target.value })} />
+        </div>
+        <div className="space-y-1">
+          <FieldLabel>Color</FieldLabel>
+          <input className={`${inputClass} h-10 p-1`} type="color" value={script.color || '#06b6d4'} onChange={event => onChange({ ...script, color: event.target.value })} />
+        </div>
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-cyan-900/40 bg-cyan-950/10 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-sm font-semibold text-cyan-200" style={{ fontFamily: "'Cinzel', serif" }}>Placeholders</h4>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={smallButtonClass} onClick={() => addPlaceholder('value')}><Plus size={14} /> Value</button>
+            <button type="button" className={smallButtonClass} onClick={() => addPlaceholder('bar')}><Plus size={14} /> Bar</button>
+          </div>
+        </div>
+        {(script.placeholders || []).map((placeholder, index) => (
+          <div key={placeholder.id} className="grid gap-2 rounded-md border border-cyan-900/30 bg-black/25 p-2 md:grid-cols-[130px_1fr_auto]">
+            <select
+              className={inputClass}
+              value={placeholder.kind}
+              onChange={event => onChange({
+                ...script,
+                placeholders: (script.placeholders || []).map((entry, entryIndex) => entryIndex === index ? { ...entry, kind: event.target.value as CharacterScriptPlaceholder['kind'] } : entry),
+              })}
+            >
+              <option value="value">Value</option>
+              <option value="bar">Bar</option>
+            </select>
+            <input
+              className={inputClass}
+              value={placeholder.label}
+              onChange={event => onChange({
+                ...script,
+                placeholders: (script.placeholders || []).map((entry, entryIndex) => entryIndex === index ? { ...entry, label: event.target.value } : entry),
+              })}
+              placeholder="Tell importer what to choose"
+            />
+            <button type="button" className={dangerButtonClass} onClick={() => onChange({ ...script, placeholders: (script.placeholders || []).filter((_, entryIndex) => entryIndex !== index) })}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-amber-900/40 bg-amber-950/10 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-sm font-semibold text-amber-200" style={{ fontFamily: "'Cinzel', serif" }}>Control</h4>
+          <div className="flex flex-wrap gap-2">
+            <button type="button" className={smallButtonClass} onClick={() => onChange({ ...script, watchIds: [...(script.watchIds || []), firstValuePlaceholder ? getScriptPlaceholderValue(firstValuePlaceholder) : ''] })}>
+              <Plus size={14} /> Control Value
+            </button>
+            <button type="button" className={smallButtonClass} onClick={() => onChange({ ...script, triggerIds: [...(script.triggerIds || []), 'short-rest'] })}>
+              <Plus size={14} /> Trigger
+            </button>
+          </div>
+        </div>
+        {(script.watchIds || []).map((watchId, index) => (
+          <div key={`watch-${index}`} className="grid gap-2 md:grid-cols-[1fr_auto]">
+            <select className={inputClass} value={watchId} onChange={event => onChange({ ...script, watchIds: (script.watchIds || []).map((id, entryIndex) => entryIndex === index ? event.target.value : id) })}>
+              <option value="">Choose placeholder</option>
+              {valuePlaceholders.map(placeholder => <option key={placeholder.id} value={getScriptPlaceholderValue(placeholder.id)}>{placeholder.label}</option>)}
+            </select>
+            <button type="button" className={dangerButtonClass} onClick={() => onChange({ ...script, watchIds: (script.watchIds || []).filter((_, entryIndex) => entryIndex !== index) })}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+        {(script.triggerIds || []).map((triggerId, index) => (
+          <div key={`trigger-${index}`} className="grid gap-2 md:grid-cols-[1fr_auto]">
+            <select className={inputClass} value={triggerId} onChange={event => onChange({ ...script, triggerIds: (script.triggerIds || []).map((id, entryIndex) => entryIndex === index ? event.target.value as CharacterScriptTrigger : id) })}>
+              {scriptTriggerOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+            </select>
+            <button type="button" className={dangerButtonClass} onClick={() => onChange({ ...script, triggerIds: (script.triggerIds || []).filter((_, entryIndex) => entryIndex !== index) })}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ))}
+      </div>
+
+      <div className="space-y-3 rounded-lg border border-sky-900/40 bg-sky-950/10 p-3">
+        <div className="flex items-center justify-between gap-3">
+          <h4 className="text-sm font-semibold text-sky-200" style={{ fontFamily: "'Cinzel', serif" }}>If Conditions</h4>
+          <button type="button" className={smallButtonClass} onClick={() => onChange({ ...script, conditions: [...(script.conditions || []), createScriptCondition(firstValuePlaceholder)] })}>
+            <Plus size={14} /> Add If
+          </button>
+        </div>
+        {(script.conditions || []).map((condition, conditionIndex) => (
+          <div key={condition.id || conditionIndex} className="space-y-3 rounded-md border border-sky-900/30 bg-black/25 p-3">
+            <div className="grid gap-2 md:grid-cols-[1fr_160px_1fr_170px_auto]">
+              <select className={inputClass} value={condition.leftId} onChange={event => updateCondition(conditionIndex, { leftId: event.target.value })}>
+                <option value="">Choose value placeholder</option>
+                {valuePlaceholders.map(placeholder => <option key={placeholder.id} value={getScriptPlaceholderValue(placeholder.id)}>{placeholder.label}</option>)}
+              </select>
+              <select className={inputClass} value={condition.operator} onChange={event => updateCondition(conditionIndex, { operator: event.target.value as CharacterScriptConditionOperator })}>
+                {scriptOperatorOptions.map(option => <option key={option.value} value={option.value}>{option.label}</option>)}
+              </select>
+              <input className={inputClass} value={condition.compareValue || ''} onChange={event => updateCondition(conditionIndex, { compareValue: event.target.value })} placeholder="Value or formula" />
+              <select
+                className={inputClass}
+                value=""
+                onChange={event => {
+                  if (!event.target.value) return;
+                  updateCondition(conditionIndex, { compareValue: appendValuePlaceholder(condition.compareValue || '', event.target.value) });
+                }}
+              >
+                <option value="">Insert value</option>
+                {valuePlaceholders.map(placeholder => <option key={placeholder.id} value={placeholder.id}>{placeholder.label}</option>)}
+              </select>
+              <button type="button" className={dangerButtonClass} onClick={() => onChange({ ...script, conditions: (script.conditions || []).filter((_, index) => index !== conditionIndex) })}>
+                <Trash2 size={14} />
+              </button>
+            </div>
+            <div className="flex items-center justify-between">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/70">Bar Updates</span>
+              <button
+                type="button"
+                className={smallButtonClass}
+                onClick={() => updateCondition(conditionIndex, { barUpdates: [...(condition.barUpdates || []), createScriptBarUpdate(firstBarPlaceholder)] })}
+              >
+                <Plus size={14} /> Bar Update
+              </button>
+            </div>
+            {(condition.barUpdates || []).map((barUpdate, barIndex) => (
+              <div key={barUpdate.id || barIndex} className="grid gap-2 md:grid-cols-[1fr_1fr_170px_auto]">
+                <select
+                  className={inputClass}
+                  value={barUpdate.targetId}
+                  onChange={event => updateCondition(conditionIndex, {
+                    barUpdates: (condition.barUpdates || []).map((entry, entryIndex) => entryIndex === barIndex ? { ...entry, targetId: event.target.value } : entry),
+                  })}
+                >
+                  <option value="">Choose bar placeholder</option>
+                  {barPlaceholders.map(placeholder => <option key={placeholder.id} value={getScriptPlaceholderValue(placeholder.id)}>{placeholder.label}</option>)}
+                </select>
+                <input
+                  className={inputClass}
+                  value={barUpdate.value}
+                  onChange={event => updateCondition(conditionIndex, {
+                    barUpdates: (condition.barUpdates || []).map((entry, entryIndex) => entryIndex === barIndex ? { ...entry, value: event.target.value } : entry),
+                  })}
+                  placeholder="Amount or formula"
+                />
+                <select
+                  className={inputClass}
+                  value=""
+                  onChange={event => {
+                    if (!event.target.value) return;
+                    updateCondition(conditionIndex, {
+                      barUpdates: (condition.barUpdates || []).map((entry, entryIndex) => entryIndex === barIndex ? { ...entry, value: appendValuePlaceholder(entry.value || '', event.target.value) } : entry),
+                    });
+                  }}
+                >
+                  <option value="">Insert value</option>
+                  {valuePlaceholders.map(placeholder => <option key={placeholder.id} value={placeholder.id}>{placeholder.label}</option>)}
+                </select>
+                <button type="button" className={dangerButtonClass} onClick={() => updateCondition(conditionIndex, { barUpdates: (condition.barUpdates || []).filter((_, entryIndex) => entryIndex !== barIndex) })}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+            <div className="flex items-center justify-between pt-2">
+              <span className="text-xs font-semibold uppercase tracking-[0.18em] text-sky-200/70">Status Imports</span>
+              <button
+                type="button"
+                className={smallButtonClass}
+                onClick={() => importConditionStatus(conditionIndex)}
+              >
+                <Plus size={14} /> Import Status
+              </button>
+            </div>
+            {(condition.statusEntries || []).map((statusEntry, statusIndex) => (
+              <div key={statusEntry.id || statusIndex} className="grid gap-2 md:grid-cols-[1fr_170px_auto]">
+                <input
+                  className={inputClass}
+                  value={statusEntry.name}
+                  onChange={event => updateCondition(conditionIndex, {
+                    statusEntries: (condition.statusEntries || []).map((entry, entryIndex) => entryIndex === statusIndex ? { ...entry, name: event.target.value } : entry),
+                  })}
+                  placeholder="Status name"
+                />
+                <select
+                  className={inputClass}
+                  value={statusEntry.onFalse}
+                  onChange={event => updateCondition(conditionIndex, {
+                    statusEntries: (condition.statusEntries || []).map((entry, entryIndex) => entryIndex === statusIndex ? { ...entry, onFalse: event.target.value as CharacterScriptStatusEntry['onFalse'] } : entry),
+                  })}
+                >
+                  <option value="remove">Remove when false</option>
+                  <option value="keep">Keep when false</option>
+                </select>
+                <button type="button" className={dangerButtonClass} onClick={() => updateCondition(conditionIndex, { statusEntries: (condition.statusEntries || []).filter((_, entryIndex) => entryIndex !== statusIndex) })}>
+                  <Trash2 size={14} />
+                </button>
+              </div>
+            ))}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+};
+
 const AssetCreatorPage: React.FC = () => {
   const [selectedKind, setSelectedKind] = useState<AssetKind>('item');
   const [item, setItem] = useState<CharacterInventoryItem>(() => createItem());
   const [spell, setSpell] = useState<CharacterSpell>(() => createSpell());
   const [status, setStatus] = useState<CharacterStatus>(() => createStatus());
   const [macro, setMacro] = useState<CharacterDiceMacro>(() => createMacro());
+  const [script, setScript] = useState<CharacterScript>(() => createScript());
 
   const resetAsset = (kind: AssetKind) => {
     setSelectedKind(kind);
@@ -597,12 +1122,14 @@ const AssetCreatorPage: React.FC = () => {
     if (kind === 'spell') setSpell(createSpell());
     if (kind === 'status') setStatus(createStatus());
     if (kind === 'macro') setMacro(createMacro());
+    if (kind === 'script') setScript(createScript());
   };
 
   const getCurrentEntry = () => {
     if (selectedKind === 'item') return item;
     if (selectedKind === 'spell') return spell;
     if (selectedKind === 'status') return status;
+    if (selectedKind === 'script') return script;
     return macro;
   };
 
@@ -652,6 +1179,10 @@ const AssetCreatorPage: React.FC = () => {
       setMacro(normalizeImportedMacro(payload.entry as Partial<CharacterDiceMacro>));
       return;
     }
+    if (payload.kind === 'script') {
+      setScript(normalizeImportedScript(payload.entry as Partial<CharacterScript>));
+      return;
+    }
 
     throw new Error('This asset type is not supported by Asset Creator.');
   };
@@ -671,6 +1202,7 @@ const AssetCreatorPage: React.FC = () => {
     { kind: 'spell' as const, label: 'Spell', icon: Sparkles, description: 'Spell text, costs, uses, macros, actions.' },
     { kind: 'status' as const, label: 'Status', icon: ShieldCheck, description: 'Buffs, debuffs, durations, effects.' },
     { kind: 'macro' as const, label: 'Macro', icon: Dices, description: 'Reusable dice formula export.' },
+    { kind: 'script' as const, label: 'Script', icon: Sparkles, description: 'Portable automation with placeholders.' },
   ];
 
   return (
@@ -682,7 +1214,7 @@ const AssetCreatorPage: React.FC = () => {
               <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80" style={{ fontFamily: "'Cinzel', serif" }}>Inoraxium Tools</p>
               <h2 className="mt-1 text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Asset Creator</h2>
               <p className="mt-2 max-w-3xl text-sm text-sky-100/70">
-                Create an item, spell, status, or dice macro as a portable JSON file. The exported file uses the same format as the character sheet import buttons.
+                Create an item, spell, status, dice macro, or script as a portable JSON file. The exported file uses the same format as the character sheet import buttons.
               </p>
             </div>
             <div className="flex flex-wrap items-center gap-2">
@@ -704,7 +1236,7 @@ const AssetCreatorPage: React.FC = () => {
           </div>
         </div>
 
-        <div className="grid gap-3 md:grid-cols-4">
+        <div className="grid gap-3 md:grid-cols-5">
           {selectorCards.map(card => {
             const Icon = card.icon;
             const isActive = selectedKind === card.kind;
@@ -780,6 +1312,7 @@ const AssetCreatorPage: React.FC = () => {
                 <textarea className={textareaClass} value={item.description} onChange={event => setItem({ ...item, description: event.target.value })} />
               </div>
               <LocalVariablesEditor variables={item.localVariables || []} onChange={localVariables => setItem({ ...item, localVariables })} />
+              <EmbeddedScriptsEditor scripts={item.scripts || []} onChange={scripts => setItem({ ...item, scripts })} />
               <MacrosEditor macros={item.macros} onChange={macros => setItem({ ...item, macros })} />
               <ActionsEditor actions={item.actions || []} onChange={actions => setItem({ ...item, actions })} />
               <EffectsEditor effects={item.effects || []} onChange={effects => setItem({ ...item, effects })} />
@@ -944,6 +1477,7 @@ const AssetCreatorPage: React.FC = () => {
                 <textarea className={textareaClass} value={status.description} onChange={event => setStatus({ ...status, description: event.target.value })} />
               </div>
               <LocalVariablesEditor variables={status.localVariables || []} onChange={localVariables => setStatus({ ...status, localVariables })} />
+              <EmbeddedScriptsEditor scripts={status.scripts || []} onChange={scripts => setStatus({ ...status, scripts })} />
               <EffectsEditor effects={status.effects} onChange={effects => setStatus({ ...status, effects })} />
               <ActionsEditor actions={status.actions || []} onChange={actions => setStatus({ ...status, actions })} />
             </div>
@@ -965,6 +1499,10 @@ const AssetCreatorPage: React.FC = () => {
                 This exports a single dice macro. Import it from the Macros tab on any character sheet.
               </div>
             </div>
+          )}
+
+          {selectedKind === 'script' && (
+            <ScriptEditor script={script} onChange={setScript} />
           )}
         </div>
       </div>

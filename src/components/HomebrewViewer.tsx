@@ -3,6 +3,7 @@ import { ArrowLeft, AlertTriangle, BookOpen, FlaskConical, Shield, Sparkles } fr
 import { CharacterAction, CharacterData, CharacterGeneralItem, CharacterInventoryItem, CharacterSpell, CharacterStatus } from '../types/character';
 import { loadCharacterById } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
+import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
 export type HomebrewViewerEntityType = 'general-item' | 'inventory-item' | 'spell' | 'status';
 
@@ -58,9 +59,16 @@ const getEntityMeta = (kind: HomebrewViewerEntityType) => {
 };
 
 const getHomebrewImageUrl = (entry: ViewerEntry['entry']): string => (
-  'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
-    ? entry.homebrewImageUrl
-    : ''
+  (() => {
+    const imageUrl = 'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
+      ? entry.homebrewImageUrl
+      : '';
+    const thumbUrl = 'homebrewImageThumbUrl' in entry && typeof entry.homebrewImageThumbUrl === 'string'
+      ? entry.homebrewImageThumbUrl
+      : '';
+    if (imageUrl && isDirectImageUrl(imageUrl)) return imageUrl;
+    return thumbUrl ? getPixhostDirectImageUrl(imageUrl || thumbUrl, thumbUrl) : imageUrl;
+  })()
 );
 
 const getHomebrewImageThumbUrl = (entry: ViewerEntry['entry']): string => (
@@ -287,6 +295,12 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                       src={getHomebrewImageThumbUrl(viewerEntry.entry)}
                       alt={viewerEntry.entry.name || meta.label}
                       className="max-h-[420px] w-full object-cover"
+                      onError={(event) => {
+                        const fallbackUrl = getHomebrewImageUrl(viewerEntry.entry);
+                        if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                          event.currentTarget.src = fallbackUrl;
+                        }
+                      }}
                     />
                   </a>
                 </section>

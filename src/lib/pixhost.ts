@@ -18,17 +18,58 @@ interface PixhostApiResponse {
 const PIXHOST_UPLOAD_ENDPOINT = 'https://api.pixhost.to/images';
 const PIXHOST_UPLOAD_PROXY_ENDPOINT = import.meta.env.VITE_PIXHOST_UPLOAD_PROXY_URL as string | undefined;
 
+const isPixhostShowUrl = (url: string): boolean => {
+  try {
+    const parsed = new URL(url);
+    return /^(?:www\.)?pixhost\.to$/i.test(parsed.hostname) && /^\/show\//i.test(parsed.pathname);
+  } catch {
+    return false;
+  }
+};
+
+export const isDirectImageUrl = (url: string): boolean => (
+  /^https?:\/\/.+\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(url) && !isPixhostShowUrl(url)
+);
+
+export const getPixhostDirectImageUrl = (showUrl: string, thumbUrl: string): string => {
+  if (isDirectImageUrl(showUrl)) return showUrl;
+  if (!thumbUrl) return showUrl;
+
+  try {
+    const parsed = new URL(thumbUrl);
+    const pixhostThumbMatch = parsed.hostname.match(/^t(\d+)\.pixhost\.to$/i);
+    const pathMatch = parsed.pathname.match(/^\/thumbs\/([^/]+)\/(.+)$/i);
+    if (pixhostThumbMatch && pathMatch) {
+      parsed.hostname = `img${pixhostThumbMatch[1]}.pixhost.to`;
+      parsed.pathname = `/images/${pathMatch[1]}/${pathMatch[2]}`;
+      return parsed.toString();
+    }
+
+    parsed.pathname = parsed.pathname
+      .replace(/\/thumbs\//, '/images/')
+      .replace(/\/t\//, '/images/')
+      .replace(/\/thumb\//, '/images/')
+      .replace(/\/small\//, '/images/')
+      .replace(/\/thumbnail\//, '/images/');
+    parsed.pathname = parsed.pathname.replace(/\/?thumbs?_/i, '/');
+    return parsed.toString();
+  } catch {
+    return thumbUrl;
+  }
+};
+
 const normalizePixhostResponse = (data: PixhostApiResponse, fileName: string): PixhostUploadResult => {
   const payload = data.data || data;
   const showUrl = payload.show_url || payload.showUrl || '';
   const thumbUrl = payload.th_url || payload.thumbUrl || showUrl;
+  const imageUrl = getPixhostDirectImageUrl(showUrl, thumbUrl);
 
-  if (!showUrl) {
+  if (!imageUrl) {
     throw new Error(payload.error || data.error || 'Pixhost upload response did not include an image URL.');
   }
 
   return {
-    showUrl,
+    showUrl: imageUrl,
     thumbUrl,
     name: payload.name || fileName,
   };

@@ -12,6 +12,7 @@ import {
 } from '../types/character';
 import { loadCharacterById } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
+import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
 export type HomebrewLibraryCategory = 'general-items' | 'inventory' | 'statuses' | 'spells';
 
@@ -113,9 +114,16 @@ const getEntryAccentColor = (entry: LibraryEntry): string => {
 };
 
 const getEntryImageUrl = (entry: LibraryEntry['entry']): string => (
-  'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
-    ? entry.homebrewImageUrl
-    : ''
+  (() => {
+    const imageUrl = 'homebrewImageUrl' in entry && typeof entry.homebrewImageUrl === 'string'
+      ? entry.homebrewImageUrl
+      : '';
+    const thumbUrl = 'homebrewImageThumbUrl' in entry && typeof entry.homebrewImageThumbUrl === 'string'
+      ? entry.homebrewImageThumbUrl
+      : '';
+    if (imageUrl && isDirectImageUrl(imageUrl)) return imageUrl;
+    return thumbUrl ? getPixhostDirectImageUrl(imageUrl || thumbUrl, thumbUrl) : imageUrl;
+  })()
 );
 
 const getEntryThumbUrl = (entry: LibraryEntry['entry']): string => (
@@ -441,7 +449,17 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             style={{ borderColor: `${accentColor}55`, color: accentColor }}
           >
             {thumbUrl ? (
-              <img src={thumbUrl} alt={getEntryName(entry)} className="h-full w-full object-cover" />
+              <img
+                src={thumbUrl}
+                alt={getEntryName(entry)}
+                className="h-full w-full object-cover"
+                onError={(event) => {
+                  const fallbackUrl = getEntryImageUrl(entry.entry);
+                  if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                    event.currentTarget.src = fallbackUrl;
+                  }
+                }}
+              />
             ) : (
               <ImageIcon size={18} />
             )}
@@ -489,7 +507,16 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto`}>
         {thumbUrl && (
           <a href={imageUrl || thumbUrl} target="_blank" rel="noreferrer" className="mb-5 block overflow-hidden rounded-2xl border border-amber-900/20 bg-amber-100/45">
-            <img src={thumbUrl} alt={getEntryName(selectedEntry)} className="max-h-[460px] w-full object-cover" />
+            <img
+              src={thumbUrl}
+              alt={getEntryName(selectedEntry)}
+              className="max-h-[460px] w-full object-cover"
+              onError={(event) => {
+                if (imageUrl && event.currentTarget.src !== imageUrl) {
+                  event.currentTarget.src = imageUrl;
+                }
+              }}
+            />
           </a>
         )}
 

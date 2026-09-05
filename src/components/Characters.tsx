@@ -1,8 +1,83 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptStatusEntry, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
+
+const splitFormulaArgs = (argsString: string): string[] => {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let i = 0; i < argsString.length; i += 1) {
+    const char = argsString[i];
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      args.push(argsString.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  args.push(argsString.slice(start).trim());
+  return args;
+};
+
+const findFormulaFunctionCall = (expr: string, functionNames: string[]) => {
+  const lower = expr.toLowerCase();
+
+  for (let i = 0; i < expr.length; i += 1) {
+    for (const functionName of functionNames) {
+      const nameLength = functionName.length;
+      if (lower.slice(i, i + nameLength) !== functionName) continue;
+      const before = i > 0 ? expr[i - 1] : '';
+      const after = expr[i + nameLength] || '';
+      if (/[a-zA-Z0-9_]/.test(before) || after !== '(') continue;
+
+      let depth = 0;
+      for (let j = i + nameLength; j < expr.length; j += 1) {
+        if (expr[j] === '(') depth += 1;
+        if (expr[j] === ')') {
+          depth -= 1;
+          if (depth === 0) {
+            return {
+              name: functionName,
+              start: i,
+              end: j + 1,
+              argsString: expr.slice(i + nameLength + 1, j),
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+const normalizeFormulaConditionOperators = (expr: string): string => (
+  expr
+    .replace(/=</g, '<=')
+    .replace(/=>/g, '>=')
+    .replace(/(^|[^<>=!])=(?!=)/g, '$1===')
+);
+
+function transformIfFunctions(expr: string): string {
+  let result = expr;
+  let match = findFormulaFunctionCall(result, ['if']);
+
+  while (match) {
+    const args = splitFormulaArgs(match.argsString);
+    if (args.length !== 3) return result;
+    const condition = normalizeFormulaConditionOperators(transformIfFunctions(args[0]));
+    const whenTrue = transformIfFunctions(args[1]);
+    const whenFalse = transformIfFunctions(args[2]);
+    result = `${result.slice(0, match.start)}((${condition}) ? (${whenTrue}) : (${whenFalse}))${result.slice(match.end)}`;
+    match = findFormulaFunctionCall(result, ['if']);
+  }
+
+  return result;
+}
 
 function evalCharFormula(formula: string, context: Record<string, number>, localContext: Record<string, number> = {}): number {
   if (!formula) return 0;
@@ -14,6 +89,8 @@ function evalCharFormula(formula: string, context: Record<string, number>, local
   expr = expr.replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, refId) => {
     return `${prefix}${(context[refId] ?? 0).toString()}`;
   });
+
+  expr = transformIfFunctions(expr);
 
   expr = expr.replace(/roundup/g, 'Math.ceil')
              .replace(/rounddown/g, 'Math.floor')
@@ -32,7 +109,7 @@ function evalCharFormula(formula: string, context: Record<string, number>, local
 import { addEntryToPartyInventory, loadAdminAccess, loadCharacters, loadPartiesForCharacterTransfer, saveCharacter, saveCharacterInventory, deleteCharacterFromDB, loadFavorites, loadUserDiceSettings, saveUserDiceSettings, toggleFavorite as toggleFavoriteDB, UserDiceSettings, reloadCharacterFromFirestore, loadUserProfiles, transferCharacterOwner, UserProfile } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { addCombatantToBattleTracker } from '../lib/battleTracker';
-import { uploadImageToPixhost } from '../lib/pixhost';
+import { getPixhostDirectImageUrl, isDirectImageUrl, uploadImageToPixhost } from '../lib/pixhost';
 
 interface RollStep {
   label: string;
@@ -128,6 +205,17 @@ const BAR_RESET_TRIGGER_OPTIONS: Array<{ value: NonNullable<CharacterBar['resetT
   { value: 'battle-end', label: 'Battle End' },
 ];
 
+const SCRIPT_TRIGGER_OPTIONS: Array<{ value: CharacterScriptTrigger; label: string }> = [
+  { value: 'short-rest', label: 'Short Rest' },
+  { value: 'long-rest', label: 'Long Rest' },
+  { value: 'round-end', label: 'Round End' },
+  { value: 'battle-end', label: 'Battle End' },
+];
+
+const SCRIPT_PLACEHOLDER_PREFIX = '__script_placeholder__:';
+const getScriptPlaceholderValue = (placeholderId: string) => `${SCRIPT_PLACEHOLDER_PREFIX}${placeholderId}`;
+const isScriptPlaceholderValue = (value: string | undefined) => Boolean(value?.startsWith(SCRIPT_PLACEHOLDER_PREFIX));
+
 const getBarMode = (bar: Partial<CharacterBar>): NonNullable<CharacterBar['mode']> => bar.mode || 'default';
 
 const getStatusDurationType = (status: Partial<CharacterStatus>): CharacterStatusDurationType => (
@@ -162,6 +250,15 @@ const parseReplenishAmount = (value?: string): number => {
 
 const sanitizeWholeNumberInput = (value: string): string => value.replace(/\D/g, '');
 
+const sanitizeNumberInput = (value: string): string => {
+  const normalized = value.replace(',', '.').replace(/[^\d.-]/g, '');
+  const sign = normalized.startsWith('-') ? '-' : '';
+  const unsigned = normalized.replace(/-/g, '');
+  const [integer = '', ...decimalParts] = unsigned.split('.');
+  const decimal = decimalParts.join('');
+  return `${sign}${integer}${decimalParts.length > 0 ? `.${decimal}` : ''}`;
+};
+
 const parseWholeNumberInput = (value: string): number => Number.parseInt(sanitizeWholeNumberInput(value) || '0', 10);
 
 const replenishValue = (currentValue: string | undefined, maxValue: string | undefined, amountValue: string | undefined): string => {
@@ -173,6 +270,11 @@ const replenishValue = (currentValue: string | undefined, maxValue: string | und
   const next = max > 0 ? Math.min(current + amount, max) : current + amount;
   return formatStatusDurationAmount(next);
 };
+
+const createScriptTriggerEvent = (trigger: CharacterScriptTrigger) => ({
+  trigger,
+  nonce: Date.now() + Math.random(),
+});
 
 const createCharacterAction = (): CharacterAction => ({
   id: `act_${uid()}`,
@@ -313,7 +415,11 @@ const normalizeLocalVariables = (variables?: CharacterLocalVariable[]): Characte
       id: variable.id || '',
       description: variable.description || '',
       value: variable.value || '0',
-      kind: variable.kind === 'input' ? 'input' : 'variable',
+      kind: variable.kind === 'input' || variable.kind === 'resource' ? variable.kind : 'variable',
+      replenishTrigger: variable.replenishTrigger || 'custom',
+      replenishMode: variable.replenishMode === 'set' ? 'set' : 'gain',
+      replenishAmount: variable.replenishAmount || '0',
+      maxValue: variable.maxValue || '',
     }))
     : []
 );
@@ -331,6 +437,7 @@ const normalizeGeneralItem = (item: CharacterGeneralItem): CharacterGeneralItem 
   effects: item.effects || [],
   actions: item.actions || [],
   localVariables: normalizeLocalVariables(item.localVariables),
+  scripts: item.scripts || [],
   hidden: item.hidden ?? false,
 });
 
@@ -342,16 +449,37 @@ const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
   rounddown: (args) => Math.floor(args[0]),
 };
 
-function evaluateMathFunctions(expr: string): string {
-  const functionRegex = /(max|min|round|roundup|rounddown)\s*\(\s*([^()]+)\s*\)/i;
-  let result = expr;
-  let match;
+function resolveConditionExpression(expr: string): boolean {
+  const normalizedExpr = normalizeFormulaConditionOperators(expr);
+  if (!/^[\d\s+\-*/.()<>=!&|]+$/.test(normalizedExpr)) {
+    throw new Error(`Invalid condition: ${normalizedExpr}`);
+  }
 
-  while ((match = result.match(functionRegex))) {
-    const funcName = match[1].toLowerCase();
-    const argsString = match[2];
-    const argStrings = argsString.split(',').map(s => s.trim());
+  try {
+    const fn = new Function(`"use strict"; return (${normalizedExpr});`);
+    return Boolean(fn());
+  } catch {
+    throw new Error(`Failed to evaluate condition: ${normalizedExpr}`);
+  }
+}
+
+function evaluateMathFunctions(expr: string): string {
+  let result = expr;
+  let match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+
+  while (match) {
+    const funcName = match.name.toLowerCase();
+    const argStrings = splitFormulaArgs(match.argsString);
     const args: number[] = [];
+
+    if (funcName === 'if') {
+      if (argStrings.length !== 3) throw new Error('if() needs condition, true value, and false value.');
+      const condition = resolveConditionExpression(evaluateMathFunctions(argStrings[0]));
+      const resultValue = resolveBasicExpression(evaluateMathFunctions(condition ? argStrings[1] : argStrings[2]));
+      result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+      match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+      continue;
+    }
 
     for (const argStr of argStrings) {
       args.push(resolveBasicExpression(evaluateMathFunctions(argStr)));
@@ -360,8 +488,8 @@ function evaluateMathFunctions(expr: string): string {
     const func = MATH_FUNCTIONS[funcName];
     if (!func) throw new Error(`Unknown function: ${funcName}`);
     const resultValue = func(args);
-    const startIndex = match.index ?? 0;
-    result = result.slice(0, startIndex) + resultValue.toString() + result.slice(startIndex + match[0].length);
+    result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+    match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
   }
 
   return result;
@@ -618,6 +746,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [barTargetDraft, setBarTargetDraft] = useState('');
   const [effectTargetRequest, setEffectTargetRequest] = useState<{ label: string; resolve: (targetId: string | null) => void } | null>(null);
   const [effectTargetDraft, setEffectTargetDraft] = useState('');
+  const [scriptValueTargetRequest, setScriptValueTargetRequest] = useState<{ label: string; localVariables: CharacterLocalVariable[]; resolve: (targetId: string | null) => void } | null>(null);
+  const [scriptValueGlobalDraft, setScriptValueGlobalDraft] = useState('');
+  const [scriptValueLocalDraft, setScriptValueLocalDraft] = useState('');
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
   const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeStatusCategoryId, setActiveStatusCategoryId] = useState<string | null>(null);
@@ -661,6 +792,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [scriptFolders, setScriptFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeScriptCategoryId, setActiveScriptCategoryId] = useState<ScriptSheetSubTab>('main');
   const [collapsedScriptFolders, setCollapsedScriptFolders] = useState<string[]>([]);
+  const [scriptTriggerEvent, setScriptTriggerEvent] = useState<{ trigger: CharacterScriptTrigger; nonce: number } | null>(null);
   const [mainDiceState, setMainDiceState] = useState<UserDiceSettings>(DEFAULT_CHARACTER_DICE_STATE);
   const [rollResults, setRollResults] = useState<RollResult[]>([]);
   const [editingMacroId, setEditingMacroId] = useState<string | null>(null);
@@ -777,8 +909,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setSendToSpreadsheet(selectedCharacter.sendToSpreadsheet ?? true);
       setBackstory(selectedCharacter.backstory ?? selectedCharacter.bio ?? '');
       setNotes(selectedCharacter.notes || '');
-      setPortraitUrl(selectedCharacter.portraitUrl || '');
-      setPortraitImportUrl(selectedCharacter.portraitUrl || '');
+      const nextPortraitUrl = getCharacterPortraitDisplayUrl(selectedCharacter);
+      setPortraitUrl(nextPortraitUrl);
+      setPortraitImportUrl(nextPortraitUrl);
       setPortraitLoadError(false);
       setGalleryImages(selectedCharacter.gallery || []);
       setDisplayStats(selectedCharacter.displayStats || []);
@@ -1051,6 +1184,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     description: '',
     value: '0',
     kind,
+    replenishTrigger: 'custom',
+    replenishMode: 'gain',
+    replenishAmount: '0',
+    maxValue: '',
   });
 
   const getLocalVariableContext = (
@@ -1061,6 +1198,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     normalizeLocalVariables(variables).forEach((variable) => {
       if (!variable.id) return;
       if (variable.kind === 'input') return;
+      if (variable.kind === 'resource') {
+        localContext[variable.id] = parseReplenishAmount(variable.value);
+        return;
+      }
       localContext[variable.id] = evalCharFormula(variable.value || '0', globalContext, localContext);
     });
     return localContext;
@@ -1401,6 +1542,33 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     return ids;
   };
+
+  useEffect(() => {
+    if (!selectedCharacter || bars.length === 0) return;
+
+    const context = getCharacterContext();
+    let changed = false;
+    const nextBars = bars.map((bar) => {
+      if (!bar.id || getBarMode(bar) !== 'default') return bar;
+
+      const current = context[`${bar.id}_current`];
+      const max = context[`${bar.id}_max`];
+      if (!Number.isFinite(current) || !Number.isFinite(max)) return bar;
+
+      const clampedMax = Math.max(0, max);
+      if (current <= clampedMax) return bar;
+
+      changed = true;
+      return {
+        ...bar,
+        currentValue: `${Math.round(clampedMax * 100) / 100}`,
+      };
+    });
+
+    if (changed) {
+      setBars(nextBars);
+    }
+  }, [selectedCharacter, bars, mainAttrs, secondaryAttrs, skills, otherAttrs, resistances, charStatuses, charGeneralItems, charInventory, charSpells, modFormula]);
 
   const getProfileLabel = (uid: string) => {
     const profile = userProfiles.find((item) => item.uid === uid);
@@ -1854,6 +2022,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: [],
         actions: [],
         localVariables: [],
+        scripts: [],
         hidden: false,
         folderId,
       },
@@ -1879,6 +2048,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: [],
         actions: [],
         localVariables: [],
+        scripts: [],
         active: true,
         color: categoryColor || '#f59e0b',
         hidden: false,
@@ -1952,6 +2122,32 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     ))
   );
 
+  const replenishLocalVariables = (
+    variables: CharacterLocalVariable[] | undefined,
+    triggers: CharacterReplenishTrigger[],
+  ): CharacterLocalVariable[] => (
+    normalizeLocalVariables(variables).map((variable) => {
+      if (variable.kind !== 'resource' || !variable.replenishTrigger || !triggers.includes(variable.replenishTrigger)) {
+        return variable;
+      }
+
+      const amount = parseReplenishAmount(variable.replenishAmount);
+      const current = parseReplenishAmount(variable.value);
+      const nextValue = variable.replenishMode === 'set'
+        ? amount
+        : (() => {
+          const gained = current + amount;
+          const max = parseReplenishAmount(variable.maxValue);
+          return max > 0 ? Math.min(gained, max) : gained;
+        })();
+
+      return {
+        ...variable,
+        value: formatStatusDurationAmount(nextValue),
+      };
+    })
+  );
+
   const replenishSpellUsage = (spell: CharacterSpell, triggers: CharacterReplenishTrigger[]): CharacterSpell => (
     spell.replenishTrigger && triggers.includes(spell.replenishTrigger)
       ? { ...spell, usageRemaining: replenishValue(spell.usageRemaining, spell.totalUsage, spell.replenishAmount) }
@@ -1962,14 +2158,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setCharGeneralItems(prev => prev.map(item => ({
       ...item,
       actions: replenishActions(item.actions, triggers),
+      localVariables: replenishLocalVariables(item.localVariables, triggers),
     })));
     setCharInventory(prev => prev.map(item => ({
       ...item,
       actions: replenishActions(item.actions, triggers),
+      localVariables: replenishLocalVariables(item.localVariables, triggers),
     })));
     setCharSpells(prev => prev.map(spell => ({
       ...replenishSpellUsage(spell, triggers),
       actions: replenishActions(spell.actions, triggers),
+      localVariables: replenishLocalVariables(spell.localVariables, triggers),
     })));
     setCharStatuses(prev => prev.map(status => ({
       ...status,
@@ -1980,6 +2179,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         ? true
         : status.active,
       actions: replenishActions(status.actions, triggers),
+      localVariables: replenishLocalVariables(status.localVariables, triggers),
     })));
   };
 
@@ -2003,6 +2203,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     applyActionReplenish(['short-rest']);
     resetResourceBars('short-rest');
+    setScriptTriggerEvent(createScriptTriggerEvent('short-rest'));
   };
 
   const handleLongRest = () => {
@@ -2022,6 +2223,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     applyActionReplenish(['short-rest', 'long-rest']);
     resetResourceBars('long-rest');
+    setScriptTriggerEvent(createScriptTriggerEvent('long-rest'));
   };
 
   const handleEndTurn = () => {
@@ -2031,6 +2233,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     applyActionReplenish(['round']);
     resetResourceBars('turn-end');
+    setScriptTriggerEvent(createScriptTriggerEvent('round-end'));
   };
 
   const handleEndBattle = () => {
@@ -2039,6 +2242,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     applyActionReplenish(['battle']);
     resetResourceBars('battle-end');
+    setScriptTriggerEvent(createScriptTriggerEvent('battle-end'));
   };
 
   const handleSkipMinute = () => {
@@ -2076,6 +2280,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         id: `script_${uid()}`,
         name: 'New Script',
         watchIds: [],
+        triggerIds: [],
         conditions: [],
         active: true,
         color: folderId ? scriptFolders.find(folder => folder.id === getRootFolderId(scriptFolders, folderId))?.color || '#06b6d4' : '#06b6d4',
@@ -2125,6 +2330,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           minValue: '0',
           maxValue: '0',
           statusEntries: [],
+          barUpdates: [],
           statusIds: [],
           onFalse: 'remove',
           appliedStatusInstanceIds: [],
@@ -2159,6 +2365,40 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     updateScriptCondition(scriptId, conditionId, current => ({
       ...current,
       statusEntries: (current.statusEntries || []).filter(entry => entry.id !== entryId),
+    }));
+  };
+
+  const addScriptConditionBarUpdate = (scriptId: string, conditionId: string) => {
+    updateScriptCondition(scriptId, conditionId, current => ({
+      ...current,
+      barUpdates: [
+        ...(current.barUpdates || []),
+        {
+          id: `script_bar_${uid()}`,
+          targetId: bars[0]?.id || '',
+          value: '0',
+          lastMatched: false,
+        },
+      ],
+    }));
+  };
+
+  const updateScriptConditionBarUpdate = (
+    scriptId: string,
+    conditionId: string,
+    entryId: string,
+    updater: (entry: CharacterScriptBarUpdateEntry) => CharacterScriptBarUpdateEntry,
+  ) => {
+    updateScriptCondition(scriptId, conditionId, current => ({
+      ...current,
+      barUpdates: (current.barUpdates || []).map(entry => entry.id === entryId ? updater(entry) : entry),
+    }));
+  };
+
+  const removeScriptConditionBarUpdate = (scriptId: string, conditionId: string, entryId: string) => {
+    updateScriptCondition(scriptId, conditionId, current => ({
+      ...current,
+      barUpdates: (current.barUpdates || []).filter(entry => entry.id !== entryId),
     }));
   };
 
@@ -2425,6 +2665,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: [],
         actions: [],
         localVariables: [],
+        scripts: [],
         hidden: false,
       }),
     ]);
@@ -3113,7 +3354,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     id: typeof variable.id === 'string' ? variable.id : `local_${uid()}`,
     description: typeof variable.description === 'string' ? variable.description : '',
     value: typeof variable.value === 'string' ? variable.value : '0',
-    kind: variable.kind === 'input' ? 'input' : 'variable',
+    kind: variable.kind === 'input' || variable.kind === 'resource' ? variable.kind : 'variable',
+    replenishTrigger: variable.replenishTrigger || 'custom',
+    replenishMode: variable.replenishMode === 'set' ? 'set' : 'gain',
+    replenishAmount: typeof variable.replenishAmount === 'string' ? variable.replenishAmount : '0',
+    maxValue: typeof variable.maxValue === 'string' ? variable.maxValue : '',
   });
 
   const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => ({
@@ -3132,6 +3377,114 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const getEffectTargetLabelById = (targetId: string): string => (
     getEffectTargetOptions().find(option => option.id === targetId)?.label || targetId
   );
+
+  const getScriptValueOptions = (localVariables?: CharacterLocalVariable[]) => {
+    const localOptions = normalizeLocalVariables(localVariables)
+      .filter(variable => !!variable.id && variable.kind !== 'input')
+      .map(variable => ({
+        id: `@@${variable.id}`,
+        label: `${variable.description || variable.id} (@@${variable.id})`,
+      }));
+    return [
+      ...getEffectTargetOptions(),
+      ...localOptions,
+    ];
+  };
+
+  const getScriptValueLabelByIdWithLocal = (valueId: string, localVariables?: CharacterLocalVariable[]): string => (
+    getScriptValueOptions(localVariables).find(option => option.id === valueId)?.label || valueId
+  );
+
+  const getScriptValue = (
+    valueId: string,
+    context: Record<string, number>,
+    localContext: Record<string, number>,
+  ): number => {
+    if (valueId.startsWith('@@')) return localContext[valueId.slice(2)] ?? 0;
+    return context[valueId] ?? 0;
+  };
+
+  const requestScriptValueTarget = (label: string, localVariables?: CharacterLocalVariable[]): Promise<string> => {
+    const globalOptions = getScriptValueOptions();
+    const localOptions = normalizeLocalVariables(localVariables)
+      .filter(variable => !!variable.id && variable.kind !== 'input')
+      .map(variable => ({
+        id: `@@${variable.id}`,
+        label: `${variable.description || variable.id} (@@${variable.id})`,
+      }));
+    if (globalOptions.length === 0 && localOptions.length === 0) {
+      throw new Error('This character has no values for this script placeholder.');
+    }
+
+    return new Promise((resolve, reject) => {
+      setScriptValueGlobalDraft(globalOptions[0]?.id || '');
+      setScriptValueLocalDraft('');
+      setScriptValueTargetRequest({
+        label,
+        localVariables: normalizeLocalVariables(localVariables),
+        resolve: (targetId) => {
+          setScriptValueTargetRequest(null);
+          if (!targetId) {
+            reject(new Error('Script placeholder import was cancelled.'));
+            return;
+          }
+          resolve(targetId);
+        },
+      });
+    });
+  };
+
+  const replaceScriptPlaceholderValue = (
+    value: string | undefined,
+    replacements: Record<string, string>,
+    mode: 'id' | 'formula' = 'id',
+  ): string | undefined => {
+    if (!value) return value;
+    if (mode === 'id' && isScriptPlaceholderValue(value)) {
+      const placeholderId = value.slice(SCRIPT_PLACEHOLDER_PREFIX.length);
+      return replacements[placeholderId] || value;
+    }
+    return Object.entries(replacements).reduce((nextValue, [placeholderId, replacement]) => (
+      nextValue.replaceAll(
+        getScriptPlaceholderValue(placeholderId),
+        mode === 'formula' && !replacement.startsWith('@@') ? `@${replacement}` : replacement,
+      )
+    ), value);
+  };
+
+  const resolveScriptPlaceholders = async (
+    script: CharacterScript,
+    localVariables?: CharacterLocalVariable[],
+  ): Promise<CharacterScript> => {
+    const placeholders = script.placeholders || [];
+    if (placeholders.length === 0) return script;
+
+    const replacements: Record<string, string> = {};
+    for (const placeholder of placeholders) {
+      if (placeholder.kind === 'bar') {
+        replacements[placeholder.id] = await requestBarUpdateTarget(placeholder.label || 'Choose a bar for this script.');
+      } else if (placeholder.kind === 'value') {
+        replacements[placeholder.id] = await requestScriptValueTarget(placeholder.label || 'Choose a value for this script.', localVariables);
+      }
+    }
+
+    return {
+      ...script,
+      watchIds: (script.watchIds || []).map(id => replaceScriptPlaceholderValue(id, replacements) || id),
+      conditions: (script.conditions || []).map(condition => ({
+        ...condition,
+        leftId: replaceScriptPlaceholderValue(condition.leftId, replacements) || condition.leftId,
+        compareValue: replaceScriptPlaceholderValue(condition.compareValue, replacements, 'formula'),
+        minValue: replaceScriptPlaceholderValue(condition.minValue, replacements, 'formula'),
+        maxValue: replaceScriptPlaceholderValue(condition.maxValue, replacements, 'formula'),
+        barUpdates: (condition.barUpdates || []).map(entry => ({
+          ...entry,
+          targetId: replaceScriptPlaceholderValue(entry.targetId, replacements) || entry.targetId,
+          value: replaceScriptPlaceholderValue(entry.value, replacements, 'formula') || entry.value,
+        })),
+      })),
+    };
+  };
 
   const annotateEffectsForExport = (effects?: StatusEffect[]): StatusEffect[] => (
     (effects || []).map(effect => {
@@ -3163,7 +3516,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const annotateEntryForExport = <T,>(entry: T): T => {
     const copy = JSON.parse(JSON.stringify(entry)) as T & {
       effects?: StatusEffect[];
-      actions?: CharacterAction[];
+    actions?: CharacterAction[];
+      scripts?: CharacterScript[];
       conditions?: CharacterScriptCondition[];
     };
     if (Array.isArray(copy.effects)) {
@@ -3172,12 +3526,20 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     if (Array.isArray(copy.actions)) {
       copy.actions = annotateActionsForExport(copy.actions);
     }
+    if (Array.isArray(copy.scripts)) {
+      copy.scripts = copy.scripts.map(script => annotateEntryForExport(script));
+    }
     if (Array.isArray(copy.conditions)) {
       copy.conditions = copy.conditions.map(condition => ({
         ...condition,
         statusEntries: (condition.statusEntries || []).map(statusEntry => ({
           ...statusEntry,
           entry: annotateEntryForExport(statusEntry.entry),
+        })),
+        barUpdates: (condition.barUpdates || []).map(barUpdate => ({
+          ...barUpdate,
+          lastMatched: false,
+          lastTriggeredNonce: undefined,
         })),
       }));
     }
@@ -3226,6 +3588,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
     actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
     localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(cloneLocalVariableForImport) : [],
+    scripts: Array.isArray(entry.scripts) ? entry.scripts.map(script => buildImportedScript(script as Partial<CharacterScript>, null)) : [],
     hidden: entry.hidden ?? false,
   });
 
@@ -3273,6 +3636,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effects: Array.isArray(entry.effects) ? entry.effects.map(cloneEffectForImport) : [],
     actions: Array.isArray(entry.actions) ? entry.actions.map(cloneActionForImport) : [],
     localVariables: Array.isArray(entry.localVariables) ? entry.localVariables.map(cloneLocalVariableForImport) : [],
+    scripts: Array.isArray(entry.scripts) ? entry.scripts.map(script => buildImportedScript(script as Partial<CharacterScript>, null)) : [],
     active: entry.active ?? true,
     color: typeof entry.color === 'string' ? entry.color : '#f59e0b',
     hidden: entry.hidden ?? false,
@@ -3298,6 +3662,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effects: (template.effects || []).map(cloneEffectForImport),
     actions: (template.actions || []).map(cloneActionForImport),
     localVariables: (template.localVariables || []).map(cloneLocalVariableForImport),
+    scripts: (template.scripts || []).map(script => buildImportedScript(script as Partial<CharacterScript>, null)),
     active: true,
     color: template.color || '#f59e0b',
     hidden: template.hidden ?? false,
@@ -3309,11 +3674,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const evaluateScriptCondition = (
     condition: CharacterScriptCondition,
     context: Record<string, number>,
+    localContext: Record<string, number> = {},
   ): boolean => {
-    const left = context[condition.leftId] ?? 0;
-    const value = evalCharFormula(condition.compareValue || '0', context);
-    const min = evalCharFormula(condition.minValue || '0', context);
-    const max = evalCharFormula(condition.maxValue || '0', context);
+    const left = getScriptValue(condition.leftId, context, localContext);
+    const value = evalCharFormula(condition.compareValue || '0', context, localContext);
+    const min = evalCharFormula(condition.minValue || '0', context, localContext);
+    const max = evalCharFormula(condition.maxValue || '0', context, localContext);
 
     switch (condition.operator) {
       case 'lt':
@@ -3427,6 +3793,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     const entryWithEffects = clonedEntry as {
       effects?: Partial<StatusEffect>[];
       actions?: Array<Partial<CharacterAction> & { effects?: Partial<StatusEffect>[] }>;
+      scripts?: Partial<CharacterScript>[];
+      localVariables?: CharacterLocalVariable[];
       conditions?: Array<Partial<CharacterScriptCondition> & {
         statusEntries?: Array<Partial<CharacterScriptStatusEntry> & { entry?: Partial<CharacterStatus> }>;
       }>;
@@ -3437,6 +3805,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       for (const action of entryWithEffects.actions) {
         await resolveEffects(action.effects);
       }
+    }
+    if (Array.isArray(entryWithEffects.scripts)) {
+      const normalizedLocalVariables = normalizeLocalVariables(entryWithEffects.localVariables);
+      const resolvedScripts: CharacterScript[] = [];
+      for (const script of entryWithEffects.scripts) {
+        const importedScript = buildImportedScript(script as Partial<CharacterScript>, null);
+        resolvedScripts.push(await resolveScriptPlaceholders(importedScript, normalizedLocalVariables));
+      }
+      entryWithEffects.scripts = resolvedScripts;
     }
     if (Array.isArray(entryWithEffects.conditions)) {
       for (const condition of entryWithEffects.conditions) {
@@ -3466,6 +3843,29 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       onAdd(buildStatusApplyEffect(resolvedEntry));
     } catch (err: unknown) {
       const message = err instanceof Error ? err.message : 'Status import failed.';
+      setDiceError(message);
+      window.alert(message);
+    }
+  };
+
+  const importScriptEntry = async (
+    onAdd: (script: CharacterScript) => void,
+    localVariables?: CharacterLocalVariable[],
+  ) => {
+    if (!isCharacterOwner && !canEditInventory) return;
+
+    try {
+      const raw = await importJsonTextWithChoice();
+      if (!raw) return;
+      const parsed = JSON.parse(raw) as CharacterEntryExportPayload;
+      if (parsed.schema !== 'inoraxium-character-entry' || parsed.version !== 1 || parsed.kind !== 'script' || !parsed.entry) {
+        throw new Error('Please import a script export JSON file.');
+      }
+      const importedScript = buildImportedScript(parsed.entry as Partial<CharacterScript>, null);
+      const resolvedScript = await resolveScriptPlaceholders(importedScript, localVariables);
+      onAdd(resolvedScript);
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Script import failed.';
       setDiceError(message);
       window.alert(message);
     }
@@ -3564,6 +3964,123 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
   }, [charGeneralItems, charInventory, charStatuses, statusFolders]);
 
+  useEffect(() => {
+    if (!selectedCharacter) return;
+
+    type LinkedScriptSource = {
+      type: NonNullable<CharacterScript['linkedScriptSourceType']>;
+      id: string;
+      scripts?: CharacterScript[];
+      localVariables?: CharacterLocalVariable[];
+      enabled: boolean;
+    };
+
+    const sources: LinkedScriptSource[] = [
+      ...charGeneralItems.map(item => {
+        const normalizedItem = normalizeGeneralItem(item);
+        return {
+          type: 'general-item' as const,
+          id: normalizedItem.id,
+          scripts: normalizedItem.scripts,
+          localVariables: normalizedItem.localVariables,
+          enabled: !!normalizedItem.equipped,
+        };
+      }),
+      ...charInventory.map(item => ({
+        type: 'inventory-item' as const,
+        id: item.id,
+        scripts: item.scripts,
+        localVariables: item.localVariables,
+        enabled: !!item.equipped,
+      })),
+      ...charStatuses
+        .filter(status => !status.linkedStatusSourceEffectId && !status.scriptSourceConditionId)
+        .map(status => ({
+          type: 'status' as const,
+          id: status.id,
+          scripts: status.scripts,
+          localVariables: status.localVariables,
+          enabled: status.active ?? true,
+        })),
+    ];
+
+    const wanted = new Map<string, {
+      source: LinkedScriptSource;
+      script: CharacterScript;
+      scriptId: string;
+    }>();
+
+    sources.forEach(source => {
+      if (!source.enabled) return;
+      (source.scripts || []).forEach((script, scriptIndex) => {
+        const scriptId = script.id || `script_${scriptIndex}`;
+        wanted.set(`${source.type}:${source.id}:${scriptId}`, { source, script, scriptId });
+      });
+    });
+
+    setCharScripts(prev => {
+      let changed = false;
+      const existingKeys = new Set<string>();
+      const removedConditionIds = new Set<string>();
+
+      const next = prev.filter(script => {
+        if (!script.linkedScriptSourceType || !script.linkedScriptSourceId || !script.linkedScriptSourceScriptId) {
+          return true;
+        }
+
+        const key = `${script.linkedScriptSourceType}:${script.linkedScriptSourceId}:${script.linkedScriptSourceScriptId}`;
+        if (!wanted.has(key)) {
+          (script.conditions || []).forEach(condition => removedConditionIds.add(condition.id));
+          changed = true;
+          return false;
+        }
+
+        existingKeys.add(key);
+        return true;
+      }).map(script => {
+        if (!script.linkedScriptSourceType || !script.linkedScriptSourceId || !script.linkedScriptSourceScriptId) {
+          return script;
+        }
+
+        const key = `${script.linkedScriptSourceType}:${script.linkedScriptSourceId}:${script.linkedScriptSourceScriptId}`;
+        const wantedEntry = wanted.get(key);
+        if (!wantedEntry) return script;
+
+        const nextLocalVariables = normalizeLocalVariables(wantedEntry.source.localVariables);
+        if (JSON.stringify(script.localVariables || []) === JSON.stringify(nextLocalVariables)) {
+          return script;
+        }
+
+        changed = true;
+        return {
+          ...script,
+          localVariables: nextLocalVariables,
+        };
+      });
+
+      wanted.forEach(({ source, script, scriptId }, key) => {
+        if (existingKeys.has(key)) return;
+        next.push({
+          ...buildImportedScript(script as Partial<CharacterScript>, null),
+          name: script.name || 'Imported Script',
+          localVariables: normalizeLocalVariables(source.localVariables),
+          linkedScriptSourceType: source.type,
+          linkedScriptSourceId: source.id,
+          linkedScriptSourceScriptId: scriptId,
+        });
+        changed = true;
+      });
+
+      if (removedConditionIds.size > 0) {
+        setCharStatuses(prevStatuses => (
+          prevStatuses.filter(status => !status.scriptSourceConditionId || !removedConditionIds.has(status.scriptSourceConditionId))
+        ));
+      }
+
+      return changed ? next : prev;
+    });
+  }, [selectedCharacter, charGeneralItems, charInventory, charStatuses]);
+
   const applyBarUpdateEffect = (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
     if (effect.effectType !== 'bar-update' || !effect.targetId) return;
 
@@ -3587,6 +4104,20 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     }));
   };
 
+  const getScriptRuntimeLocalVariables = (script: CharacterScript): CharacterLocalVariable[] | undefined => {
+    if (!script.linkedScriptSourceType || !script.linkedScriptSourceId) return script.localVariables;
+
+    if (script.linkedScriptSourceType === 'general-item') {
+      return normalizeGeneralItem(
+        charGeneralItems.find(item => item.id === script.linkedScriptSourceId) || {} as CharacterGeneralItem
+      ).localVariables;
+    }
+    if (script.linkedScriptSourceType === 'inventory-item') {
+      return charInventory.find(item => item.id === script.linkedScriptSourceId)?.localVariables || script.localVariables;
+    }
+    return charStatuses.find(status => status.id === script.linkedScriptSourceId)?.localVariables || script.localVariables;
+  };
+
   const buildImportedDiceMacro = (entry: Partial<CharacterDiceMacro>, folderId: string | null = null): CharacterDiceMacro => ({
     id: `macro_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Macro',
@@ -3595,6 +4126,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   });
 
   const getScriptValueLabelById = (valueId: string): string => {
+    if (valueId.startsWith('@@')) return `Local Value (${valueId})`;
+    if (isScriptPlaceholderValue(valueId)) return `Placeholder (${valueId.slice(SCRIPT_PLACEHOLDER_PREFIX.length)})`;
     const mainAttr = mainAttrs.find(attr => attr.id === valueId || `${attr.id}_mod` === valueId);
     if (mainAttr) return valueId.endsWith('_mod') ? `${mainAttr.name || mainAttr.id} Modifier (${valueId})` : `${mainAttr.name || mainAttr.id} (${valueId})`;
     const attribute = [...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].find(attr => attr.id === valueId);
@@ -3635,6 +4168,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     appliedStatusInstanceIds: [],
   });
 
+  const buildImportedScriptPlaceholder = (placeholder: Partial<CharacterScriptPlaceholder> = {}): CharacterScriptPlaceholder => ({
+    id: typeof placeholder.id === 'string' ? placeholder.id : `ph_${uid()}`,
+    kind: placeholder.kind === 'bar' || placeholder.kind === 'status-folder' ? placeholder.kind : 'value',
+    label: typeof placeholder.label === 'string' ? placeholder.label : 'Choose a value for this script.',
+  });
+
   const buildImportedScriptCondition = (condition: Partial<CharacterScriptCondition> = {}): CharacterScriptCondition => ({
     id: `cond_${uid()}`,
     leftId: typeof condition.leftId === 'string' ? condition.leftId : '',
@@ -3645,6 +4184,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     statusEntries: Array.isArray(condition.statusEntries)
       ? condition.statusEntries.map(entry => buildImportedScriptStatusEntry(entry as Partial<CharacterScriptStatusEntry>))
       : [],
+    barUpdates: Array.isArray(condition.barUpdates)
+      ? condition.barUpdates.map(entry => ({
+        id: `script_bar_${uid()}`,
+        targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
+        value: typeof entry.value === 'string' ? entry.value : '0',
+        lastMatched: false,
+      }))
+      : [],
     statusIds: [],
     onFalse: condition.onFalse === 'keep' ? 'keep' : 'remove',
     appliedStatusInstanceIds: [],
@@ -3654,10 +4201,19 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     id: `script_${uid()}`,
     name: typeof entry.name === 'string' ? entry.name : 'Imported Script',
     watchIds: Array.isArray(entry.watchIds) ? entry.watchIds.filter((id): id is string => typeof id === 'string') : [],
+    triggerIds: Array.isArray(entry.triggerIds)
+      ? entry.triggerIds.filter((id): id is CharacterScriptTrigger => SCRIPT_TRIGGER_OPTIONS.some(option => option.value === id))
+      : [],
     conditions: Array.isArray(entry.conditions)
       ? entry.conditions.map(condition => buildImportedScriptCondition(condition as Partial<CharacterScriptCondition>))
       : [],
     importedValueLabels: entry.importedValueLabels || {},
+    placeholders: Array.isArray(entry.placeholders)
+      ? entry.placeholders.map(placeholder => buildImportedScriptPlaceholder(placeholder as Partial<CharacterScriptPlaceholder>))
+      : [],
+    localVariables: Array.isArray(entry.localVariables)
+      ? entry.localVariables.map(variable => cloneLocalVariableForImport(variable as Partial<CharacterLocalVariable>))
+      : [],
     active: entry.active ?? true,
     color: typeof entry.color === 'string' ? entry.color : '#06b6d4',
     hidden: entry.hidden ?? false,
@@ -3779,6 +4335,23 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     ]);
   };
 
+  const getDisplayImageUrl = (imageUrl?: string, thumbUrl?: string): string => {
+    if (imageUrl && isDirectImageUrl(imageUrl)) return imageUrl;
+    if (thumbUrl) return getPixhostDirectImageUrl(imageUrl || thumbUrl, thumbUrl);
+    return imageUrl || '';
+  };
+
+  const getGalleryImageUrl = (image: CharacterGalleryImage): string => (
+    getDisplayImageUrl(image.url, image.thumbUrl)
+  );
+
+  const getCharacterPortraitDisplayUrl = (character: Pick<CharacterData, 'portraitUrl' | 'gallery'>): string => {
+    if (character.portraitUrl && isDirectImageUrl(character.portraitUrl)) return character.portraitUrl;
+    const mainGalleryImage = (character.gallery || []).find(image => (image.tags || []).includes('main'));
+    if (mainGalleryImage) return getGalleryImageUrl(mainGalleryImage);
+    return character.portraitUrl || '';
+  };
+
   const chooseGalleryUploadMode = async () => {
     if (!isCharacterOwner) return;
     const choice = await showTwoOptionModal(
@@ -3838,17 +4411,18 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     if (tag === 'main') {
       const selectedImage = galleryImages.find(image => image.id === imageId);
       if (selectedImage) {
-        setPortraitUrl(selectedImage.url);
-        setPortraitImportUrl(selectedImage.url);
+        const imageUrl = getGalleryImageUrl(selectedImage);
+        setPortraitUrl(imageUrl);
+        setPortraitImportUrl(imageUrl);
         setPortraitLoadError(false);
       }
     }
     setGalleryImages(prev => prev.map(image => {
       const tags = image.tags || [];
-      if (tag === 'main') {
+      if (tag === 'main' || tag === 'splash-art') {
         const nextTags = image.id === imageId
-          ? Array.from(new Set([...tags, 'main']))
-          : tags.filter(currentTag => currentTag !== 'main');
+          ? Array.from(new Set([...tags, tag]))
+          : tags.filter(currentTag => currentTag !== tag);
         return { ...image, tags: nextTags };
       }
       if (image.id !== imageId) return image;
@@ -3869,19 +4443,20 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     canEdit = true,
   ) => {
     const isUploading = homebrewImageUploadingId === `${type}:${id}`;
+    const displayImageUrl = getDisplayImageUrl(imageUrl, thumbUrl);
     return (
       <div className="rounded-lg border border-sky-800/15 bg-black/20 p-3">
         <div className="flex flex-wrap items-center justify-between gap-3">
           <div className="min-w-0">
             <label className="text-sm font-bold text-stone-300">Homebrew Image</label>
             <p className="mt-0.5 truncate text-xs text-stone-500">
-              {imageUrl ? imageUrl : 'Only shown on the Homebrew Viewer page.'}
+              {displayImageUrl ? displayImageUrl : 'Only shown on the Homebrew Viewer page.'}
             </p>
           </div>
           <div className="flex flex-wrap items-center gap-2">
             {imageUrl && (
               <a
-                href={imageUrl}
+                href={displayImageUrl || imageUrl}
                 target="_blank"
                 rel="noreferrer"
                 className="rounded border border-sky-800/40 px-2 py-1 text-xs text-sky-300 hover:bg-sky-900/20"
@@ -3952,20 +4527,34 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   };
 
   useEffect(() => {
-    if (!selectedCharacter || charScripts.length === 0) return;
+    if (!selectedCharacter || charScripts.length === 0) {
+      if (scriptTriggerEvent) {
+        setScriptTriggerEvent(null);
+      }
+      return;
+    }
 
     const context = getCharacterContext();
     let nextStatuses = [...charStatuses];
+    const pendingBarUpdates: Array<{ entry: CharacterScriptBarUpdateEntry; localContext: Record<string, number> }> = [];
     let scriptsChanged = false;
 
-    const nextScripts = charScripts.map((script) => {
-      if ((script.active ?? true) === false) return script;
+    const processScript = (
+      script: CharacterScript,
+      localVariables?: CharacterLocalVariable[],
+    ): { script: CharacterScript; changed: boolean } => {
+      if ((script.active ?? true) === false) return { script, changed: false };
+      const localContext = getLocalVariableContext(localVariables, context);
+      const scriptTriggerMatched = Boolean(
+        scriptTriggerEvent && (script.triggerIds || []).includes(scriptTriggerEvent.trigger)
+      );
+      let changed = false;
 
       let nextConditions = script.conditions || [];
       const updatedConditions = nextConditions.map((condition) => {
         if (!condition.leftId) return condition;
 
-        const isMatched = evaluateScriptCondition(condition, context);
+        const isMatched = evaluateScriptCondition(condition, context, localContext);
         const legacyStatusEntries: CharacterScriptStatusEntry[] = (condition.statusIds || [])
           .map((statusId) => {
             const template = nextStatuses.find(status => status.id === statusId && !status.scriptSourceConditionId);
@@ -3987,7 +4576,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             nextStatuses.some(status => status.id === statusId)
           )),
         }));
+        const normalizedBarUpdates = (condition.barUpdates || []).map(entry => ({
+          ...entry,
+          lastMatched: entry.lastMatched ?? false,
+          lastTriggeredNonce: entry.lastTriggeredNonce,
+        }));
         let entryChanged = JSON.stringify(normalizedEntries) !== JSON.stringify(condition.statusEntries || []);
+        let barUpdatesChanged = JSON.stringify(normalizedBarUpdates) !== JSON.stringify(condition.barUpdates || []);
 
         if (isMatched) {
           const nextStatusEntries = normalizedEntries.map((entry) => {
@@ -4004,12 +4599,37 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               appliedStatusInstanceIds: [...(entry.appliedStatusInstanceIds || []), createdStatus.id],
             };
           });
+          const nextBarUpdates = normalizedBarUpdates.map((entry) => {
+            const shouldApplyForValueMatch = !entry.lastMatched;
+            const shouldApplyForTrigger = Boolean(
+              scriptTriggerMatched
+              && scriptTriggerEvent
+              && entry.lastTriggeredNonce !== scriptTriggerEvent.nonce
+            );
 
-          if (entryChanged || condition.statusIds?.length || condition.appliedStatusInstanceIds?.length) {
-            scriptsChanged = true;
+            if ((shouldApplyForValueMatch || shouldApplyForTrigger) && entry.targetId) {
+              pendingBarUpdates.push({ entry, localContext });
+            }
+
+            const nextEntry = {
+              ...entry,
+              lastMatched: true,
+              lastTriggeredNonce: shouldApplyForTrigger && scriptTriggerEvent
+                ? scriptTriggerEvent.nonce
+                : entry.lastTriggeredNonce,
+            };
+            if (JSON.stringify(nextEntry) !== JSON.stringify(entry)) {
+              barUpdatesChanged = true;
+            }
+            return nextEntry;
+          });
+
+          if (entryChanged || barUpdatesChanged || condition.statusIds?.length || condition.appliedStatusInstanceIds?.length) {
+            changed = true;
             return {
               ...condition,
               statusEntries: nextStatusEntries,
+              barUpdates: nextBarUpdates,
               statusIds: [],
               appliedStatusInstanceIds: [],
             };
@@ -4031,17 +4651,22 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             ? { ...entry, appliedStatusInstanceIds: [] }
             : entry
         ));
+        const nextBarUpdates = normalizedBarUpdates.map(entry => (
+          entry.lastMatched ? { ...entry, lastMatched: false } : entry
+        ));
         if (
           removeIds.size > 0
           || entryChanged
+          || JSON.stringify(nextBarUpdates) !== JSON.stringify(condition.barUpdates || [])
           || condition.statusIds?.length
           || condition.appliedStatusInstanceIds?.length
           || JSON.stringify(nextStatusEntries) !== JSON.stringify(condition.statusEntries || [])
         ) {
-          scriptsChanged = true;
+          changed = true;
           return {
             ...condition,
             statusEntries: nextStatusEntries,
+            barUpdates: nextBarUpdates,
             statusIds: [],
             appliedStatusInstanceIds: [],
           };
@@ -4051,15 +4676,45 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       });
 
       nextConditions = updatedConditions;
-      return nextConditions === script.conditions ? script : { ...script, conditions: nextConditions };
+      const nextScript = nextConditions === script.conditions ? script : { ...script, conditions: nextConditions };
+      return { script: nextScript, changed };
+    };
+
+    const processedGlobalScripts = charScripts.map((script) => {
+      const result = processScript(script, getScriptRuntimeLocalVariables(script));
+      if (result.changed) scriptsChanged = true;
+      return result.script;
     });
 
     if (nextStatuses.length !== charStatuses.length || nextStatuses.some((status, index) => status.id !== charStatuses[index]?.id)) {
       setCharStatuses(nextStatuses);
     }
 
+    if (pendingBarUpdates.length > 0) {
+      setBars(prev => prev.map((bar) => {
+        const updates = pendingBarUpdates.filter(({ entry }) => entry.targetId === bar.id);
+        if (updates.length === 0) return bar;
+
+        const current = evalCharFormula(bar.currentValue || '0', context);
+        const delta = updates.reduce((sum, { entry, localContext }) => sum + evalCharFormula(entry.value || '0', context, localContext), 0);
+        const max = getBarMode(bar) === 'resource' ? 0 : evalCharFormula(bar.maxValue || '0', context);
+        const unclampedNext = current + delta;
+        const nextCurrent = getBarMode(bar) === 'resource' || !Number.isFinite(max) || max <= 0
+          ? unclampedNext
+          : Math.min(unclampedNext, max);
+        return {
+          ...bar,
+          currentValue: `${Math.round(nextCurrent * 100) / 100}`,
+        };
+      }));
+    }
+
     if (scriptsChanged) {
-      setCharScripts(nextScripts);
+      setCharScripts(processedGlobalScripts);
+    }
+
+    if (scriptTriggerEvent) {
+      setScriptTriggerEvent(null);
     }
   });
 
@@ -5352,6 +6007,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effects: (action.effects || []).map(cloneStatusEffect),
   });
 
+  const cloneEmbeddedScript = (script: CharacterScript): CharacterScript => buildImportedScript(script, null);
+
   const handleCreateFromSelected = async () => {
     if (!selectedCharacter) return;
     if (!userId || userId === 'guest') {
@@ -5420,6 +6077,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         conditions: (script.conditions || []).map((condition) => ({
           ...condition,
           id: `cond_${uid()}`,
+          barUpdates: (condition.barUpdates || []).map(entry => ({
+            ...entry,
+            id: `script_bar_${uid()}`,
+            lastMatched: false,
+            lastTriggeredNonce: undefined,
+          })),
           appliedStatusInstanceIds: [],
         })),
       })),
@@ -5434,6 +6097,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: (status.effects || []).map(cloneStatusEffect),
         actions: (status.actions || []).map(cloneAction),
         localVariables: (status.localVariables || []).map(cloneLocalVariable),
+        scripts: (status.scripts || []).map(cloneEmbeddedScript),
       })),
       statusFolders: statusFolderClone.folders,
       collapsedStatusFolderIds: (selectedCharacter.collapsedStatusFolderIds || [])
@@ -5446,6 +6110,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: (item.effects || []).map(cloneStatusEffect),
         actions: (item.actions || []).map(cloneAction),
         localVariables: (item.localVariables || []).map(cloneLocalVariable),
+        scripts: (item.scripts || []).map(cloneEmbeddedScript),
       })),
       inventory: (selectedCharacter.inventory || []).map((item) => ({
         ...item,
@@ -5455,6 +6120,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         effects: (item.effects || []).map(cloneStatusEffect),
         actions: (item.actions || []).map(cloneAction),
         localVariables: (item.localVariables || []).map(cloneLocalVariable),
+        scripts: (item.scripts || []).map(cloneEmbeddedScript),
       })),
       inventoryFolders: inventoryFolderClone.folders,
       collapsedInventoryFolderIds: (selectedCharacter.collapsedInventoryFolderIds || [])
@@ -6009,6 +6675,88 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     );
   };
 
+  const renderScriptValueTargetResolverModal = () => {
+    if (!scriptValueTargetRequest) return null;
+    const globalOptions = getScriptValueOptions();
+    const localOptions = normalizeLocalVariables(scriptValueTargetRequest.localVariables)
+      .filter(variable => !!variable.id && variable.kind !== 'input')
+      .map(variable => ({
+        id: `@@${variable.id}`,
+        label: `${variable.description || variable.id} (@@${variable.id})`,
+      }));
+    const selectedTarget = scriptValueLocalDraft || scriptValueGlobalDraft || '';
+
+    return (
+      <div className="fixed inset-0 z-[120] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-2xl rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+          <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            Choose Script Placeholder
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            This imported script needs a value. Choose a character value or a local value from the item/status you are importing into.
+          </p>
+          <div className="mt-4 rounded-xl border border-cyan-900/40 bg-cyan-950/20 p-3">
+            <div className="text-[10px] uppercase tracking-[0.18em] text-cyan-300/70">Placeholder</div>
+            <div className="mt-1 text-sm text-cyan-50">{scriptValueTargetRequest.label}</div>
+          </div>
+          <div className="mt-4 grid gap-3 md:grid-cols-2">
+            <label className="block">
+              <span className="text-xs font-bold uppercase tracking-wider text-amber-500">Global Value</span>
+              <select
+                value={scriptValueGlobalDraft}
+                onChange={(e) => {
+                  setScriptValueGlobalDraft(e.target.value);
+                  if (e.target.value) setScriptValueLocalDraft('');
+                }}
+                className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-amber-100 focus:border-cyan-500/60 focus:outline-none"
+              >
+                <option value="">Choose global value...</option>
+                {globalOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+            </label>
+            <label className="block">
+              <span className="text-xs font-bold uppercase tracking-wider text-cyan-400">Local Value</span>
+              <select
+                value={scriptValueLocalDraft}
+                onChange={(e) => {
+                  setScriptValueLocalDraft(e.target.value);
+                  if (e.target.value) setScriptValueGlobalDraft('');
+                }}
+                className="mt-1 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-cyan-100 focus:border-cyan-500/60 focus:outline-none"
+              >
+                <option value="">Choose local value...</option>
+                {localOptions.map((option) => (
+                  <option key={option.id} value={option.id}>{option.label}</option>
+                ))}
+              </select>
+              {localOptions.length === 0 && (
+                <span className="mt-1 block text-xs text-stone-500">This item/status has no local values yet.</span>
+              )}
+            </label>
+          </div>
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => scriptValueTargetRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel Import
+            </button>
+            <button
+              onClick={() => scriptValueTargetRequest.resolve(selectedTarget || null)}
+              disabled={!selectedTarget}
+              className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55 disabled:cursor-not-allowed disabled:opacity-50"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Use This Value
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
   // ── Full Character Sheet ─────────────────────────────────────────────────────
 
     if (isViewingSheet && selectedCharacter) {
@@ -6051,7 +6799,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       const activeScriptCategory = activeScriptCategoryId !== 'main'
         ? scriptFolders.find(folder => folder.id === activeScriptCategoryId) || null
         : null;
-      const scriptValueOptions = getEffectTargetOptions();
+      const scriptValueOptions = getScriptValueOptions();
       const attributeEffectHistory: Record<string, Array<{ label: string; value: number; sourceAnchorId?: string }>> = {};
       const pushAttributeHistory = (targetId: string, label: string, value: number, sourceAnchorId?: string) => {
         if (!targetId || !Number.isFinite(value) || Math.abs(value) < 0.0001) return;
@@ -6399,6 +7147,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 <button onClick={() => onAdd('variable')} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
                   + Add Variable
                 </button>
+                <button onClick={() => onAdd('resource')} className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer">
+                  + Add Resource
+                </button>
                 <button onClick={() => onAdd('input')} className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer">
                   + Add Input
                 </button>
@@ -6414,11 +7165,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   {renderActionField('Type', (
                     <select
                       value={variable.kind || 'variable'}
-                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, kind: e.target.value as CharacterLocalVariable['kind'] }))}
+                      onChange={(e) => onUpdate(variableIndex, current => ({
+                        ...current,
+                        kind: e.target.value as CharacterLocalVariable['kind'],
+                        value: e.target.value === 'resource' ? sanitizeNumberInput(current.value || '0') || '0' : current.value,
+                      }))}
                       disabled={!canEdit}
                       className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
                     >
                       <option value="variable">Variable</option>
+                      <option value="resource">Local Resource Variable</option>
                       <option value="input">Input</option>
                     </select>
                   ), 'min-w-0')}
@@ -6446,6 +7202,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     <div className="rounded border border-amber-800/30 bg-amber-950/15 px-3 py-2 text-sm italic text-amber-300/80">
                       Asked when rolling
                     </div>
+                  ) : variable.kind === 'resource' ? (
+                    <input
+                      type="text"
+                      inputMode="decimal"
+                      value={variable.value}
+                      onChange={(e) => onUpdate(variableIndex, current => ({ ...current, value: sanitizeNumberInput(e.target.value) }))}
+                      disabled={!canEdit}
+                      placeholder="0"
+                      className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-300 font-mono focus:outline-none disabled:opacity-60"
+                    />
                   ) : (
                     <input
                       type="text"
@@ -6462,6 +7228,55 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     </button>
                   ) : (
                     <div />
+                  )}
+                  {variable.kind === 'resource' && (
+                    <div className="md:col-span-5 grid grid-cols-1 gap-2 rounded-lg border border-emerald-900/25 bg-emerald-950/10 p-2 md:grid-cols-[1fr_120px_1fr_1fr]">
+                      {renderActionField('Replenish On', (
+                        <select
+                          value={variable.replenishTrigger || 'custom'}
+                          onChange={(e) => onUpdate(variableIndex, current => ({ ...current, replenishTrigger: e.target.value as CharacterReplenishTrigger }))}
+                          disabled={!canEdit}
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-100 focus:outline-none disabled:opacity-60"
+                        >
+                          {REPLENISH_TRIGGER_OPTIONS.map(option => (
+                            <option key={option.value} value={option.value}>{option.label}</option>
+                          ))}
+                        </select>
+                      ), 'min-w-0')}
+                      {renderActionField('Mode', (
+                        <select
+                          value={variable.replenishMode || 'gain'}
+                          onChange={(e) => onUpdate(variableIndex, current => ({ ...current, replenishMode: e.target.value as NonNullable<CharacterLocalVariable['replenishMode']> }))}
+                          disabled={!canEdit}
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-100 focus:outline-none disabled:opacity-60"
+                        >
+                          <option value="gain">Gain</option>
+                          <option value="set">Set</option>
+                        </select>
+                      ), 'min-w-0')}
+                      {renderActionField('Replenish Value', (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={variable.replenishAmount || ''}
+                          onChange={(e) => onUpdate(variableIndex, current => ({ ...current, replenishAmount: sanitizeNumberInput(e.target.value) }))}
+                          disabled={!canEdit}
+                          placeholder="0"
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-200 font-mono focus:outline-none disabled:opacity-60"
+                        />
+                      ), 'min-w-0')}
+                      {renderActionField('Max Value', (
+                        <input
+                          type="text"
+                          inputMode="decimal"
+                          value={variable.maxValue || ''}
+                          onChange={(e) => onUpdate(variableIndex, current => ({ ...current, maxValue: sanitizeNumberInput(e.target.value) }))}
+                          disabled={!canEdit || (variable.replenishMode || 'gain') !== 'gain'}
+                          placeholder={(variable.replenishMode || 'gain') === 'gain' ? 'Optional cap' : 'Gain only'}
+                          className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-emerald-200 font-mono focus:outline-none disabled:opacity-40"
+                        />
+                      ), 'min-w-0')}
+                    </div>
                   )}
                 </div>
               ))}
@@ -6482,6 +7297,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         autoApplyStatusEffects = false,
       ) => {
         if (effect.effectType === 'status') {
+          const exportedStatusEntry = effect.statusEntry
+            ? {
+              ...effect.statusEntry,
+              name: effect.statusEntry.name || effect.statusName || 'Imported Status',
+            } as CharacterStatus
+            : null;
+
           return (
             <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_1fr_220px_auto] gap-2 items-center">
               <button
@@ -6496,12 +7318,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               >
                 {autoApplyStatusEffects ? 'Auto' : 'Apply'}
               </button>
-              <input
-                type="text"
-                value={effect.statusName || effect.statusEntry?.name || 'Imported Status'}
-                readOnly
-                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-indigo-200 font-semibold focus:outline-none"
-              />
+              <button
+                type="button"
+                onClick={() => exportedStatusEntry && exportCharacterEntry('status', exportedStatusEntry, null)}
+                disabled={!exportedStatusEntry}
+                className="min-w-0 truncate bg-stone-900 border border-stone-800 rounded px-3 py-2 text-left text-sm text-indigo-200 font-semibold focus:outline-none hover:border-indigo-500/50 hover:bg-indigo-950/30 disabled:cursor-not-allowed disabled:opacity-60"
+                title={exportedStatusEntry ? 'Export this imported status' : 'No imported status data'}
+              >
+                {effect.statusName || effect.statusEntry?.name || 'Imported Status'}
+              </button>
               <select
                 value={effect.statusFolderId ?? ''}
                 onChange={(e) => onUpdate(effectIndex, current => ({ ...current, statusFolderId: e.target.value || null }))}
@@ -6630,6 +7455,55 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           </div>
         );
       };
+
+      const renderEmbeddedScriptsEditor = (
+        scripts: CharacterScript[] | undefined,
+        onImport: () => void,
+        onRemove: (scriptIndex: number) => void,
+        canEdit: boolean,
+      ) => (
+        <div className="bg-black/20 p-3 rounded-lg border border-cyan-800/10">
+          <div className="flex flex-wrap items-center justify-between gap-2 mb-2">
+            <div>
+              <label className="text-sm font-bold text-stone-300">Scripts</label>
+              <p className="text-[11px] text-stone-500">Equipped items and active statuses create linked scripts in the Scripts page.</p>
+            </div>
+            {canEdit && (
+              <button onClick={onImport} className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer">
+                + Import Script
+              </button>
+            )}
+          </div>
+          {(scripts || []).length === 0 ? (
+            <span className="text-[10px] text-stone-600 italic">No scripts imported.</span>
+          ) : (
+            <div className="space-y-2">
+              {(scripts || []).map((script, scriptIndex) => (
+                <div key={script.id || scriptIndex} className="grid grid-cols-1 md:grid-cols-[1fr_auto] gap-2 rounded-lg border border-cyan-900/25 bg-stone-950/45 p-2">
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold text-cyan-100">{script.name || 'Imported Script'}</div>
+                    <div className="mt-1 flex flex-wrap gap-1">
+                      {(script.triggerIds || []).length > 0 ? (script.triggerIds || []).map(triggerId => (
+                        <span key={triggerId} className="rounded border border-amber-800/35 bg-amber-950/25 px-2 py-0.5 text-[10px] text-amber-200">
+                          {SCRIPT_TRIGGER_OPTIONS.find(option => option.value === triggerId)?.label || triggerId}
+                        </span>
+                      )) : (
+                        <span className="text-[10px] italic text-stone-500">Value controlled</span>
+                      )}
+                      <span className="text-[10px] text-stone-500">{(script.conditions || []).length} IF</span>
+                    </div>
+                  </div>
+                  {canEdit && (
+                    <button onClick={() => onRemove(scriptIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                      <Trash2 size={14} />
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      );
 
       const renderActionField = (
         label: string,
@@ -7059,7 +7933,11 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 ...items,
                 options?.skillMode
                   ? { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Skill', value: '0', proficiencyMode: 'none', linkedMainAttributeId: '' }
-                  : { id: `${idPrefix}_${Date.now().toString(36)}`, name: 'New Attribute', value: '10' },
+                  : {
+                    id: `${idPrefix}_${Date.now().toString(36)}`,
+                    name: options?.resistanceMode ? 'New Resistance' : 'New Attribute',
+                    value: options?.resistanceMode ? '0' : '10',
+                  },
               ])}
               className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
             >
@@ -7243,6 +8121,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px]" style={{ fontFamily: "'IM Fell English', serif" }}>
         {renderBarTargetResolverModal()}
         {renderEffectTargetResolverModal()}
+        {renderScriptValueTargetResolverModal()}
         <input
           ref={attributeImportInputRef}
           type="file"
@@ -7280,9 +8159,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             </button>
             <div className="flex max-h-[92vh] max-w-[94vw] flex-col items-center gap-3">
               <img
-                src={fullscreenGalleryImage.url}
+                src={getGalleryImageUrl(fullscreenGalleryImage)}
                 alt={fullscreenGalleryImage.label || editName || 'Gallery image'}
                 className="max-h-[86vh] max-w-[94vw] rounded-2xl border border-cyan-700/35 object-contain shadow-[0_24px_80px_rgba(0,0,0,0.65)]"
+                onError={(event) => {
+                  const fallbackUrl = fullscreenGalleryImage.thumbUrl || fullscreenGalleryImage.url;
+                  if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                    event.currentTarget.src = fallbackUrl;
+                  }
+                }}
                 onClick={(event) => event.stopPropagation()}
               />
               {fullscreenGalleryImage.label && (
@@ -7813,7 +8698,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     src={portraitUrl}
                     alt={editName}
                     className="w-full h-full object-cover"
-                    onError={() => setPortraitLoadError(true)}
+                    onError={(event) => {
+                      const mainGalleryImage = galleryImages.find(image => (image.tags || []).includes('main'));
+                      const fallbackUrl = mainGalleryImage?.thumbUrl || '';
+                      if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                        event.currentTarget.src = fallbackUrl;
+                        return;
+                      }
+                      setPortraitLoadError(true);
+                    }}
                   />
                 ) : (
                   editClass.toLowerCase().includes('arcanist') || editClass.toLowerCase().includes('mage') ? '🔮' : '⚔️'
@@ -8253,7 +9146,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     Character Images
                   </h3>
                   <p className="mt-2 max-w-3xl text-sm leading-relaxed text-stone-400">
-                    Add portraits, reference art, and tokens. The image tagged as Main becomes this character's default portrait.
+                    Add portraits, reference art, and tokens. Main sets the default portrait; Splash Art is shown on the Homebrew Character Overview.
                   </p>
                 </div>
                 <button
@@ -8276,6 +9169,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   {galleryImages.map((image) => {
                     const tags = image.tags || [];
                     const isMain = tags.includes('main');
+                    const isSplashArt = tags.includes('splash-art');
                     const isToken = tags.includes('token');
                     return (
                       <div
@@ -8290,14 +9184,25 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                           className="group relative block aspect-[4/3] w-full overflow-hidden bg-black/35"
                         >
                           <img
-                            src={image.thumbUrl || image.url}
+                            src={image.thumbUrl || getGalleryImageUrl(image)}
                             alt={image.label || editName || 'Gallery image'}
+                            onError={(event) => {
+                              const fallbackUrl = getGalleryImageUrl(image);
+                              if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
+                                event.currentTarget.src = fallbackUrl;
+                              }
+                            }}
                             className="h-full w-full object-cover transition duration-300 group-hover:scale-105"
                           />
                           <div className="absolute left-3 top-3 flex flex-wrap gap-2">
                             {isMain && (
                               <span className="rounded-full border border-amber-300/50 bg-amber-950/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-amber-100">
                                 Main
+                              </span>
+                            )}
+                            {isSplashArt && (
+                              <span className="rounded-full border border-fuchsia-300/50 bg-fuchsia-950/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.16em] text-fuchsia-100">
+                                Splash Art
                               </span>
                             )}
                             {isToken && (
@@ -8319,7 +9224,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                             />
                           </label>
                           <div className="flex flex-wrap items-center gap-2">
-                            {(['main', 'token'] as CharacterGalleryImageTag[]).map((tag) => {
+                            {(['main', 'splash-art', 'token'] as CharacterGalleryImageTag[]).map((tag) => {
                               const active = tags.includes(tag);
                               return (
                                 <button
@@ -8333,7 +9238,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                       : 'border-stone-700/60 bg-stone-900/60 text-stone-400 hover:border-cyan-500/50 hover:text-cyan-100'
                                   }`}
                                 >
-                                  {tag === 'main' ? 'Main' : 'Token'}
+                                  {tag === 'main' ? 'Main' : tag === 'splash-art' ? 'Splash Art' : 'Token'}
                                 </button>
                               );
                             })}
@@ -8962,12 +9867,20 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                     <p className="text-xs text-stone-500">The script checks its conditions whenever these values change.</p>
                                   </div>
                                   {isCharacterOwner && (
-                                    <button
-                                      onClick={() => updateScript(script.id, current => ({ ...current, watchIds: [...(current.watchIds || []), scriptValueOptions[0]?.id || ''] }))}
-                                      className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
-                                    >
-                                      + Add Control
-                                    </button>
+                                    <div className="flex flex-wrap gap-2">
+                                      <button
+                                        onClick={() => updateScript(script.id, current => ({ ...current, watchIds: [...(current.watchIds || []), scriptValueOptions[0]?.id || ''] }))}
+                                        className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
+                                      >
+                                        + Add Control
+                                      </button>
+                                      <button
+                                        onClick={() => updateScript(script.id, current => ({ ...current, triggerIds: [...(current.triggerIds || []), 'short-rest'] }))}
+                                        className="text-xs bg-amber-900/20 hover:bg-amber-900/40 px-2 py-1 rounded text-amber-300 cursor-pointer"
+                                      >
+                                        + Add Trigger
+                                      </button>
+                                    </div>
                                   )}
                                 </div>
                                 <div className="space-y-2">
@@ -9007,6 +9920,34 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                     </div>
                                     );
                                   })}
+                                  {(script.triggerIds || []).length > 0 && (
+                                    <div className="pt-2">
+                                      <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.16em] text-amber-300/70">Event Triggers</div>
+                                      <div className="space-y-2">
+                                        {(script.triggerIds || []).map((triggerId, triggerIndex) => (
+                                          <div key={`${script.id}-trigger-${triggerIndex}`} className="grid grid-cols-[1fr_auto] gap-2">
+                                            {renderActionField('Trigger', (
+                                              <select
+                                                value={triggerId}
+                                                onChange={(e) => updateScript(script.id, current => ({ ...current, triggerIds: (current.triggerIds || []).map((id, index) => index === triggerIndex ? e.target.value as CharacterScriptTrigger : id) }))}
+                                                disabled={!isCharacterOwner}
+                                                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none disabled:opacity-60"
+                                              >
+                                                {SCRIPT_TRIGGER_OPTIONS.map(option => (
+                                                  <option key={option.value} value={option.value}>{option.label}</option>
+                                                ))}
+                                              </select>
+                                            ), 'min-w-0')}
+                                            {isCharacterOwner && (
+                                              <button onClick={() => updateScript(script.id, current => ({ ...current, triggerIds: (current.triggerIds || []).filter((_, index) => index !== triggerIndex) }))} className="text-stone-600 hover:text-red-400 cursor-pointer">
+                                                <Trash2 size={14} />
+                                              </button>
+                                            )}
+                                          </div>
+                                        ))}
+                                      </div>
+                                    </div>
+                                  )}
                                 </div>
                               </div>
 
@@ -9194,6 +10135,65 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                             </div>
                                           )}
                                         </div>
+                                      </div>
+
+                                      <div className="rounded-lg border border-sky-900/25 bg-black/20 p-3">
+                                        <div className="mb-2 flex items-center justify-between gap-3">
+                                          <div>
+                                            <label className="block text-xs font-bold uppercase tracking-[0.16em] text-sky-200">Bar Updates</label>
+                                            <p className="text-xs text-stone-500">When this IF becomes true, or when a selected trigger fires while it is true, update the chosen bar.</p>
+                                          </div>
+                                          {isCharacterOwner && (
+                                            <button
+                                              onClick={() => addScriptConditionBarUpdate(script.id, condition.id)}
+                                              className="shrink-0 rounded border border-sky-700/50 bg-sky-900/30 px-3 py-1.5 text-xs text-sky-100 hover:bg-sky-900/50 cursor-pointer"
+                                            >
+                                              + Bar Update
+                                            </button>
+                                          )}
+                                        </div>
+                                        {(condition.barUpdates || []).length === 0 ? (
+                                          <div className="rounded border border-dashed border-stone-700/60 px-3 py-3 text-center text-xs italic text-stone-600">
+                                            No bar updates for this condition.
+                                          </div>
+                                        ) : (
+                                          <div className="space-y-2">
+                                            {(condition.barUpdates || []).map((barUpdate) => (
+                                              <div key={barUpdate.id} className="grid grid-cols-1 gap-2 rounded-lg border border-sky-900/25 bg-stone-950/45 p-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                                {renderActionField('Bar', (
+                                                  <select
+                                                    value={barUpdate.targetId}
+                                                    onChange={(e) => updateScriptConditionBarUpdate(script.id, condition.id, barUpdate.id, current => ({ ...current, targetId: e.target.value }))}
+                                                    disabled={!isCharacterOwner}
+                                                    className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-sky-100 focus:outline-none disabled:opacity-60"
+                                                  >
+                                                    <option value="">Choose bar</option>
+                                                    {bars.map((bar) => (
+                                                      <option key={bar.id} value={bar.id}>{bar.name || bar.id}</option>
+                                                    ))}
+                                                  </select>
+                                                ), 'min-w-0')}
+                                                {renderActionField('Value', (
+                                                  <input
+                                                    value={barUpdate.value}
+                                                    onChange={(e) => updateScriptConditionBarUpdate(script.id, condition.id, barUpdate.id, current => ({ ...current, value: e.target.value }))}
+                                                    disabled={!isCharacterOwner}
+                                                    placeholder="Amount or formula"
+                                                    className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-sky-200 font-mono focus:outline-none disabled:opacity-60"
+                                                  />
+                                                ), 'min-w-0')}
+                                                {isCharacterOwner && (
+                                                  <button
+                                                    onClick={() => removeScriptConditionBarUpdate(script.id, condition.id, barUpdate.id)}
+                                                    className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end"
+                                                  >
+                                                    <Trash2 size={14} />
+                                                  </button>
+                                                )}
+                                              </div>
+                                            ))}
+                                          </div>
+                                        )}
                                       </div>
                                     </div>
                                     );
@@ -10165,6 +11165,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                         isCharacterOwner
                       )}
 
+                      {renderEmbeddedScriptsEditor(
+                        status.scripts,
+                        () => importScriptEntry(
+                          script => updateStatus(status.id, current => ({ ...current, scripts: [...(current.scripts || []), script] })),
+                          status.localVariables
+                        ),
+                        (scriptIndex) => updateStatus(status.id, current => ({ ...current, scripts: (current.scripts || []).filter((_, index) => index !== scriptIndex) })),
+                        isCharacterOwner
+                      )}
+
                       {/* Effects area */}
                       <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
                         <div className="flex justify-between items-center mb-2">
@@ -10497,6 +11507,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                   (kind) => addGeneralLocalVariable(item.id, kind),
                                   (variableIndex, updater) => updateGeneralLocalVariable(item.id, variableIndex, updater),
                                   (variableIndex) => removeGeneralLocalVariable(item.id, variableIndex),
+                                  canEditInventory
+                                )}
+                                {renderEmbeddedScriptsEditor(
+                                  itemState.scripts,
+                                  () => importScriptEntry(
+                                    script => updateGeneralItem(item.id, current => ({ ...current, scripts: [...(current.scripts || []), script] })),
+                                    itemState.localVariables
+                                  ),
+                                  (scriptIndex) => updateGeneralItem(item.id, current => ({ ...current, scripts: (current.scripts || []).filter((_, index) => index !== scriptIndex) })),
                                   canEditInventory
                                 )}
                                 <div className="bg-black/20 p-3 rounded-lg border border-amber-800/10">
@@ -10959,6 +11978,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                             (kind) => addInventoryLocalVariable(item.id, kind),
                             (variableIndex, updater) => updateInventoryLocalVariable(item.id, variableIndex, updater),
                             (variableIndex) => removeInventoryLocalVariable(item.id, variableIndex),
+                            canEditInventory
+                          )}
+
+                          {renderEmbeddedScriptsEditor(
+                            item.scripts,
+                            () => importScriptEntry(
+                              script => updateInventoryItem(item.id, current => ({ ...current, scripts: [...(current.scripts || []), script] })),
+                              item.localVariables
+                            ),
+                            (scriptIndex) => updateInventoryItem(item.id, current => ({ ...current, scripts: (current.scripts || []).filter((_, index) => index !== scriptIndex) })),
                             canEditInventory
                           )}
 
@@ -11881,6 +12910,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     <div className="w-full flex flex-col gap-6" style={{ fontFamily: "'IM Fell English', serif" }}>
       {renderBarTargetResolverModal()}
       {renderEffectTargetResolverModal()}
+      {renderScriptValueTargetResolverModal()}
       {/* Header */}
       <div className="flex flex-wrap items-center justify-between gap-4 border-b border-amber-900/30 pb-4">
         <div>
@@ -11981,6 +13011,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 {filteredCharacters.map((char) => {
                   const isSelected = selectedCharacter?.id === char.id;
                   const isFav = favoriteIds.includes(char.id);
+                  const listPortraitUrl = getCharacterPortraitDisplayUrl(char);
                   return (
                     <div
                       key={char.id}
@@ -11989,9 +13020,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     >
                       <div className="flex min-w-0 items-center gap-4">
                         <div className={`w-11 h-11 rounded-lg border-2 flex items-center justify-center font-bold text-sm shrink-0 font-mono transition-all overflow-hidden ${isSelected ? 'border-amber-400 bg-amber-900/50 text-amber-200' : 'border-amber-700/30 bg-stone-900/60 text-amber-300/80'}`}>
-                          {char.portraitUrl ? (
+                          {listPortraitUrl ? (
                             <img
-                              src={char.portraitUrl}
+                              src={listPortraitUrl}
                               alt={char.name}
                               className="w-full h-full object-cover"
                               onError={(e) => {
@@ -12003,7 +13034,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                             />
                           ) : null}
                           <span
-                            style={{ display: char.portraitUrl ? 'none' : 'flex' }}
+                            style={{ display: listPortraitUrl ? 'none' : 'flex' }}
                             className="w-full h-full items-center justify-center"
                           >
                             {(char.name || '?').slice(0, 2).toUpperCase()}

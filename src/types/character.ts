@@ -61,7 +61,11 @@ export interface CharacterLocalVariable {
   id: string;
   description: string;
   value: string;
-  kind?: 'variable' | 'input';
+  kind?: 'variable' | 'input' | 'resource';
+  replenishTrigger?: CharacterReplenishTrigger;
+  replenishMode?: 'gain' | 'set';
+  replenishAmount?: string;
+  maxValue?: string;
 }
 
 export interface CharacterDisplayStat {
@@ -114,7 +118,7 @@ export interface CharacterOverviewSettings {
   valueBoxes?: CharacterOverviewValueBox[];
 }
 
-export type CharacterGalleryImageTag = 'main' | 'token';
+export type CharacterGalleryImageTag = 'main' | 'splash-art' | 'token';
 
 export interface CharacterGalleryImage {
   id: string;
@@ -160,6 +164,7 @@ export interface CharacterGeneralItem {
   effects?: StatusEffect[];
   actions?: CharacterAction[];
   localVariables?: CharacterLocalVariable[];
+  scripts?: CharacterScript[];
   hidden?: boolean;
 }
 
@@ -177,6 +182,7 @@ export interface CharacterInventoryItem {
   effects?: StatusEffect[];
   actions?: CharacterAction[];
   localVariables?: CharacterLocalVariable[];
+  scripts?: CharacterScript[];
   hidden?: boolean;
   folderId?: string | null;
 }
@@ -196,6 +202,7 @@ export interface StatusEffect {
 }
 
 export type CharacterScriptConditionOperator = 'lte' | 'lt' | 'gte' | 'gt' | 'eq' | 'neq' | 'between' | 'outside';
+export type CharacterScriptTrigger = 'short-rest' | 'long-rest' | 'round-end' | 'battle-end';
 
 export interface CharacterScriptStatusEntry {
   id: string;
@@ -206,6 +213,20 @@ export interface CharacterScriptStatusEntry {
   appliedStatusInstanceIds?: string[];
 }
 
+export interface CharacterScriptBarUpdateEntry {
+  id: string;
+  targetId: string;
+  value: string;
+  lastMatched?: boolean;
+  lastTriggeredNonce?: number;
+}
+
+export interface CharacterScriptPlaceholder {
+  id: string;
+  kind: 'value' | 'bar' | 'status-folder';
+  label: string;
+}
+
 export interface CharacterScriptCondition {
   id: string;
   leftId: string;
@@ -214,6 +235,7 @@ export interface CharacterScriptCondition {
   minValue?: string;
   maxValue?: string;
   statusEntries?: CharacterScriptStatusEntry[];
+  barUpdates?: CharacterScriptBarUpdateEntry[];
   /** Legacy field kept so older saved scripts do not crash. */
   statusIds: string[];
   /** Legacy field kept so older saved scripts do not crash. */
@@ -226,12 +248,18 @@ export interface CharacterScript {
   id: string;
   name: string;
   watchIds: string[];
+  triggerIds?: CharacterScriptTrigger[];
   conditions: CharacterScriptCondition[];
   importedValueLabels?: Record<string, string>;
+  placeholders?: CharacterScriptPlaceholder[];
+  localVariables?: CharacterLocalVariable[];
   active?: boolean;
   color?: string;
   hidden?: boolean;
   folderId?: string | null;
+  linkedScriptSourceType?: 'general-item' | 'inventory-item' | 'status';
+  linkedScriptSourceId?: string;
+  linkedScriptSourceScriptId?: string;
 }
 
 export type CharacterStatusDurationType = 'custom' | 'round' | 'battle' | 'short-rest' | 'long-rest' | 'minute';
@@ -250,6 +278,7 @@ export interface CharacterStatus {
   effects: StatusEffect[];
   actions?: CharacterAction[];
   localVariables?: CharacterLocalVariable[];
+  scripts?: CharacterScript[];
   active?: boolean;
   color?: string;
   hidden?: boolean;

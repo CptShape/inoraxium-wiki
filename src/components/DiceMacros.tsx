@@ -59,6 +59,77 @@ function resolveModifierValue(
   return resolved;
 }
 
+const splitFormulaArgs = (argsString: string): string[] => {
+  const args: string[] = [];
+  let depth = 0;
+  let start = 0;
+
+  for (let i = 0; i < argsString.length; i += 1) {
+    const char = argsString[i];
+    if (char === '(') depth += 1;
+    if (char === ')') depth -= 1;
+    if (char === ',' && depth === 0) {
+      args.push(argsString.slice(start, i).trim());
+      start = i + 1;
+    }
+  }
+
+  args.push(argsString.slice(start).trim());
+  return args;
+};
+
+const findFormulaFunctionCall = (expr: string, functionNames: string[]) => {
+  const lower = expr.toLowerCase();
+
+  for (let i = 0; i < expr.length; i += 1) {
+    for (const functionName of functionNames) {
+      const nameLength = functionName.length;
+      if (lower.slice(i, i + nameLength) !== functionName) continue;
+      const before = i > 0 ? expr[i - 1] : '';
+      const after = expr[i + nameLength] || '';
+      if (/[a-zA-Z0-9_]/.test(before) || after !== '(') continue;
+
+      let depth = 0;
+      for (let j = i + nameLength; j < expr.length; j += 1) {
+        if (expr[j] === '(') depth += 1;
+        if (expr[j] === ')') {
+          depth -= 1;
+          if (depth === 0) {
+            return {
+              name: functionName,
+              start: i,
+              end: j + 1,
+              argsString: expr.slice(i + nameLength + 1, j),
+            };
+          }
+        }
+      }
+    }
+  }
+
+  return null;
+};
+
+const normalizeFormulaConditionOperators = (expr: string): string => (
+  expr
+    .replace(/=</g, '<=')
+    .replace(/=>/g, '>=')
+    .replace(/(^|[^<>=!])=(?!=)/g, '$1===')
+);
+
+function resolveConditionExpression(expr: string): boolean {
+  const normalizedExpr = normalizeFormulaConditionOperators(expr);
+  if (!/^[\d\s+\-*/.()<>=!&|]+$/.test(normalizedExpr)) {
+    throw new Error(`Invalid condition: ${normalizedExpr}`);
+  }
+  try {
+    const fn = new Function(`"use strict"; return (${normalizedExpr});`);
+    return Boolean(fn());
+  } catch {
+    throw new Error(`Failed to evaluate condition: ${normalizedExpr}`);
+  }
+}
+
 // Math function implementations
 const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
   max: (args) => Math.max(...args),
@@ -69,20 +140,23 @@ const MATH_FUNCTIONS: Record<string, (args: number[]) => number> = {
 };
 
 function evaluateMathFunctions(expr: string): string {
-  // Function pattern: funcName(arg1, arg2, ...)
-  const functionRegex = /(max|min|round|roundup|rounddown)\s*\(\s*([^()]+)\s*\)/i;
-  
   let result = expr;
-  let match;
+  let match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
   
   // Keep evaluating until no more functions are found
-  while ((match = result.match(functionRegex))) {
-    const funcName = match[1].toLowerCase();
-    const argsString = match[2];
-    
-    // Parse arguments (split by comma and evaluate each)
-    const argStrings = argsString.split(',').map(s => s.trim());
+  while (match) {
+    const funcName = match.name.toLowerCase();
+    const argStrings = splitFormulaArgs(match.argsString);
     const args: number[] = [];
+
+    if (funcName === 'if') {
+      if (argStrings.length !== 3) throw new Error('if() needs condition, true value, and false value.');
+      const condition = resolveConditionExpression(evaluateMathFunctions(argStrings[0]));
+      const resultValue = resolveBasicExpression(evaluateMathFunctions(condition ? argStrings[1] : argStrings[2]));
+      result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+      match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
+      continue;
+    }
     
     for (const argStr of argStrings) {
       // Recursively evaluate nested expressions
@@ -97,15 +171,15 @@ function evaluateMathFunctions(expr: string): string {
     const resultValue = func(args);
     
     // Replace the function call with its result
-    const startIndex = match.index ?? 0;
-    result = result.slice(0, startIndex) + resultValue.toString() + result.slice(startIndex + match[0].length);
+    result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
+    match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
   }
   
   return result;
 }
 
 function resolveBasicExpression(expr: string): number {
-  if (!/^[\d\s+\-*/.]+$/.test(expr)) {
+  if (!/^[\d\s+\-*/.()]+$/.test(expr)) {
     throw new Error(`Invalid expression: ${expr}`);
   }
   try {
