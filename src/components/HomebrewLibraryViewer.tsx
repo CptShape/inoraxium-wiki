@@ -15,7 +15,7 @@ import {
   SkillAttribute,
   StatusEffect,
 } from '../types/character';
-import { loadCharacterById, saveCharacter } from '../lib/firestore';
+import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 
@@ -207,6 +207,20 @@ const getEntryThumbUrl = (entry: LibraryEntry['entry']): string => (
     : getEntryImageUrl(entry)
 );
 
+const sendToDiscord = async (webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> => {
+  try {
+    const response = await fetch('https://ulunavir-vercel.vercel.app/api/send-dice', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ webhookUrl, characterName, result }),
+    });
+    const data = await response.json().catch(() => ({}));
+    return response.ok ? null : data.error || `Server error ${response.status}`;
+  } catch {
+    return 'Server connection error. Ensure the API route is deployed.';
+  }
+};
+
 const getFolderInfo = (folderId: string | null | undefined, folders: CharacterEntryFolder[]) => {
   if (!folderId) return { key: 'root', label: 'Unfoldered', depth: 0, color: undefined as string | undefined };
 
@@ -384,10 +398,15 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [activeFilterId, setActiveFilterId] = useState('all');
   const [searchTerm, setSearchTerm] = useState('');
   const [actionMessage, setActionMessage] = useState<string | null>(null);
+  const [diceSettings, setDiceSettings] = useState<UserDiceSettings>({ macros: [], webhookUrl: '', autoSend: false });
   const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
   const rollPopupTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
+
+  useEffect(() => {
+    loadUserDiceSettings(userId).then(setDiceSettings);
+  }, [userId]);
 
   const dismissRollPopup = useCallback(() => {
     if (rollPopupTimeoutRef.current) {
@@ -637,7 +656,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     };
   }, []);
 
-  const rollMacro = useCallback((macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => {
+  const rollMacro = useCallback(async (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => {
     const result = executeMacro(
       { ...macro, name: namePrefix ? `${namePrefix}: ${macro.name || 'Roll'}` : macro.name },
       getCharacterContext(),
@@ -645,7 +664,11 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     );
     result.description = description || undefined;
     showRollPopup(result);
-  }, [executeMacro, getCharacterContext, getLocalVariableContext, showRollPopup]);
+    if (diceSettings.autoSend) {
+      const discordErr = await sendToDiscord(diceSettings.webhookUrl || '', character?.name || characterId, result);
+      setActionMessage(discordErr ? `Discord: ${discordErr}` : null);
+    }
+  }, [character?.name, characterId, diceSettings.autoSend, diceSettings.webhookUrl, executeMacro, getCharacterContext, getLocalVariableContext, showRollPopup]);
 
   const applyStatusEffect = useCallback(async (effect: StatusEffect) => {
     if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
