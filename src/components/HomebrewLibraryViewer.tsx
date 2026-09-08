@@ -2,7 +2,6 @@ import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { ArrowLeft, BookOpen, Dices, FolderOpen, ImageIcon, Layers3, Search, Shield, Sparkles } from 'lucide-react';
 import {
   CharacterAction,
-  CharacterBar,
   CharacterDiceMacro,
   CharacterData,
   CharacterEntryFolder,
@@ -11,13 +10,13 @@ import {
   CharacterLocalVariable,
   CharacterSpell,
   CharacterStatus,
-  CustomAttribute,
-  SkillAttribute,
   StatusEffect,
 } from '../types/character';
 import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
+import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
+import { QuickTools } from './QuickTools';
 
 export type HomebrewLibraryCategory = 'general-items' | 'inventory' | 'statuses' | 'spells';
 
@@ -96,31 +95,6 @@ const sectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-5 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-const getBarMode = (bar: CharacterBar) => bar.mode || 'default';
-
-const evalFormula = (
-  formula: string,
-  context: Record<string, number>,
-  localContext: Record<string, number> = {},
-): number => {
-  if (!formula) return 0;
-  const expr = formula
-    .replace(/@@([a-zA-Z0-9_-]+)/g, (_match, id) => String(localContext[id] ?? 0))
-    .replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`)
-    .replace(/roundup/g, 'Math.ceil')
-    .replace(/rounddown/g, 'Math.floor')
-    .replace(/round/g, 'Math.round')
-    .replace(/max/g, 'Math.max')
-    .replace(/min/g, 'Math.min');
-
-  try {
-    const result = new Function(`"use strict"; return (${expr});`)();
-    return typeof result === 'number' && Number.isFinite(result) ? Math.round(result * 100) / 100 : 0;
-  } catch {
-    return 0;
-  }
-};
 
 const rollDice = (notation: string): DiceRoll => {
   const match = notation.match(/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i);
@@ -583,43 +557,11 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   );
 
   const getCharacterContext = useCallback((): Record<string, number> => {
-    if (!character) return {};
-    const context: Record<string, number> = {};
-    const mainAttributes = character.mainAttributes || [];
-    const allAttributes: Array<CustomAttribute | SkillAttribute> = [
-      ...mainAttributes,
-      ...(character.secondaryAttributes || []),
-      ...(character.skills || []),
-      ...(character.otherAttributes || []),
-      ...(character.resistances || []),
-    ];
-    allAttributes.forEach((attribute) => {
-      if (attribute.id) context[attribute.id] = evalFormula(attribute.value || '0', context);
-    });
-    mainAttributes.forEach((attribute) => {
-      if (attribute.id) context[`${attribute.id}_mod`] = Math.floor(((context[attribute.id] ?? 0) - 10) / 2);
-    });
-    (character.bars || []).forEach((bar) => {
-      if (!bar.id) return;
-      context[`${bar.id}_current`] = evalFormula(bar.currentValue || '0', context);
-      if (getBarMode(bar) === 'resource') {
-        context[`${bar.id}_reset`] = evalFormula(bar.resetValue || '0', context);
-      } else {
-        context[`${bar.id}_max`] = evalFormula(bar.maxValue || '0', context);
-      }
-    });
-    return context;
+    return buildCharacterFormulaContext(character);
   }, [character]);
 
   const getLocalVariableContext = useCallback((variables?: CharacterLocalVariable[], globalContext: Record<string, number> = {}) => {
-    const localContext: Record<string, number> = {};
-    (variables || []).forEach((variable) => {
-      if (!variable.id || variable.kind === 'input') return;
-      localContext[variable.id] = variable.kind === 'resource'
-        ? Number.parseFloat(variable.value || '0') || 0
-        : evalFormula(variable.value || '0', globalContext, localContext);
-    });
-    return localContext;
+    return buildLocalVariableContext(variables, globalContext);
   }, []);
 
   const requestLocalInputValues = useCallback((
@@ -699,7 +641,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       macroName: macro.name || 'Roll',
       formula: macro.formula || '',
       steps,
-      total: evalFormula(resolvedParts.join(' '), {}, {}),
+      total: evalCharacterFormula(resolvedParts.join(' '), {}, {}),
       timestamp: Date.now(),
     };
   }, []);
@@ -958,7 +900,8 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#efe2bd] px-4 py-6 text-stone-900 xl:px-6" style={parchmentBackground}>
+    <div className="flex-1 overflow-y-auto bg-[#efe2bd] py-6 pl-4 pr-24 text-stone-900 xl:pl-6" style={parchmentBackground}>
+      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
           type="button"

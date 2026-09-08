@@ -5,6 +5,7 @@ import { loadCharacterById } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { HomebrewLibraryCategory } from './HomebrewLibraryViewer';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
+import { QuickTools } from './QuickTools';
 
 interface HomebrewCharacterSheetViewerProps {
   characterId: string;
@@ -468,6 +469,11 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
     },
   ];
   const overviewContext = character ? buildHomebrewContext(character) : {};
+  const canControlCharacter = !!character && (
+    !character.userId
+    || character.userId === 'guest'
+    || (!!userId && (character.userId === userId || (character.controlUserIds || []).includes(userId)))
+  );
   const portraitUrl = character ? getCharacterPortraitUrl(character) : '';
   const splashArtUrl = character ? getCharacterSplashArtUrl(character, portraitUrl) : '';
   const overviewMainAttributes = character
@@ -541,7 +547,8 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
   ] : [];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 text-stone-900" style={parchmentBackground}>
+    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 pr-24 text-stone-900" style={parchmentBackground}>
+      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
       <div className="mx-auto max-w-6xl">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button

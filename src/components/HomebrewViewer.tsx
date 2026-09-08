@@ -1,9 +1,11 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { ArrowLeft, AlertTriangle, BookOpen, Dices, FlaskConical, Shield, Sparkles } from 'lucide-react';
-import { CharacterAction, CharacterBar, CharacterData, CharacterDiceMacro, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterSpell, CharacterStatus, CustomAttribute, SkillAttribute, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterData, CharacterDiceMacro, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterSpell, CharacterStatus, StatusEffect } from '../types/character';
 import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
+import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
+import { QuickTools } from './QuickTools';
 
 export type HomebrewViewerEntityType = 'general-item' | 'inventory-item' | 'spell' | 'status';
 
@@ -69,132 +71,6 @@ const viewerSectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-5 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
 
 const uid = () => Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
-
-const getBarMode = (bar: CharacterBar) => bar.mode || 'default';
-
-const splitFormulaArgs = (argsString: string): string[] => {
-  const args: string[] = [];
-  let depth = 0;
-  let start = 0;
-
-  for (let i = 0; i < argsString.length; i += 1) {
-    const char = argsString[i];
-    if (char === '(') depth += 1;
-    if (char === ')') depth -= 1;
-    if (char === ',' && depth === 0) {
-      args.push(argsString.slice(start, i).trim());
-      start = i + 1;
-    }
-  }
-
-  args.push(argsString.slice(start).trim());
-  return args;
-};
-
-const findFormulaFunctionCall = (expr: string, functionNames: string[]) => {
-  const lower = expr.toLowerCase();
-
-  for (let i = 0; i < expr.length; i += 1) {
-    for (const functionName of functionNames) {
-      const nameLength = functionName.length;
-      if (lower.slice(i, i + nameLength) !== functionName) continue;
-      const before = i > 0 ? expr[i - 1] : '';
-      const after = expr[i + nameLength] || '';
-      if (/[a-zA-Z0-9_]/.test(before) || after !== '(') continue;
-
-      let depth = 0;
-      for (let j = i + nameLength; j < expr.length; j += 1) {
-        if (expr[j] === '(') depth += 1;
-        if (expr[j] === ')') {
-          depth -= 1;
-          if (depth === 0) {
-            return {
-              name: functionName,
-              start: i,
-              end: j + 1,
-              argsString: expr.slice(i + nameLength + 1, j),
-            };
-          }
-        }
-      }
-    }
-  }
-
-  return null;
-};
-
-const normalizeFormulaConditionOperators = (expr: string): string => (
-  expr
-    .replace(/=</g, '<=')
-    .replace(/=>/g, '>=')
-    .replace(/(^|[^<>=!])=(?!=)/g, '$1===')
-);
-
-const resolveBasicExpression = (expr: string): number => {
-  if (!/^[\d\s+\-*/.()]+$/.test(expr)) throw new Error('Invalid formula');
-  const fn = new Function(`"use strict"; return (${expr});`);
-  const result = fn();
-  if (typeof result !== 'number' || !Number.isFinite(result)) throw new Error('Invalid formula result');
-  return result;
-};
-
-const resolveConditionExpression = (expr: string): boolean => {
-  const normalizedExpr = normalizeFormulaConditionOperators(expr);
-  if (!/^[\d\s+\-*/.()<>=!&|]+$/.test(normalizedExpr)) throw new Error('Invalid condition');
-  const fn = new Function(`"use strict"; return (${normalizedExpr});`);
-  return Boolean(fn());
-};
-
-const evaluateMathFunctions = (expr: string): string => {
-  let result = expr;
-  let match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
-
-  while (match) {
-    const funcName = match.name.toLowerCase();
-    const argStrings = splitFormulaArgs(match.argsString);
-
-    if (funcName === 'if') {
-      if (argStrings.length !== 3) throw new Error('if() needs condition, true value, and false value.');
-      const condition = resolveConditionExpression(evaluateMathFunctions(argStrings[0]));
-      const resultValue = resolveBasicExpression(evaluateMathFunctions(condition ? argStrings[1] : argStrings[2]));
-      result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
-      match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
-      continue;
-    }
-
-    const args = argStrings.map(arg => resolveBasicExpression(evaluateMathFunctions(arg)));
-    const resultValue = funcName === 'roundup'
-      ? Math.ceil(args[0])
-      : funcName === 'rounddown'
-        ? Math.floor(args[0])
-        : funcName === 'round'
-          ? Math.round(args[0])
-          : funcName === 'max'
-            ? Math.max(...args)
-            : Math.min(...args);
-    result = result.slice(0, match.start) + resultValue.toString() + result.slice(match.end);
-    match = findFormulaFunctionCall(result, ['rounddown', 'roundup', 'round', 'max', 'min', 'if']);
-  }
-
-  return result;
-};
-
-const evalFormula = (
-  formula: string,
-  context: Record<string, number>,
-  localContext: Record<string, number> = {},
-): number => {
-  if (!formula) return 0;
-  let expr = formula.replace(/@@([a-zA-Z0-9_-]+)/g, (_match, id) => String(localContext[id] ?? 0));
-  expr = expr.replace(/(^|[^@])@([a-zA-Z0-9_-]+)/g, (_match, prefix, id) => `${prefix}${context[id] ?? 0}`);
-  try {
-    const withMathEvaluated = evaluateMathFunctions(expr);
-    const sanitized = withMathEvaluated.replace(/[^0-9+\-*/().\s]/g, '');
-    return Math.round(resolveBasicExpression(sanitized) * 100) / 100;
-  } catch {
-    return 0;
-  }
-};
 
 const rollDice = (notation: string): DiceRoll => {
   const match = notation.match(/^(\d*)d(\d+)(?:(kh|kl)(\d+))?$/i);
@@ -486,53 +362,14 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
   );
 
   const getCharacterContext = useCallback((): Record<string, number> => {
-    if (!character) return {};
-    const context: Record<string, number> = {};
-    const mainAttributes = character.mainAttributes || [];
-    const allAttributes: Array<CustomAttribute | SkillAttribute> = [
-      ...mainAttributes,
-      ...(character.secondaryAttributes || []),
-      ...(character.skills || []),
-      ...(character.otherAttributes || []),
-      ...(character.resistances || []),
-    ];
-
-    allAttributes.forEach((attribute) => {
-      if (!attribute.id) return;
-      context[attribute.id] = evalFormula(attribute.value || '0', context);
-    });
-    mainAttributes.forEach((attribute) => {
-      if (!attribute.id) return;
-      context[`${attribute.id}_mod`] = Math.floor(((context[attribute.id] ?? 0) - 10) / 2);
-    });
-    (character.bars || []).forEach((bar) => {
-      if (!bar.id) return;
-      context[`${bar.id}_current`] = evalFormula(bar.currentValue || '0', context);
-      if (getBarMode(bar) === 'resource') {
-        context[`${bar.id}_reset`] = evalFormula(bar.resetValue || '0', context);
-      } else {
-        context[`${bar.id}_max`] = evalFormula(bar.maxValue || '0', context);
-      }
-    });
-
-    return context;
+    return buildCharacterFormulaContext(character);
   }, [character]);
 
   const getLocalVariableContext = useCallback((
     variables: CharacterLocalVariable[] | undefined,
     globalContext: Record<string, number>,
   ): Record<string, number> => {
-    const localContext: Record<string, number> = {};
-    (variables || []).forEach((variable) => {
-      if (!variable.id || variable.kind === 'input') return;
-      if (variable.kind === 'resource') {
-        const parsed = Number.parseFloat(variable.value || '0');
-        localContext[variable.id] = Number.isFinite(parsed) ? parsed : 0;
-        return;
-      }
-      localContext[variable.id] = evalFormula(variable.value || '0', globalContext, localContext);
-    });
-    return localContext;
+    return buildLocalVariableContext(variables, globalContext);
   }, []);
 
   const requestLocalInputValues = useCallback((
@@ -619,7 +456,7 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
       resolvedParts.push(trimmed);
     });
 
-    const total = evalFormula(resolvedParts.join(' '), {}, {});
+    const total = evalCharacterFormula(resolvedParts.join(' '), {}, {});
     return {
       macroName: macro.name || 'Roll',
       formula: macro.formula || '',
@@ -702,7 +539,8 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
   };
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 text-stone-900" style={parchmentBackground}>
+    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 pr-24 text-stone-900" style={parchmentBackground}>
+      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
           type="button"
