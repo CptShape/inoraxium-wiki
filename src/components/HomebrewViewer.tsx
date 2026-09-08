@@ -3,7 +3,7 @@ import { ArrowLeft, AlertTriangle, BookOpen, Dices, FlaskConical, Shield, Sparkl
 import { CharacterAction, CharacterData, CharacterDiceMacro, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterSpell, CharacterStatus, StatusEffect } from '../types/character';
 import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
-import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula } from '../lib/characterContext';
+import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
 
@@ -35,6 +35,9 @@ interface RollResult {
   total: number;
   timestamp: number;
   description?: string;
+  outcome?: 'success' | 'failure';
+  dc?: number;
+  rollTotal?: number;
 }
 
 interface DiceRoll {
@@ -456,12 +459,15 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
       resolvedParts.push(trimmed);
     });
 
-    const total = evalCharacterFormula(resolvedParts.join(' '), {}, {});
+    const evaluated = evalCharacterRollFormula(resolvedParts.join(' '));
     return {
       macroName: macro.name || 'Roll',
       formula: macro.formula || '',
       steps,
-      total,
+      total: evaluated.total,
+      outcome: evaluated.outcome,
+      dc: evaluated.dc,
+      rollTotal: evaluated.rollTotal,
       timestamp: Date.now(),
     };
   }, []);
@@ -554,14 +560,19 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
                 {rollPopupResult.macroName || 'Roll Result'}
               </span>
             </div>
-            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-              {rollPopupResult.total}
+            <span className={`shrink-0 text-3xl font-black ${rollPopupResult.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.outcome ? (rollPopupResult.outcome === 'success' ? 'Success' : 'Failure') : rollPopupResult.total}
             </span>
           </div>
           <div className="space-y-2 px-4 py-3">
             <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
               {rollPopupResult.formula}
             </code>
+            {rollPopupResult.outcome && (
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-300">
+                Roll {rollPopupResult.rollTotal} vs DC {rollPopupResult.dc}
+              </p>
+            )}
             {rollPopupResult.description && (
               <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
             )}

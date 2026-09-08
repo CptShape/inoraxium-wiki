@@ -28,6 +28,9 @@ interface RollResult {
   total: number;
   timestamp: number;
   description?: string;
+  outcome?: 'success' | 'failure';
+  dc?: number;
+  rollTotal?: number;
 }
 
 interface DiceMacrosState {
@@ -209,6 +212,26 @@ function resolveFormula(
   return resolveBasicExpression(expr);
 }
 
+function resolveRollFormula(formula: string): Pick<RollResult, 'total' | 'outcome' | 'dc' | 'rollTotal'> {
+  const trimmed = formula.trim();
+  const dcMatch = findFormulaFunctionCall(trimmed, ['dc']);
+  if (dcMatch && dcMatch.start === 0 && dcMatch.end === trimmed.length) {
+    const args = splitFormulaArgs(dcMatch.argsString);
+    if (args.length === 2) {
+      const dc = resolveFormula(args[0], []);
+      const rollTotal = resolveFormula(args[1], []);
+      return {
+        total: rollTotal,
+        dc,
+        rollTotal,
+        outcome: rollTotal >= dc ? 'success' : 'failure',
+      };
+    }
+  }
+
+  return { total: resolveFormula(trimmed, []) };
+}
+
 interface DiceRoll {
   notation: string;
   rolls: number[];
@@ -300,21 +323,15 @@ function executeMacro(macro: DiceMacro, modifiers: Modifier[]): RollResult {
   }
 
   // Evaluate final expression with math function support
-  let total = 0;
   const resolvedFormula = resolvedParts.join(' ');
+  let evaluated: Pick<RollResult, 'total' | 'outcome' | 'dc' | 'rollTotal'> = { total: 0 };
   try {
-    // First evaluate any math functions in the resolved formula
-    const withMathEvaluated = evaluateMathFunctions(resolvedFormula);
-    const sanitized = withMathEvaluated.replace(/[^0-9+\-*/().\s]/g, '');
-    const fn = new Function(`"use strict"; return (${sanitized});`);
-    total = fn();
-    if (typeof total !== 'number' || !isFinite(total)) total = 0;
-    total = Math.round(total * 100) / 100;
+    evaluated = resolveRollFormula(resolvedFormula);
   } catch {
-    total = steps.reduce((sum, s) => sum + s.value, 0);
+    evaluated = { total: steps.reduce((sum, s) => sum + s.value, 0) };
   }
 
-  return { macroName: macro.name, formula: macro.formula, steps, total, timestamp: Date.now() };
+  return { macroName: macro.name, formula: macro.formula, steps, ...evaluated, timestamp: Date.now() };
 }
 
 async function sendToDiscord(webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> {
@@ -749,14 +766,19 @@ export const DiceMacros: React.FC = () => {
                 {rollPopupResult.macroName || 'Roll Result'}
               </span>
             </div>
-            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-              {rollPopupResult.total}
+            <span className={`shrink-0 text-3xl font-black ${rollPopupResult.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.outcome ? (rollPopupResult.outcome === 'success' ? 'Success' : 'Failure') : rollPopupResult.total}
             </span>
           </div>
           <div className="space-y-2 px-4 py-3">
             <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
               {rollPopupResult.formula}
             </code>
+            {rollPopupResult.outcome && (
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-300">
+                Roll {rollPopupResult.rollTotal} vs DC {rollPopupResult.dc}
+              </p>
+            )}
             {rollPopupResult.description && (
               <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
             )}
@@ -974,6 +996,9 @@ export const DiceMacros: React.FC = () => {
                   formula: getQuickRollFormula(true),
                   steps: combinedSteps,
                   total: finalResultObj.total,
+                  outcome: finalResultObj.outcome,
+                  dc: finalResultObj.dc,
+                  rollTotal: finalResultObj.rollTotal,
                   timestamp: Date.now(),
                   description: quickDescription.trim() || undefined
                 };
@@ -1136,7 +1161,9 @@ export const DiceMacros: React.FC = () => {
                     <span className="text-amber-300 font-bold" style={{ fontFamily: "'Cinzel', serif" }}>{result.macroName}</span>
                     <code className="text-stone-400 text-xs bg-stone-800 px-1.5 py-0.5 rounded">{result.formula}</code>
                   </div>
-                  <span className="text-2xl font-bold text-amber-400" style={{ fontFamily: "'Cinzel', serif" }}>{result.total}</span>
+                  <span className={`text-2xl font-bold ${result.outcome === 'failure' ? 'text-rose-300' : 'text-amber-400'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+                    {result.outcome ? (result.outcome === 'success' ? 'Success' : 'Failure') : result.total}
+                  </span>
                 </div>
                 <div className="px-4 py-2">
                   {result.description && (
@@ -1154,8 +1181,10 @@ export const DiceMacros: React.FC = () => {
                     ))}
                   </div>
                   <div className="mt-2 pt-2 border-t border-amber-800/20 flex items-center justify-between">
-                    <span className="text-amber-400 text-sm font-bold">Total</span>
-                    <span className="text-amber-300 text-lg font-bold font-mono">{result.total}</span>
+                    <span className="text-amber-400 text-sm font-bold">{result.outcome ? `Roll ${result.rollTotal} vs DC ${result.dc}` : 'Total'}</span>
+                    <span className={`text-lg font-bold font-mono ${result.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`}>
+                      {result.outcome ? (result.outcome === 'success' ? 'Success' : 'Failure') : result.total}
+                    </span>
                   </div>
                 </div>
               </div>
@@ -1190,6 +1219,7 @@ export const DiceMacros: React.FC = () => {
               <li><code className="text-amber-200">1d20 + @wisdom</code> — Skill check</li>
               <li><code className="text-amber-200">2d20kh1 + @luck</code> — Advantage roll</li>
               <li><code className="text-amber-200">8d6 + @fire_power</code> — Damage roll</li>
+              <li><code className="text-amber-200">DC(20, 1d20 + @dex)</code> — Shows Success or Failure</li>
             </ul>
           </div>
         </div>

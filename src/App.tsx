@@ -61,6 +61,8 @@ interface HomebrewViewerRoute {
 interface HomebrewLibraryRoute {
   category: HomebrewLibraryCategory;
   characterId: string;
+  selectedKind?: string;
+  selectedEntryId?: string;
 }
 
 interface HomebrewCharacterSheetRoute {
@@ -215,6 +217,8 @@ function App() {
     if (path[0] === 'homebrew-library') {
       const category = path[1] as HomebrewLibraryCategory | undefined;
       const characterId = path[2] ? decodeURIComponent(path[2]) : '';
+      const selectedKind = path[3] ? decodeURIComponent(path[3]) : undefined;
+      const selectedEntryId = path[4] ? decodeURIComponent(path[4]) : undefined;
       const isSupportedCategory =
         category === 'general-items'
         || category === 'inventory'
@@ -223,7 +227,7 @@ function App() {
 
       if (isSupportedCategory && characterId) {
         setHomebrewViewerRoute(null);
-        setHomebrewLibraryRoute({ category, characterId });
+        setHomebrewLibraryRoute({ category, characterId, selectedKind, selectedEntryId });
         setHomebrewCharacterSheetRoute(null);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Library']);
@@ -390,6 +394,8 @@ function App() {
         <HomebrewLibraryViewer
           category={homebrewLibraryRoute.category}
           characterId={homebrewLibraryRoute.characterId}
+          selectedKind={homebrewLibraryRoute.selectedKind}
+          selectedEntryId={homebrewLibraryRoute.selectedEntryId}
           onBack={() => window.history.back()}
         />
       ) : homebrewCharacterSheetRoute ? (

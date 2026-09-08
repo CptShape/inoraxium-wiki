@@ -19,6 +19,8 @@ export interface CharacterBar {
   resetValue?: string;
   resetTrigger?: 'short-rest' | 'long-rest' | 'turn-end' | 'battle-end';
   color?: string;
+  overflowColor?: string;
+  useDefaultOverflowColor?: boolean;
   favorite?: boolean;
 }
 
@@ -192,6 +194,7 @@ export interface StatusEffect {
   effectType?: 'attribute' | 'status' | 'bar-update';
   targetId: string;
   value: string;
+  canOverflow?: boolean;
   active?: boolean;
   useTargetPicker?: boolean;
   targetLabel?: string;
@@ -217,6 +220,7 @@ export interface CharacterScriptBarUpdateEntry {
   id: string;
   targetId: string;
   value: string;
+  canOverflow?: boolean;
   lastMatched?: boolean;
   lastTriggeredNonce?: number;
 }

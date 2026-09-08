@@ -301,6 +301,7 @@ const applyScriptTrigger = (
       }));
       const normalizedBarUpdates = (condition.barUpdates || []).map(entry => ({
         ...entry,
+        canOverflow: entry.canOverflow ?? false,
         lastMatched: entry.lastMatched ?? false,
         lastTriggeredNonce: entry.lastTriggeredNonce,
       }));
@@ -421,7 +422,8 @@ const applyScriptTrigger = (
         ), 0);
         const max = getCharacterBarMode(bar) === 'resource' ? 0 : evalCharacterFormula(bar.maxValue || '0', context);
         const unclampedNext = current + delta;
-        const nextCurrent = getCharacterBarMode(bar) === 'resource' || !Number.isFinite(max) || max <= 0
+        const canOverflow = updates.some(({ entry }) => entry.canOverflow ?? false);
+        const nextCurrent = getCharacterBarMode(bar) === 'resource' || canOverflow || !Number.isFinite(max) || max <= 0
           ? unclampedNext
           : Math.min(unclampedNext, max);
         return {

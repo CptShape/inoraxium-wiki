@@ -14,7 +14,7 @@ import {
 } from '../types/character';
 import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
-import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula } from '../lib/characterContext';
+import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
 
@@ -23,6 +23,8 @@ export type HomebrewLibraryCategory = 'general-items' | 'inventory' | 'statuses'
 interface HomebrewLibraryViewerProps {
   category: HomebrewLibraryCategory;
   characterId: string;
+  selectedKind?: string;
+  selectedEntryId?: string;
   onBack?: () => void;
 }
 
@@ -45,6 +47,9 @@ interface RollResult {
   total: number;
   timestamp: number;
   description?: string;
+  outcome?: 'success' | 'failure';
+  dc?: number;
+  rollTotal?: number;
 }
 
 interface DiceRoll {
@@ -314,6 +319,7 @@ const renderActionBlock = (
   canApplyStatuses: boolean,
   onRollMacro: (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => void,
   onApplyStatus: (effect: StatusEffect) => void,
+  onEditActionUsage?: (action: CharacterAction) => void,
 ) => (
   <div key={action.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
     <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -326,8 +332,18 @@ const renderActionBlock = (
         </span>
       )}
       {(action.usageRemaining || action.maxUsage) && (
-        <span className="rounded-full border border-stone-700/15 bg-stone-100/75 px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-stone-700">
+        <button
+          type="button"
+          onClick={() => onEditActionUsage?.(action)}
+          className="rounded-full border border-stone-700/15 bg-stone-100/75 px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-stone-700 transition hover:border-cyan-700/30 hover:bg-cyan-100/60"
+          title="Edit remaining uses"
+        >
           Uses: {action.usageRemaining || '0'} / {action.maxUsage || '—'}
+        </button>
+      )}
+      {action.replenishTrigger && (
+        <span className="rounded-full border border-emerald-900/15 bg-emerald-100/60 px-2.5 py-1 text-xs uppercase tracking-[0.18em] text-emerald-900">
+          Replenish: {action.replenishTrigger}{action.replenishAmount ? ` +${action.replenishAmount}` : ''}
         </span>
       )}
     </div>
@@ -362,6 +378,8 @@ const renderActionBlock = (
 export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   category,
   characterId,
+  selectedKind,
+  selectedEntryId,
   onBack,
 }) => {
   const [userId, setUserId] = useState<string | null>(authProvider.getUid());
@@ -377,6 +395,15 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
   const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
   const [localInputError, setLocalInputError] = useState('');
+  const [formulaEditRequest, setFormulaEditRequest] = useState<{
+    title: string;
+    description?: string;
+    value: string;
+    placeholder?: string;
+    resolve: (value: string | null) => void;
+  } | null>(null);
+  const [formulaEditDraft, setFormulaEditDraft] = useState('');
+  const [formulaEditError, setFormulaEditError] = useState('');
   const rollPopupTimeoutRef = useRef<number | null>(null);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
@@ -549,6 +576,21 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     });
   }, [visibleEntries]);
 
+  useEffect(() => {
+    if (!selectedKind || !selectedEntryId || entries.length === 0) return;
+    const entry = entries.find((item) => item.kind === selectedKind && item.entry.id === selectedEntryId);
+    if (!entry) return;
+    setSelectedEntryKey(`${entry.kind}:${entry.entry.id}`);
+    if (entry.kind === 'general-item') {
+      setActiveFilterId('general-items');
+    } else if (entry.folderId) {
+      setActiveFilterId(`folder:${entry.folderId}`);
+    } else {
+      setActiveFilterId('unfoldered');
+    }
+    setSearchTerm('');
+  }, [entries, selectedEntryId, selectedKind]);
+
   const selectedEntry = visibleEntries.find((entry) => `${entry.kind}:${entry.entry.id}` === selectedEntryKey) || null;
   const canControlCharacter = !!character && (
     !character.userId
@@ -641,7 +683,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       macroName: macro.name || 'Roll',
       formula: macro.formula || '',
       steps,
-      total: evalCharacterFormula(resolvedParts.join(' '), {}, {}),
+      ...evalCharacterRollFormula(resolvedParts.join(' ')),
       timestamp: Date.now(),
     };
   }, []);
@@ -709,6 +751,86 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     }
     localInputRequest.resolve(values);
   };
+
+  const requestFormulaEdit = useCallback((
+    title: string,
+    value: string,
+    description?: string,
+    placeholder = 'Formula or value',
+  ): Promise<string | null> => (
+    new Promise((resolve) => {
+      setFormulaEditDraft(value);
+      setFormulaEditError('');
+      setFormulaEditRequest({
+        title,
+        description,
+        value,
+        placeholder,
+        resolve: (nextValue) => {
+          setFormulaEditRequest(null);
+          setFormulaEditError('');
+          resolve(nextValue);
+        },
+      });
+    })
+  ), []);
+
+  const updateSelectedEntry = useCallback(async (
+    updater: (
+      entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
+    ) => CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
+  ) => {
+    if (!character || !selectedEntry) return;
+
+    const replaceEntry = <T extends { id: string }>(items: T[] | undefined) => (
+      (items || []).map(item => (item.id === selectedEntry.entry.id ? updater(item as any) as T : item))
+    );
+
+    const nextCharacter: CharacterData =
+      selectedEntry.kind === 'general-item'
+        ? { ...character, generalItems: replaceEntry(character.generalItems) }
+        : selectedEntry.kind === 'inventory-item'
+          ? { ...character, inventory: replaceEntry(character.inventory) }
+          : selectedEntry.kind === 'spell'
+            ? { ...character, spells: replaceEntry(character.spells) }
+            : { ...character, statuses: replaceEntry(character.statuses) };
+
+    setCharacter(nextCharacter);
+    const result = await saveCharacter(nextCharacter);
+    setActionMessage(result.localSaved || result.remoteSaved ? 'Updated.' : 'Update could not be saved.');
+  }, [character, selectedEntry]);
+
+  const editLocalVariableValue = useCallback(async (variable: CharacterLocalVariable) => {
+    const nextValue = await requestFormulaEdit(
+      variable.description || variable.id,
+      variable.value || '',
+      `Edit @@${variable.id}. The current formula/value is shown below.`,
+      'Formula or value',
+    );
+    if (nextValue === null) return;
+    await updateSelectedEntry((entry) => ({
+      ...entry,
+      localVariables: (entry.localVariables || []).map(item => (
+        item.id === variable.id ? { ...item, value: nextValue } : item
+      )),
+    }));
+  }, [requestFormulaEdit, updateSelectedEntry]);
+
+  const editActionUsage = useCallback(async (action: CharacterAction) => {
+    const nextValue = await requestFormulaEdit(
+      `${action.name || 'Action'} Uses`,
+      action.usageRemaining || '',
+      `Edit remaining uses. Max: ${action.maxUsage || 'none'}${action.replenishTrigger ? `, replenish: ${action.replenishTrigger}${action.replenishAmount ? ` +${action.replenishAmount}` : ''}` : ''}.`,
+      'Remaining uses',
+    );
+    if (nextValue === null) return;
+    await updateSelectedEntry((entry) => ({
+      ...entry,
+      actions: (entry.actions || []).map(item => (
+        item.id === action.id ? { ...item, usageRemaining: nextValue } : item
+      )),
+    }));
+  }, [requestFormulaEdit, updateSelectedEntry]);
 
   const renderCard = (entry: LibraryEntry) => {
     const thumbUrl = getEntryThumbUrl(entry.entry);
@@ -834,17 +956,56 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <div className="space-y-2 text-[15px] leading-7 text-stone-800">
             <div><span className="font-bold text-amber-950">Folder:</span> {selectedEntry.folderLabel}</div>
             {'quantity' in entry && <div><span className="font-bold text-amber-950">Quantity:</span> {entry.quantity}</div>}
+            {'status' in entry && entry.status && <div><span className="font-bold text-amber-950">Status:</span> {entry.status}</div>}
             {'rarity' in entry && entry.rarity && <div><span className="font-bold text-amber-950">Rarity:</span> {entry.rarity}</div>}
             {'equipped' in entry && <div><span className="font-bold text-amber-950">Equipped:</span> {entry.equipped ? 'Yes' : 'No'}</div>}
             {'level' in entry && <div><span className="font-bold text-amber-950">Level:</span> {entry.level || '—'}</div>}
+            {'magicSchool' in entry && <div><span className="font-bold text-amber-950">Magic School:</span> {entry.magicSchool || '—'}</div>}
             {'resourceCost' in entry && <div><span className="font-bold text-amber-950">Cost:</span> {entry.resourceCost || '—'}</div>}
             {'usageRemaining' in entry && (
               <div><span className="font-bold text-amber-950">Usage:</span> {entry.usageRemaining || '—'}{'totalUsage' in entry ? ` / ${entry.totalUsage || '—'}` : ''}</div>
             )}
+            {'replenishTrigger' in entry && entry.replenishTrigger && <div><span className="font-bold text-amber-950">Replenish On:</span> {entry.replenishTrigger}</div>}
+            {'replenishAmount' in entry && entry.replenishAmount && <div><span className="font-bold text-amber-950">Replenish Value:</span> {entry.replenishAmount}</div>}
             {'duration' in entry && <div><span className="font-bold text-amber-950">Duration:</span> {formatStatusDuration(entry)}</div>}
+            {'maxDuration' in entry && entry.maxDuration && <div><span className="font-bold text-amber-950">Max Duration:</span> {entry.maxDuration}</div>}
+            {'durationEndBehavior' in entry && entry.durationEndBehavior && <div><span className="font-bold text-amber-950">When Duration Ends:</span> {entry.durationEndBehavior}</div>}
             {'active' in entry && <div><span className="font-bold text-amber-950">Active:</span> {entry.active === false ? 'No' : 'Yes'}</div>}
+            {'hidden' in entry && <div><span className="font-bold text-amber-950">Hidden:</span> {entry.hidden ? 'Yes' : 'No'}</div>}
           </div>
         </section>
+
+        {'localVariables' in entry && (entry.localVariables || []).length > 0 && (
+          <section className="mt-5">
+            <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Local Variables</h3>
+            <div className="space-y-2">
+              {(entry.localVariables || []).map((variable) => (
+                <button
+                  key={variable.id}
+                  type="button"
+                  onClick={() => void editLocalVariableValue(variable)}
+                  disabled={!canControlCharacter}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_minmax(0,1fr)] gap-3 rounded-xl border border-cyan-900/15 bg-cyan-50/45 p-3 text-left transition hover:border-cyan-700/30 hover:bg-cyan-100/55 disabled:cursor-not-allowed disabled:opacity-70"
+                  title={canControlCharacter ? 'Edit local value' : 'Control access is required'}
+                >
+                  <div className="min-w-0">
+                    <div className="truncate text-sm font-bold text-cyan-950">{variable.description || variable.id}</div>
+                    <div className="truncate font-mono text-xs text-stone-600">@@{variable.id}</div>
+                    <div className="mt-1 text-[11px] uppercase tracking-[0.16em] text-stone-500">
+                      {variable.kind || 'variable'}
+                      {variable.replenishTrigger ? ` / replenish ${variable.replenishTrigger}` : ''}
+                      {variable.replenishMode ? ` / ${variable.replenishMode}` : ''}
+                      {variable.replenishAmount ? ` ${variable.replenishAmount}` : ''}
+                    </div>
+                  </div>
+                  <code className="min-w-0 self-center truncate rounded-lg border border-cyan-900/10 bg-white/55 px-3 py-2 text-sm text-emerald-800">
+                    {variable.value || '0'}
+                  </code>
+                </button>
+              ))}
+            </div>
+          </section>
+        )}
 
         {'actions' in entry && (entry.actions || []).length > 0 && (
           <section className="mt-5">
@@ -856,6 +1017,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 canControlCharacter,
                 rollMacro,
                 (effect) => void applyStatusEffect(effect),
+                editActionUsage,
               ))}
             </div>
           </section>
@@ -915,14 +1077,19 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 {rollPopupResult.macroName || 'Roll Result'}
               </span>
             </div>
-            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-              {rollPopupResult.total}
+            <span className={`shrink-0 text-3xl font-black ${rollPopupResult.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.outcome ? (rollPopupResult.outcome === 'success' ? 'Success' : 'Failure') : rollPopupResult.total}
             </span>
           </div>
           <div className="space-y-2 px-4 py-3">
             <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
               {rollPopupResult.formula}
             </code>
+            {rollPopupResult.outcome && (
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-300">
+                Roll {rollPopupResult.rollTotal} vs DC {rollPopupResult.dc}
+              </p>
+            )}
             {rollPopupResult.description && (
               <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
             )}
@@ -990,6 +1157,54 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 style={{ fontFamily: "'Cinzel', serif" }}
               >
                 Roll
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {formulaEditRequest && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+            <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+              {formulaEditRequest.title}
+            </h3>
+            {formulaEditRequest.description && (
+              <p className="mt-2 text-sm leading-relaxed text-stone-300">{formulaEditRequest.description}</p>
+            )}
+            <textarea
+              autoFocus
+              value={formulaEditDraft}
+              onChange={(event) => {
+                setFormulaEditDraft(event.target.value);
+                setFormulaEditError('');
+              }}
+              onKeyDown={(event) => {
+                if (event.key === 'Escape') formulaEditRequest.resolve(null);
+                if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) {
+                  formulaEditRequest.resolve(formulaEditDraft.trim());
+                }
+              }}
+              className="mt-4 min-h-28 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 focus:border-cyan-500/60 focus:outline-none"
+              placeholder={formulaEditRequest.placeholder || 'Formula or value'}
+            />
+            {formulaEditError && (
+              <div className="mt-4 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                {formulaEditError}
+              </div>
+            )}
+            <div className="mt-5 flex justify-end gap-2">
+              <button
+                onClick={() => formulaEditRequest.resolve(null)}
+                className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => formulaEditRequest.resolve(formulaEditDraft.trim())}
+                className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+                style={{ fontFamily: "'Cinzel', serif" }}
+              >
+                OK
               </button>
             </div>
           </div>

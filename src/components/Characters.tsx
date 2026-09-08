@@ -3,6 +3,7 @@ import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, 
 import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
+import { evalCharacterRollFormula } from '../lib/characterContext';
 
 const splitFormulaArgs = (argsString: string): string[] => {
   const args: string[] = [];
@@ -124,6 +125,9 @@ interface RollResult {
   total: number;
   timestamp: number;
   description?: string;
+  outcome?: 'success' | 'failure';
+  dc?: number;
+  rollTotal?: number;
 }
 
 interface CharacterDiceState {
@@ -217,6 +221,14 @@ const getScriptPlaceholderValue = (placeholderId: string) => `${SCRIPT_PLACEHOLD
 const isScriptPlaceholderValue = (value: string | undefined) => Boolean(value?.startsWith(SCRIPT_PLACEHOLDER_PREFIX));
 
 const getBarMode = (bar: Partial<CharacterBar>): NonNullable<CharacterBar['mode']> => bar.mode || 'default';
+
+const normalizeResistanceDefaults = (items?: CustomAttribute[]): CustomAttribute[] => (
+  (items || []).map(attr => (
+    String(attr.value ?? '').trim() === '10'
+      ? { ...attr, value: '0' }
+      : attr
+  ))
+);
 
 const getStatusDurationType = (status: Partial<CharacterStatus>): CharacterStatusDurationType => (
   status.durationType || 'custom'
@@ -597,20 +609,23 @@ function executeCharacterMacro(
     resolvedParts.push(trimmed);
   }
 
-  let total = 0;
   const resolvedFormula = resolvedParts.join(' ');
+  let evaluated = evalCharacterRollFormula(resolvedFormula);
   try {
-    const withMathEvaluated = evaluateMathFunctions(resolvedFormula);
-    const sanitized = withMathEvaluated.replace(/[^0-9+\-*/().\s]/g, '');
-    const fn = new Function(`"use strict"; return (${sanitized});`);
-    total = fn();
-    if (typeof total !== 'number' || !isFinite(total)) total = 0;
-    total = Math.round(total * 100) / 100;
+    if (!evaluated.outcome) {
+      const withMathEvaluated = evaluateMathFunctions(resolvedFormula);
+      const sanitized = withMathEvaluated.replace(/[^0-9+\-*/().\s]/g, '');
+      const fn = new Function(`"use strict"; return (${sanitized});`);
+      let total = fn();
+      if (typeof total !== 'number' || !isFinite(total)) total = 0;
+      total = Math.round(total * 100) / 100;
+      evaluated = { total };
+    }
   } catch {
-    total = steps.reduce((sum, step) => sum + step.value, 0);
+    evaluated = { total: steps.reduce((sum, step) => sum + step.value, 0) };
   }
 
-  return { macroName: macro.name, formula: macro.formula, steps, total, timestamp: Date.now() };
+  return { macroName: macro.name, formula: macro.formula, steps, ...evaluated, timestamp: Date.now() };
 }
 
 async function sendToDiscord(webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> {
@@ -965,7 +980,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setSecondaryAttrs(selectedCharacter.secondaryAttributes || []);
       setSkills(selectedCharacter.skills || []);
       setOtherAttrs(selectedCharacter.otherAttributes || []);
-      setResistances(selectedCharacter.resistances || []);
+      setResistances(normalizeResistanceDefaults(selectedCharacter.resistances));
       setBars(selectedCharacter.bars || []);
       setSheetDiceMacros(selectedCharacter.diceMacros || DEFAULT_CHARACTER_DICE_STATE.macros);
       setDiceMacroFolders(selectedCharacter.diceMacroFolders || []);
@@ -1184,7 +1199,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setSecondaryAttrs(Array.isArray(parsed.secondaryAttributes) ? parsed.secondaryAttributes : []);
     setSkills(Array.isArray(parsed.skills) ? parsed.skills : []);
     setOtherAttrs(Array.isArray(parsed.otherAttributes) ? parsed.otherAttributes : []);
-    setResistances(Array.isArray(parsed.resistances) ? parsed.resistances : []);
+    setResistances(normalizeResistanceDefaults(Array.isArray(parsed.resistances) ? parsed.resistances : []));
     setBars(Array.isArray(parsed.bars) ? parsed.bars : []);
     setDisplayStats(Array.isArray(parsed.displayStats) ? parsed.displayStats : []);
     setDisplaySlotStates(parsed.displaySlotStates || {});
@@ -1601,33 +1616,6 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     });
     return ids;
   };
-
-  useEffect(() => {
-    if (!selectedCharacter || bars.length === 0) return;
-
-    const context = getCharacterContext();
-    let changed = false;
-    const nextBars = bars.map((bar) => {
-      if (!bar.id || getBarMode(bar) !== 'default') return bar;
-
-      const current = context[`${bar.id}_current`];
-      const max = context[`${bar.id}_max`];
-      if (!Number.isFinite(current) || !Number.isFinite(max)) return bar;
-
-      const clampedMax = Math.max(0, max);
-      if (current <= clampedMax) return bar;
-
-      changed = true;
-      return {
-        ...bar,
-        currentValue: `${Math.round(clampedMax * 100) / 100}`,
-      };
-    });
-
-    if (changed) {
-      setBars(nextBars);
-    }
-  }, [selectedCharacter, bars, mainAttrs, secondaryAttrs, skills, otherAttrs, resistances, charStatuses, charGeneralItems, charInventory, charSpells, modFormula]);
 
   const getProfileLabel = (uid: string) => {
     const profile = userProfiles.find((item) => item.uid === uid);
@@ -3397,6 +3385,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' ? effect.effectType : 'attribute',
     targetId: typeof effect.targetId === 'string' ? effect.targetId : '',
     value: typeof effect.value === 'string' ? effect.value : '0',
+    canOverflow: effect.canOverflow ?? false,
     active: effect.active ?? true,
     useTargetPicker: effect.useTargetPicker ?? false,
     targetLabel: typeof effect.targetLabel === 'string' ? effect.targetLabel : undefined,
@@ -3537,6 +3526,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           ...entry,
           targetId: replaceScriptPlaceholderValue(entry.targetId, replacements) || entry.targetId,
           value: replaceScriptPlaceholderValue(entry.value, replacements, 'formula') || entry.value,
+          canOverflow: entry.canOverflow ?? false,
         })),
       })),
     };
@@ -3775,6 +3765,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     effectType: 'bar-update',
     targetId: bars[0]?.id || '',
     value: '0',
+    canOverflow: false,
     active: true,
   });
 
@@ -4156,7 +4147,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       const current = evalCharFormula(bar.currentValue || '0', context);
       const unclampedNext = current + delta;
       const max = getBarMode(bar) === 'resource' ? 0 : evalCharFormula(bar.maxValue || '0', context);
-      const nextCurrent = getBarMode(bar) === 'resource' || !Number.isFinite(max) || max <= 0
+      const shouldClamp = !(effect.canOverflow ?? false);
+      const nextCurrent = getBarMode(bar) === 'resource' || shouldClamp === false || !Number.isFinite(max) || max <= 0
         ? unclampedNext
         : Math.min(unclampedNext, max);
       return {
@@ -4251,6 +4243,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         id: `script_bar_${uid()}`,
         targetId: typeof entry.targetId === 'string' ? entry.targetId : '',
         value: typeof entry.value === 'string' ? entry.value : '0',
+        canOverflow: entry.canOverflow ?? false,
         lastMatched: false,
       }))
       : [],
@@ -4638,11 +4631,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             nextStatuses.some(status => status.id === statusId)
           )),
         }));
-        const normalizedBarUpdates = (condition.barUpdates || []).map(entry => ({
-          ...entry,
-          lastMatched: entry.lastMatched ?? false,
-          lastTriggeredNonce: entry.lastTriggeredNonce,
-        }));
+      const normalizedBarUpdates = (condition.barUpdates || []).map(entry => ({
+        ...entry,
+        canOverflow: entry.canOverflow ?? false,
+        lastMatched: entry.lastMatched ?? false,
+        lastTriggeredNonce: entry.lastTriggeredNonce,
+      }));
         let entryChanged = JSON.stringify(normalizedEntries) !== JSON.stringify(condition.statusEntries || []);
         let barUpdatesChanged = JSON.stringify(normalizedBarUpdates) !== JSON.stringify(condition.barUpdates || []);
 
@@ -4761,7 +4755,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         const delta = updates.reduce((sum, { entry, localContext }) => sum + evalCharFormula(entry.value || '0', context, localContext), 0);
         const max = getBarMode(bar) === 'resource' ? 0 : evalCharFormula(bar.maxValue || '0', context);
         const unclampedNext = current + delta;
-        const nextCurrent = getBarMode(bar) === 'resource' || !Number.isFinite(max) || max <= 0
+        const canOverflow = updates.some(({ entry }) => entry.canOverflow ?? false);
+        const nextCurrent = getBarMode(bar) === 'resource' || canOverflow || !Number.isFinite(max) || max <= 0
           ? unclampedNext
           : Math.min(unclampedNext, max);
         return {
@@ -5654,6 +5649,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                       formula: getQuickRollFormula(true),
                       steps: combinedSteps,
                       total: finalResultObj.total,
+                      outcome: finalResultObj.outcome,
+                      dc: finalResultObj.dc,
+                      rollTotal: finalResultObj.rollTotal,
                       timestamp: Date.now(),
                       description: quickDescription.trim() || undefined,
                     };
@@ -5803,7 +5801,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                         <span className="text-amber-300 font-bold" style={{ fontFamily: "'Cinzel', serif" }}>{result.macroName}</span>
                         <code className="text-stone-400 text-xs bg-stone-800 px-1.5 py-0.5 rounded">{result.formula}</code>
                       </div>
-                      <span className="text-2xl font-bold text-amber-400" style={{ fontFamily: "'Cinzel', serif" }}>{result.total}</span>
+                      <span className={`text-2xl font-bold ${result.outcome === 'failure' ? 'text-rose-300' : 'text-amber-400'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+                        {result.outcome ? (result.outcome === 'success' ? 'Success' : 'Failure') : result.total}
+                      </span>
                     </div>
                     <div className="px-4 py-2">
                       {result.description && (
@@ -5821,8 +5821,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                         ))}
                       </div>
                       <div className="mt-2 pt-2 border-t border-amber-800/20 flex items-center justify-between">
-                        <span className="text-amber-400 text-sm font-bold">Total</span>
-                        <span className="text-amber-300 text-lg font-bold font-mono">{result.total}</span>
+                        <span className="text-amber-400 text-sm font-bold">{result.outcome ? `Roll ${result.rollTotal} vs DC ${result.dc}` : 'Total'}</span>
+                        <span className={`text-lg font-bold font-mono ${result.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`}>
+                          {result.outcome ? (result.outcome === 'success' ? 'Success' : 'Failure') : result.total}
+                        </span>
                       </div>
                     </div>
                   </div>
@@ -6117,7 +6119,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       secondaryAttributes: (selectedCharacter.secondaryAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
       skills: (selectedCharacter.skills || []).map((skill) => ({ ...skill, valueOptions: skill.valueOptions ? skill.valueOptions.map((option) => ({ ...option })) : undefined })),
       otherAttributes: (selectedCharacter.otherAttributes || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
-      resistances: (selectedCharacter.resistances || []).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
+      resistances: normalizeResistanceDefaults(selectedCharacter.resistances).map((attr) => ({ ...attr, valueOptions: attr.valueOptions ? attr.valueOptions.map((option) => ({ ...option })) : undefined })),
       bars: (selectedCharacter.bars || []).map((bar) => ({ ...bar })),
       diceMacros: (selectedCharacter.diceMacros || []).map((macro) => cloneDiceMacro(macro, diceMacroFolderClone.idMap)),
       diceMacroFolders: diceMacroFolderClone.folders,
@@ -7484,7 +7486,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
         if (effect.effectType === 'bar-update') {
           return (
-            <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-center">
+            <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.75fr)_auto] gap-2 items-center">
               <button
                 onClick={() => applyBarUpdateEffect(effect, localVariables)}
                 disabled={!canEdit || !effect.targetId}
@@ -7512,6 +7514,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 placeholder="Amount (e.g. 100)"
                 className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-200 font-mono focus:outline-none disabled:opacity-60"
               />
+              <select
+                value={(effect.canOverflow ?? false) ? 'can' : 'cant'}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, canOverflow: e.target.value === 'can' }))}
+                disabled={!canEdit}
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-cyan-100 focus:outline-none disabled:opacity-60"
+              >
+                <option value="cant">Can't Overflow</option>
+                <option value="can">Can Overflow</option>
+              </select>
               {canEdit ? (
                 <button onClick={() => onRemove(effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
                   <Trash2 size={14} />
@@ -8267,14 +8278,19 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   {rollPopupResult.macroName || 'Roll Result'}
                 </span>
               </div>
-              <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-                {rollPopupResult.total}
+              <span className={`shrink-0 text-3xl font-black ${rollPopupResult.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+                {rollPopupResult.outcome ? (rollPopupResult.outcome === 'success' ? 'Success' : 'Failure') : rollPopupResult.total}
               </span>
             </div>
             <div className="space-y-2 px-4 py-3">
               <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
                 {rollPopupResult.formula}
               </code>
+              {rollPopupResult.outcome && (
+                <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-300">
+                  Roll {rollPopupResult.rollTotal} vs DC {rollPopupResult.dc}
+                </p>
+              )}
               {rollPopupResult.description && (
                 <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
               )}
@@ -10329,7 +10345,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                         ) : (
                                           <div className="space-y-2">
                                             {(condition.barUpdates || []).map((barUpdate) => (
-                                              <div key={barUpdate.id} className="grid grid-cols-1 gap-2 rounded-lg border border-sky-900/25 bg-stone-950/45 p-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_auto]">
+                                              <div key={barUpdate.id} className="grid grid-cols-1 gap-2 rounded-lg border border-sky-900/25 bg-stone-950/45 p-2 md:grid-cols-[minmax(0,1fr)_minmax(0,1fr)_minmax(0,0.8fr)_auto]">
                                                 {renderActionField('Bar', (
                                                   <select
                                                     value={barUpdate.targetId}
@@ -10351,6 +10367,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                                     placeholder="Amount or formula"
                                                     className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-sky-200 font-mono focus:outline-none disabled:opacity-60"
                                                   />
+                                                ), 'min-w-0')}
+                                                {renderActionField('Overflow', (
+                                                  <select
+                                                    value={(barUpdate.canOverflow ?? false) ? 'can' : 'cant'}
+                                                    onChange={(e) => updateScriptConditionBarUpdate(script.id, condition.id, barUpdate.id, current => ({ ...current, canOverflow: e.target.value === 'can' }))}
+                                                    disabled={!isCharacterOwner}
+                                                    className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-sky-100 focus:outline-none disabled:opacity-60"
+                                                  >
+                                                    <option value="cant">Can't Overflow</option>
+                                                    <option value="can">Can Overflow</option>
+                                                  </select>
                                                 ), 'min-w-0')}
                                                 {isCharacterOwner && (
                                                   <button
@@ -10635,7 +10662,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                         ))}
                       </div>
                       <button
-                        onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', mode: 'default', resetValue: '0', resetTrigger: 'short-rest', color: '#f59e0b' }])}
+                        onClick={() => setBars([...bars, { id: `bar_${Date.now().toString(36)}`, name: 'New Bar', currentValue: '0', maxValue: '100', mode: 'default', resetValue: '0', resetTrigger: 'short-rest', color: '#f59e0b', overflowColor: '#f97316', useDefaultOverflowColor: true }])}
                         className="px-2 py-1 bg-amber-900/40 border border-amber-800/40 rounded text-xs text-amber-200 hover:bg-amber-900/60 cursor-pointer"
                       >
                         + Add
@@ -10658,10 +10685,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                       const rawReset = finalContext[`${bar.id}_reset`] || 0;
                       const rawCurrent = finalContext[`${bar.id}_current`] || 0;
                       const safeMax = rawMax > 0 ? rawMax : 0;
-                      const clampedCurrent = safeMax > 0 ? Math.min(Math.max(rawCurrent, 0), safeMax) : 0;
-                      const displayedCurrent = barMode === 'resource' ? rawCurrent : clampedCurrent;
+                      const displayedCurrent = rawCurrent;
                       const referenceValue = barMode === 'resource' ? rawReset : safeMax;
-                      const percent = referenceValue > 0 ? Math.min(100, Math.max(0, Math.round((displayedCurrent / referenceValue) * 100))) : 0;
+                      const calculatedPercent = referenceValue > 0 ? Math.max(0, (displayedCurrent / referenceValue) * 100) : 0;
+                      const rawPercent = barMode === 'resource' ? Math.min(100, calculatedPercent) : calculatedPercent;
+                      const percent = Math.round(rawPercent);
+                      const fillPercent = Math.min(100, rawPercent);
+                      const overflowPercent = barMode === 'resource' ? 0 : Math.max(0, Math.min(100, rawPercent - 100));
+                      const overflowColor = (bar.useDefaultOverflowColor ?? true) ? (bar.color || '#f59e0b') : (bar.overflowColor || '#f97316');
 
                       return (
                         <div id={`sheet-bar-${bar.id}`} key={idx} className="bg-amber-950/20 border border-amber-800/20 rounded-xl p-4 flex flex-col gap-3 shadow-lg">
@@ -10773,10 +10804,50 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                   </select>
                                 </div>
                               )}
+                              <div>
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-sky-300 mb-1">Bar Color</label>
+                                <input
+                                  type="color"
+                                  value={bar.color || '#f59e0b'}
+                                  onChange={(e) => {
+                                    const next = [...bars];
+                                    next[actualIndex].color = e.target.value;
+                                    setBars(next);
+                                  }}
+                                  className="h-[34px] w-full bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer"
+                                />
+                              </div>
+                              <div>
+                                <label className="block text-[11px] font-bold uppercase tracking-wider text-sky-300 mb-1">Overflow Color</label>
+                                <label className="mb-2 flex items-center gap-2 rounded border border-sky-800/25 bg-stone-950/35 px-2 py-1.5 text-xs text-sky-100">
+                                  <input
+                                    type="checkbox"
+                                    checked={bar.useDefaultOverflowColor ?? true}
+                                    onChange={(e) => {
+                                      const next = [...bars];
+                                      next[actualIndex].useDefaultOverflowColor = e.target.checked;
+                                      setBars(next);
+                                    }}
+                                  />
+                                  Use default color
+                                </label>
+                                <input
+                                  type="color"
+                                  value={bar.overflowColor || '#f97316'}
+                                  onChange={(e) => {
+                                    const next = [...bars];
+                                    next[actualIndex].overflowColor = e.target.value;
+                                    next[actualIndex].useDefaultOverflowColor = false;
+                                    setBars(next);
+                                  }}
+                                  disabled={bar.useDefaultOverflowColor ?? true}
+                                  className="h-[34px] w-full bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer"
+                                />
+                              </div>
                             </div>
                           )}
 
-                          <div className="grid grid-cols-1 sm:grid-cols-[1fr_1fr_auto] gap-3 items-end">
+                          <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 items-end">
                             <div>
                               <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">Current Value</label>
                               <input
@@ -10807,19 +10878,6 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                 className="w-full bg-stone-900/60 border border-stone-800 rounded px-2 py-1 text-sm font-mono text-amber-100 focus:outline-none"
                               />
                             </div>
-                            <div>
-                              <label className="block text-[11px] font-bold uppercase tracking-wider text-amber-500 mb-1">Color</label>
-                              <input
-                                type="color"
-                                value={bar.color || '#f59e0b'}
-                                onChange={(e) => {
-                                  const next = [...bars];
-                                  next[actualIndex].color = e.target.value;
-                                  setBars(next);
-                                }}
-                                className="h-[34px] w-14 bg-stone-900/60 border border-stone-800 rounded px-1 py-1 cursor-pointer"
-                              />
-                            </div>
                           </div>
 
                           <div className="space-y-2">
@@ -10831,10 +10889,19 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               <div
                                 className="absolute inset-y-0 left-0 transition-all"
                                 style={{
-                                  width: `${percent}%`,
+                                  width: `${fillPercent}%`,
                                   background: `linear-gradient(to right, ${bar.color || '#b45309'}, ${bar.color || '#f59e0b'})`,
                                 }}
                               />
+                              {overflowPercent > 0 && (
+                                <div
+                                  className="absolute inset-y-0 right-0 transition-all"
+                                  style={{
+                                    width: `${overflowPercent}%`,
+                                    background: `linear-gradient(to right, ${overflowColor}dd, ${overflowColor})`,
+                                  }}
+                                />
+                              )}
                               <div className="absolute inset-0 flex items-center justify-center text-xs font-bold font-mono text-amber-100">
                                 {barMode === 'resource' ? displayedCurrent : `%${percent}`}
                               </div>
@@ -13095,14 +13162,19 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 {rollPopupResult.macroName || 'Roll Result'}
               </span>
             </div>
-            <span className="shrink-0 text-3xl font-black text-amber-300" style={{ fontFamily: "'Cinzel', serif" }}>
-              {rollPopupResult.total}
+            <span className={`shrink-0 text-3xl font-black ${rollPopupResult.outcome === 'failure' ? 'text-rose-300' : 'text-amber-300'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+              {rollPopupResult.outcome ? (rollPopupResult.outcome === 'success' ? 'Success' : 'Failure') : rollPopupResult.total}
             </span>
           </div>
           <div className="space-y-2 px-4 py-3">
             <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
               {rollPopupResult.formula}
             </code>
+            {rollPopupResult.outcome && (
+              <p className="text-xs font-bold uppercase tracking-[0.18em] text-stone-300">
+                Roll {rollPopupResult.rollTotal} vs DC {rollPopupResult.dc}
+              </p>
+            )}
             {rollPopupResult.description && (
               <p className="line-clamp-2 text-sm italic text-stone-300">{rollPopupResult.description}</p>
             )}

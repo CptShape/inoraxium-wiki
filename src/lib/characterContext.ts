@@ -121,6 +121,32 @@ export const evalCharacterFormula = (
   }
 };
 
+export interface CharacterFormulaResult {
+  total: number;
+  outcome?: 'success' | 'failure';
+  dc?: number;
+  rollTotal?: number;
+}
+
+export const evalCharacterRollFormula = (formula: string): CharacterFormulaResult => {
+  const dcMatch = findFormulaFunctionCall(formula.trim(), ['dc']);
+  if (dcMatch && dcMatch.start === 0 && dcMatch.end === formula.trim().length) {
+    const args = splitFormulaArgs(dcMatch.argsString);
+    if (args.length === 2) {
+      const dc = evalCharacterFormula(args[0], {});
+      const rollTotal = evalCharacterFormula(args[1], {});
+      return {
+        total: rollTotal,
+        dc,
+        rollTotal,
+        outcome: rollTotal >= dc ? 'success' : 'failure',
+      };
+    }
+  }
+
+  return { total: evalCharacterFormula(formula, {}) };
+};
+
 export const normalizeCharacterLocalVariables = (variables?: CharacterLocalVariable[]): CharacterLocalVariable[] => (
   Array.isArray(variables)
     ? variables.map(variable => ({
