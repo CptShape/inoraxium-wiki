@@ -13,6 +13,11 @@ const DEFAULT_ATTRIBUTE_CALCULATION_TYPE: AttributeCalculationType = 'sum';
 
 export const getCharacterBarMode = (bar: Partial<CharacterBar>): NonNullable<CharacterBar['mode']> => bar.mode || 'default';
 
+const formatSyncAttributeOutput = (attr: CustomAttribute | SkillAttribute, value: number): string => {
+  const option = (attr.valueOptions || []).find(item => Number(item.value) === value);
+  return option?.label || String(value);
+};
+
 const splitFormulaArgs = (argsString: string): string[] => {
   const args: string[] = [];
   let depth = 0;
@@ -510,4 +515,55 @@ export const buildCharacterFormulaContext = (character: CharacterData | null | u
   }
 
   return context;
+};
+
+export const buildCharacterSheetSyncValues = (
+  character: CharacterData | null | undefined,
+  context: Record<string, number> = buildCharacterFormulaContext(character),
+): Record<string, string | number> => {
+  if (!character) return {};
+
+  const values: Record<string, string | number> = {};
+  const mainAttrs = character.mainAttributes || [];
+  const secondaryAttrs = character.secondaryAttributes || [];
+  const skills = character.skills || [];
+  const otherAttrs = character.otherAttributes || [];
+  const resistances = character.resistances || [];
+  const bars = character.bars || [];
+
+  [...mainAttrs, ...secondaryAttrs, ...skills, ...otherAttrs, ...resistances].forEach((attr) => {
+    if (!attr.id) return;
+    const rawValue = context[attr.id];
+    if (Number.isFinite(rawValue)) {
+      values[attr.id] = rawValue;
+      if ((attr.valueOptions || []).length > 0) {
+        values[`${attr.id}_text`] = formatSyncAttributeOutput(attr, rawValue);
+      }
+    }
+  });
+
+  mainAttrs.forEach((attr) => {
+    if (!attr.id) return;
+    const rawModifier = context[`${attr.id}_mod`];
+    if (Number.isFinite(rawModifier)) {
+      values[`${attr.id}_mod`] = rawModifier;
+    }
+  });
+
+  bars.forEach((bar) => {
+    if (!bar.id) return;
+    const currentValue = context[`${bar.id}_current`];
+    const maxValue = context[`${bar.id}_max`];
+    const resetValue = context[`${bar.id}_reset`];
+    if (Number.isFinite(currentValue)) {
+      values[`${bar.id}_current`] = currentValue;
+    }
+    if (getCharacterBarMode(bar) === 'resource' && Number.isFinite(resetValue)) {
+      values[`${bar.id}_reset`] = resetValue;
+    } else if (Number.isFinite(maxValue)) {
+      values[`${bar.id}_max`] = maxValue;
+    }
+  });
+
+  return values;
 };
