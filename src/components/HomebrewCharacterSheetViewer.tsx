@@ -6,10 +6,14 @@ import { authProvider } from '../lib/auth';
 import { HomebrewLibraryCategory } from './HomebrewLibraryViewer';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
-import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula, getCharacterBarMode } from '../lib/characterContext';
+import { buildCharacterFormulaContext, buildCharacterSheetSyncValues, buildLocalVariableContext, evalCharacterFormula, getCharacterBarMode } from '../lib/characterContext';
+import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
+import { HomebrewPageNav } from './HomebrewPageNav';
+import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
 
 interface HomebrewCharacterSheetViewerProps {
   characterId: string;
+  page?: 'overview' | 'attributes';
   onBack?: () => void;
 }
 
@@ -486,11 +490,12 @@ const sendToDiscord = async (webhookUrl: string, characterName: string, result: 
 
 export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewerProps> = ({
   characterId,
+  page = 'overview',
   onBack,
 }) => {
   const [userId, setUserId] = useState<string | null>(authProvider.getUid());
-  const [character, setCharacter] = useState<CharacterData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [character, setCharacterState] = useState<CharacterData | null>(() => getCachedHomebrewCharacter(characterId));
+  const [isLoading, setIsLoading] = useState(() => !getCachedHomebrewCharacter(characterId));
   const [error, setError] = useState<string | null>(null);
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [diceSettings, setDiceSettings] = useState<UserDiceSettings>({ macros: [], webhookUrl: '', autoSend: false });
@@ -506,6 +511,11 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
   } | null>(null);
   const [barHistory, setBarHistory] = useState<BarHistoryState | null>(null);
   const rollPopupTimeoutRef = useRef<number | null>(null);
+
+  const setCharacter = useCallback((nextCharacter: CharacterData | null) => {
+    setCharacterState(nextCharacter);
+    setCachedHomebrewCharacter(nextCharacter);
+  }, []);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
 
@@ -539,7 +549,9 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
 
   useEffect(() => {
     let isMounted = true;
-    setIsLoading(true);
+    const cachedCharacter = getCachedHomebrewCharacter(characterId);
+    if (cachedCharacter) setCharacter(cachedCharacter);
+    setIsLoading(!cachedCharacter);
     setError(null);
 
     loadCharacterById(characterId, userId)
@@ -564,7 +576,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
     return () => {
       isMounted = false;
     };
-  }, [characterId, userId]);
+  }, [characterId, setCharacter, userId]);
 
   const libraryCards: Array<{
     category: HomebrewLibraryCategory;
@@ -771,7 +783,22 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
     };
     setCharacter(nextCharacter);
     const saveResult = await saveCharacter(nextCharacter);
-    setActionMessage(saveResult.localSaved || saveResult.remoteSaved ? `${bar.name || bar.id} updated.` : 'Bar update could not be saved.');
+    if (!saveResult.localSaved && !saveResult.remoteSaved) {
+      setActionMessage('Bar update could not be saved.');
+      return;
+    }
+    if (!(nextCharacter.sendToSpreadsheet ?? true)) {
+      setActionMessage(`${bar.name || bar.id} updated.`);
+      return;
+    }
+    const syncResult = await syncCharacterSheet({
+      characterId: nextCharacter.id,
+      characterName: nextCharacter.name,
+      sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+      tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+      values: buildCharacterSheetSyncValues(nextCharacter),
+    });
+    setActionMessage(syncResult.success ? `${bar.name || bar.id} updated.` : `${bar.name || bar.id} updated. Spreadsheet: ${syncResult.message}`);
   };
   const portraitUrl = character ? getCharacterPortraitUrl(character) : '';
   const splashArtUrl = character ? getCharacterSplashArtUrl(character, portraitUrl) : '';
@@ -1359,6 +1386,9 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                 {actionMessage}
               </div>
             )}
+            <HomebrewPageNav characterId={character.id} currentPage={page} />
+
+            {page === 'overview' && (
             <section className={`${sectionClass} relative overflow-hidden`}>
               <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-amber-800 via-amber-600 to-transparent" />
               <div className="grid gap-6 md:grid-cols-[140px_1fr] md:items-center">
@@ -1381,7 +1411,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                 </div>
                 <div>
                   <div className="mb-3 inline-flex rounded-full border border-amber-900/20 bg-amber-100/60 px-3 py-1 text-xs uppercase tracking-[0.24em] text-amber-950">
-                    Homebrew Character Sheet
+                    Overview
                   </div>
                   <h1 className="text-5xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
                     {character.name || 'Unnamed Character'}
@@ -1401,8 +1431,9 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                 </div>
               </div>
             </section>
+            )}
 
-            {(overviewMainAttributes.length > 0 || overviewBoxes.length > 0) && (
+            {page === 'overview' && (overviewMainAttributes.length > 0 || overviewBoxes.length > 0) && (
               <section className="overflow-hidden rounded-[2rem] border-[3px] border-amber-950/55 bg-[#d8c996] shadow-[0_28px_70px_rgba(68,38,17,0.28)]">
                 <div className="border-b-[3px] border-stone-950/55 bg-[#8d8562]/95 px-6 py-4 shadow-[0_8px_0_rgba(0,0,0,0.22)]">
                   <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1729,7 +1760,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
               </section>
             )}
 
-            <section className="grid gap-5 md:grid-cols-3">
+            {false && <section className="grid gap-5 md:grid-cols-3">
               {libraryCards.map((card) => (
                 <button
                   key={card.category}
@@ -1763,9 +1794,10 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                   <span className="transition-transform group-hover:translate-x-1">View ↓</span>
                 </div>
               </button>
-            </section>
+            </section>}
 
-            <section id="homebrew-character-attributes" className={`${sectionClass} scroll-mt-6`}>
+            {page === 'attributes' && (
+            <section id="homebrew-character-attributes" className={`${sectionClass} scroll-mt-24`}>
               <div className="mb-6 flex flex-wrap items-end justify-between gap-3 border-b border-amber-900/15 pb-4">
                 <div>
                   <div className="mb-2 inline-flex rounded-full border border-sky-900/15 bg-sky-100/50 px-3 py-1 text-xs uppercase tracking-[0.24em] text-sky-950">
@@ -1960,6 +1992,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                 </div>
               </div>
             </section>
+            )}
           </div>
         ) : null}
       </div>

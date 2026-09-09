@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, Dices, FolderOpen, ImageIcon, Layers3, Search, Shield, Sparkles } from 'lucide-react';
+import { ArrowLeft, BookOpen, Dices, FolderOpen, ImageIcon, Layers3, PackageCheck, Power, Search, Shield, Sparkles, Trash2 } from 'lucide-react';
 import {
   CharacterAction,
   CharacterDiceMacro,
@@ -14,9 +14,13 @@ import {
 } from '../types/character';
 import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
-import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula } from '../lib/characterContext';
+import { buildCharacterFormulaContext, buildCharacterSheetSyncValues, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula, getCharacterBarMode } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
+import { downloadJsonFile } from '../lib/jsonTransfer';
+import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
+import { HomebrewPageNav, HomebrewPageId } from './HomebrewPageNav';
+import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
 
 export type HomebrewLibraryCategory = 'general-items' | 'inventory' | 'statuses' | 'spells';
 
@@ -50,6 +54,16 @@ interface RollResult {
   outcome?: 'success' | 'failure';
   dc?: number;
   rollTotal?: number;
+}
+
+interface StatusExportPayload {
+  schema: 'inoraxium-character-entry';
+  version: 1;
+  kind: 'status';
+  exportedAt: string;
+  sourceCharacterName?: string;
+  folderName?: string | null;
+  entry: CharacterStatus;
 }
 
 interface DiceRoll {
@@ -274,20 +288,53 @@ const renderEffectPill = (
   effect: StatusEffect,
   index: number,
   canApplyStatuses = false,
-  onApplyStatus?: (effect: StatusEffect) => void,
+  onApplyStatus?: (effect: StatusEffect, effectIndex: number) => void,
+  resolveEffectTargetLabel?: (effect: StatusEffect) => string,
+  autoStatusEffect = false,
+  onShowAppliedStatuses?: (effect: StatusEffect, effectIndex: number) => void,
+  onPreviewStatus?: (effect: StatusEffect) => void,
 ) => {
+  const targetLabel = resolveEffectTargetLabel?.(effect) || effect.targetLabel || effect.targetId || 'unknown_target';
   if (effect.effectType === 'status') {
     return (
-      <div key={`effect-${index}`} className="flex flex-wrap items-center gap-2 rounded-xl border border-violet-900/15 bg-violet-100/40 px-3 py-2 text-sm text-stone-800">
+      <div
+        key={`effect-${index}`}
+        role="button"
+        tabIndex={0}
+        onClick={() => onPreviewStatus?.(effect)}
+        onContextMenu={(event) => {
+          event.preventDefault();
+          onShowAppliedStatuses?.(effect, index);
+        }}
+        onKeyDown={(event) => {
+          if (event.key === 'Enter' || event.key === ' ') {
+            event.preventDefault();
+            onPreviewStatus?.(effect);
+          }
+        }}
+        className="flex cursor-pointer flex-wrap items-center gap-2 rounded-xl border border-violet-900/15 bg-violet-100/40 px-3 py-2 text-sm text-stone-800 transition hover:border-violet-700/30 hover:bg-violet-100/70"
+        title="Left click to export. Right click to see applied statuses."
+      >
         <button
           type="button"
-          onClick={() => onApplyStatus?.(effect)}
-          disabled={!canApplyStatuses || !effect.statusEntry}
-          className="rounded-lg border border-violet-800/30 bg-violet-100/70 px-3 py-1.5 text-xs font-bold text-violet-950 transition hover:bg-violet-200/80 disabled:cursor-not-allowed disabled:opacity-45"
+          onClick={(event) => {
+            event.stopPropagation();
+            if (!autoStatusEffect) onApplyStatus?.(effect, index);
+          }}
+          disabled={autoStatusEffect || !canApplyStatuses || !effect.statusEntry}
+          className={`rounded-lg border px-3 py-1.5 text-xs font-bold transition disabled:cursor-not-allowed disabled:opacity-60 ${
+            autoStatusEffect
+              ? 'border-emerald-800/30 bg-emerald-100/70 text-emerald-950'
+              : 'border-violet-800/30 bg-violet-100/70 text-violet-950 hover:bg-violet-200/80'
+          }`}
+          title={autoStatusEffect ? 'Automatically applied while the source is active/equipped' : 'Apply this status now'}
         >
-          Apply
+          {autoStatusEffect ? 'Auto' : 'Apply'}
         </button>
-        <span className="font-bold text-violet-950">Status:</span> {effect.statusName || effect.targetId || 'Imported status'}
+        <span className="font-bold text-violet-950">Status:</span>
+        <span className="font-semibold text-violet-950 underline decoration-violet-500/30 underline-offset-4">
+          {effect.statusName || effect.statusEntry?.name || effect.targetId || 'Imported status'}
+        </span>
       </div>
     );
   }
@@ -295,7 +342,7 @@ const renderEffectPill = (
   if (effect.effectType === 'bar-update') {
     return (
       <div key={`effect-${index}`} className="rounded-xl border border-sky-900/15 bg-sky-100/45 px-3 py-2 text-sm text-stone-800">
-        <span className="font-bold text-sky-950">Bar:</span> {effect.targetId || effect.barUpdateDescription || 'Target bar'} {effect.value || '0'}
+        <span className="font-bold text-sky-950">Bar:</span> {targetLabel || effect.barUpdateDescription || 'Target bar'} {effect.value || '0'}
       </div>
     );
   }
@@ -303,7 +350,7 @@ const renderEffectPill = (
   return (
     <div key={`effect-${index}`} className="flex flex-wrap items-center gap-2 rounded-xl border border-stone-700/10 bg-stone-100/55 px-3 py-2 text-sm text-stone-800">
       <span className="rounded-full border border-stone-700/15 bg-white/65 px-2 py-1 font-mono text-emerald-800">
-        {effect.targetLabel || effect.targetId || 'unknown_target'}
+        {targetLabel}
       </span>
       <span className="font-mono text-amber-900">{effect.value || '0'}</span>
       <span className="text-xs uppercase tracking-[0.16em] text-stone-600">
@@ -318,8 +365,12 @@ const renderActionBlock = (
   localVariables: CharacterLocalVariable[] | undefined,
   canApplyStatuses: boolean,
   onRollMacro: (macro: CharacterDiceMacro, localVariables?: CharacterLocalVariable[], namePrefix?: string, description?: string) => void,
-  onApplyStatus: (effect: StatusEffect) => void,
+  onApplyStatus: (effect: StatusEffect, effectIndex: number) => void,
   onEditActionUsage?: (action: CharacterAction) => void,
+  resolveEffectTargetLabel?: (effect: StatusEffect) => string,
+  autoStatusEffect = false,
+  onShowAppliedStatuses?: (effect: StatusEffect, effectIndex: number) => void,
+  onPreviewStatus?: (effect: StatusEffect) => void,
 ) => (
   <div key={action.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
     <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -369,7 +420,16 @@ const renderActionBlock = (
     )}
     {(action.effects || []).length > 0 && (
       <div className="mt-4 space-y-2">
-        {(action.effects || []).map((effect, effectIndex) => renderEffectPill(effect, effectIndex, canApplyStatuses, onApplyStatus))}
+        {(action.effects || []).map((effect, effectIndex) => renderEffectPill(
+          effect,
+          effectIndex,
+          canApplyStatuses,
+          onApplyStatus,
+          resolveEffectTargetLabel,
+          autoStatusEffect,
+          onShowAppliedStatuses,
+          onPreviewStatus,
+        ))}
       </div>
     )}
   </div>
@@ -383,8 +443,8 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   onBack,
 }) => {
   const [userId, setUserId] = useState<string | null>(authProvider.getUid());
-  const [character, setCharacter] = useState<CharacterData | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
+  const [character, setCharacterState] = useState<CharacterData | null>(() => getCachedHomebrewCharacter(characterId));
+  const [isLoading, setIsLoading] = useState(() => !getCachedHomebrewCharacter(characterId));
   const [error, setError] = useState<string | null>(null);
   const [selectedEntryKey, setSelectedEntryKey] = useState<string | null>(null);
   const [activeFilterId, setActiveFilterId] = useState('all');
@@ -404,7 +464,17 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   } | null>(null);
   const [formulaEditDraft, setFormulaEditDraft] = useState('');
   const [formulaEditError, setFormulaEditError] = useState('');
+  const [statusPreview, setStatusPreview] = useState<CharacterStatus | null>(null);
+  const [appliedStatusList, setAppliedStatusList] = useState<{
+    title: string;
+    statuses: CharacterStatus[];
+  } | null>(null);
   const rollPopupTimeoutRef = useRef<number | null>(null);
+
+  const setCharacter = useCallback((nextCharacter: CharacterData | null) => {
+    setCharacterState(nextCharacter);
+    setCachedHomebrewCharacter(nextCharacter);
+  }, []);
 
   useEffect(() => authProvider.onAuthChange((state) => setUserId(state.uid)), []);
 
@@ -437,7 +507,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
   useEffect(() => {
     let isMounted = true;
-    setIsLoading(true);
+    const cachedCharacter = getCachedHomebrewCharacter(characterId);
+    if (cachedCharacter) setCharacter(cachedCharacter);
+    setIsLoading(!cachedCharacter);
     setError(null);
 
     loadCharacterById(characterId, userId)
@@ -462,7 +534,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     return () => {
       isMounted = false;
     };
-  }, [characterId, userId]);
+  }, [characterId, setCharacter, userId]);
 
   const meta = categoryMeta[category];
 
@@ -602,6 +674,112 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     return buildCharacterFormulaContext(character);
   }, [character]);
 
+  const persistHomebrewCharacter = useCallback(async (nextCharacter: CharacterData, successMessage = 'Updated.') => {
+    setCharacter(nextCharacter);
+    const saveResult = await saveCharacter(nextCharacter);
+    if (!saveResult.localSaved && !saveResult.remoteSaved) {
+      setActionMessage('Update could not be saved.');
+      return;
+    }
+
+    if (!(nextCharacter.sendToSpreadsheet ?? true)) {
+      setActionMessage(successMessage);
+      return;
+    }
+
+    const syncResult = await syncCharacterSheet({
+      characterId: nextCharacter.id,
+      characterName: nextCharacter.name,
+      sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+      tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+      values: buildCharacterSheetSyncValues(nextCharacter),
+    });
+    setActionMessage(syncResult.success ? successMessage : `${successMessage} Spreadsheet: ${syncResult.message}`);
+  }, []);
+
+  const resolveEffectTargetLabel = useCallback((effect: StatusEffect): string => {
+    if (!character) return effect.targetLabel || effect.targetId || 'unknown_target';
+    if (effect.effectType === 'status') return effect.statusName || effect.targetId || 'Imported status';
+
+    const targetId = effect.targetId || '';
+    const mainAttribute = (character.mainAttributes || []).find(attr => attr.id === targetId || `${attr.id}_mod` === targetId);
+    if (mainAttribute) {
+      return targetId.endsWith('_mod')
+        ? `${mainAttribute.name || mainAttribute.id} Modifier (${targetId})`
+        : `${mainAttribute.name || mainAttribute.id} (${targetId})`;
+    }
+
+    const attribute = [
+      ...(character.secondaryAttributes || []),
+      ...(character.skills || []),
+      ...(character.otherAttributes || []),
+      ...(character.resistances || []),
+    ].find(attr => attr.id === targetId);
+    if (attribute) return `${attribute.name || attribute.id} (${targetId})`;
+
+    const bar = (character.bars || []).find(item => (
+      `${item.id}_current` === targetId
+      || `${item.id}_max` === targetId
+      || `${item.id}_reset` === targetId
+    ));
+    if (bar) {
+      const suffix = targetId.endsWith('_current')
+        ? 'Current'
+        : getCharacterBarMode(bar) === 'resource'
+          ? 'Reset'
+          : 'Max';
+      return `${bar.name || bar.id} ${suffix} (${targetId})`;
+    }
+
+    return targetId || effect.targetLabel || 'unknown_target';
+  }, [character]);
+
+  const getSelectedStatusSource = useCallback((effect: StatusEffect, effectIndex: number) => {
+    if (!selectedEntry || !effect.statusEntry) return null;
+    if (selectedEntry.kind !== 'general-item' && selectedEntry.kind !== 'inventory-item' && selectedEntry.kind !== 'spell' && selectedEntry.kind !== 'status') {
+      return null;
+    }
+    return {
+      linkedStatusSourceType: selectedEntry.kind as NonNullable<CharacterStatus['linkedStatusSourceType']>,
+      linkedStatusSourceId: selectedEntry.entry.id,
+      linkedStatusSourceEffectId: effect.id || `effect_${effectIndex}`,
+    };
+  }, [selectedEntry]);
+
+  const navigateToLibraryEntry = useCallback((kind: LibraryEntry['kind'], entryId: string) => {
+    const nextCategory: HomebrewLibraryCategory =
+      kind === 'status'
+        ? 'statuses'
+        : kind === 'spell'
+          ? 'spells'
+          : 'inventory';
+    window.location.hash = `#homebrew-library/${nextCategory}/${encodeURIComponent(characterId)}/${encodeURIComponent(kind)}/${encodeURIComponent(entryId)}`;
+  }, [characterId]);
+
+  const getStatusSourceEntry = useCallback((status: CharacterStatus): LibraryEntry | null => {
+    if (!character || !status.linkedStatusSourceType || !status.linkedStatusSourceId) return null;
+    if (status.linkedStatusSourceType === 'general-item') {
+      const entry = (character.generalItems || []).find(item => item.id === status.linkedStatusSourceId);
+      return entry ? { kind: 'general-item', entry, folderLabel: 'General Items', folderId: null, folderColor: '#9a6a31' } : null;
+    }
+    if (status.linkedStatusSourceType === 'inventory-item') {
+      const entry = (character.inventory || []).find(item => item.id === status.linkedStatusSourceId);
+      if (!entry) return null;
+      const folder = getFolderInfo(entry.folderId, character.inventoryFolders || []);
+      return { kind: 'inventory-item', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+    }
+    if (status.linkedStatusSourceType === 'spell') {
+      const entry = (character.spells || []).find(item => item.id === status.linkedStatusSourceId);
+      if (!entry) return null;
+      const folder = getFolderInfo(entry.folderId, character.spellFolders || []);
+      return { kind: 'spell', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+    }
+    const entry = (character.statuses || []).find(item => item.id === status.linkedStatusSourceId);
+    if (!entry) return null;
+    const folder = getFolderInfo(entry.folderId, character.statusFolders || []);
+    return { kind: 'status', entry, folderLabel: folder.label, folderId: entry.folderId || null, folderColor: folder.color };
+  }, [character]);
+
   const getLocalVariableContext = useCallback((variables?: CharacterLocalVariable[], globalContext: Record<string, number> = {}) => {
     return buildLocalVariableContext(variables, globalContext);
   }, []);
@@ -710,7 +888,10 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     }
   }, [character?.name, characterId, diceSettings.autoSend, diceSettings.webhookUrl, executeMacro, getCharacterContext, getLocalVariableContextWithInputs, showRollPopup]);
 
-  const applyStatusEffect = useCallback(async (effect: StatusEffect) => {
+  const applyStatusEffect = useCallback(async (
+    effect: StatusEffect,
+    source?: Pick<CharacterStatus, 'linkedStatusSourceType' | 'linkedStatusSourceId' | 'linkedStatusSourceEffectId'> | null,
+  ) => {
     if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
     const newStatus: CharacterStatus = {
       id: `st_${uid()}`,
@@ -730,12 +911,11 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       color: effect.statusEntry.color || '#f59e0b',
       hidden: false,
       folderId: effect.statusFolderId || null,
+      ...(source || {}),
     };
     const nextCharacter = { ...character, statuses: [...(character.statuses || []), newStatus] };
-    setCharacter(nextCharacter);
-    const saveResult = await saveCharacter(nextCharacter);
-    setActionMessage(saveResult.localSaved || saveResult.remoteSaved ? 'Status applied to character.' : 'Status could not be saved.');
-  }, [canControlCharacter, character]);
+    await persistHomebrewCharacter(nextCharacter, 'Status applied to character.');
+  }, [canControlCharacter, character, persistHomebrewCharacter]);
 
   const submitLocalInputs = () => {
     if (!localInputRequest) return;
@@ -795,10 +975,8 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             ? { ...character, spells: replaceEntry(character.spells) }
             : { ...character, statuses: replaceEntry(character.statuses) };
 
-    setCharacter(nextCharacter);
-    const result = await saveCharacter(nextCharacter);
-    setActionMessage(result.localSaved || result.remoteSaved ? 'Updated.' : 'Update could not be saved.');
-  }, [character, selectedEntry]);
+    await persistHomebrewCharacter(nextCharacter);
+  }, [character, persistHomebrewCharacter, selectedEntry]);
 
   const editLocalVariableValue = useCallback(async (variable: CharacterLocalVariable) => {
     const nextValue = await requestFormulaEdit(
@@ -831,6 +1009,130 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       )),
     }));
   }, [requestFormulaEdit, updateSelectedEntry]);
+
+  const editItemQuantity = useCallback(async () => {
+    if (!selectedEntry || (selectedEntry.kind !== 'general-item' && selectedEntry.kind !== 'inventory-item')) return;
+    const item = selectedEntry.entry as CharacterGeneralItem | CharacterInventoryItem;
+    const nextValue = await requestFormulaEdit(
+      `${item.name || 'Item'} Quantity`,
+      String(item.quantity ?? 1),
+      'Edit this item quantity. Use a whole number.',
+      'Quantity',
+    );
+    if (nextValue === null) return;
+    const parsed = Math.max(0, Math.floor(Number(nextValue.trim().replace(',', '.'))));
+    if (!Number.isFinite(parsed)) {
+      setActionMessage('Quantity needs a valid number.');
+      return;
+    }
+    await updateSelectedEntry((entry) => ({ ...entry, quantity: parsed }));
+  }, [requestFormulaEdit, selectedEntry, updateSelectedEntry]);
+
+  const toggleSelectedStatusActive = useCallback(async () => {
+    if (!selectedEntry || selectedEntry.kind !== 'status') return;
+    await updateSelectedEntry((entry) => ({ ...entry, active: (entry as CharacterStatus).active === false }));
+  }, [selectedEntry, updateSelectedEntry]);
+
+  const toggleSelectedItemEquipped = useCallback(async () => {
+    if (!selectedEntry || (selectedEntry.kind !== 'general-item' && selectedEntry.kind !== 'inventory-item')) return;
+    await updateSelectedEntry((entry) => {
+      const item = entry as CharacterGeneralItem | CharacterInventoryItem;
+      const equipped = !item.equipped;
+      return { ...item, equipped, status: equipped ? 'equipped' : 'unequipped' };
+    });
+  }, [selectedEntry, updateSelectedEntry]);
+
+  const deleteSelectedEntry = useCallback(async () => {
+    if (!character || !selectedEntry || !canControlCharacter) return;
+    const sourceType = selectedEntry.kind as NonNullable<CharacterStatus['linkedStatusSourceType']>;
+    const sourceId = selectedEntry.entry.id;
+    const withoutLinkedStatuses = (character.statuses || []).filter(status => (
+      !(status.linkedStatusSourceType === sourceType && status.linkedStatusSourceId === sourceId)
+    ));
+    const nextCharacter: CharacterData =
+      selectedEntry.kind === 'general-item'
+        ? {
+          ...character,
+          generalItems: (character.generalItems || []).filter(item => item.id !== sourceId),
+          statuses: withoutLinkedStatuses,
+        }
+        : selectedEntry.kind === 'inventory-item'
+          ? {
+            ...character,
+            inventory: (character.inventory || []).filter(item => item.id !== sourceId),
+            statuses: withoutLinkedStatuses,
+          }
+          : selectedEntry.kind === 'spell'
+            ? {
+              ...character,
+              spells: (character.spells || []).filter(item => item.id !== sourceId),
+              statuses: withoutLinkedStatuses,
+            }
+            : {
+              ...character,
+              statuses: withoutLinkedStatuses.filter(status => status.id !== sourceId),
+            };
+
+    setSelectedEntryKey(null);
+    await persistHomebrewCharacter(nextCharacter, 'Deleted.');
+  }, [canControlCharacter, character, persistHomebrewCharacter, selectedEntry]);
+
+  const buildStatusFromEffect = useCallback((effect: StatusEffect): CharacterStatus | null => {
+    if (effect.effectType !== 'status' || !effect.statusEntry) return null;
+    return {
+      id: effect.statusEntry.id || `status_export_${uid()}`,
+      name: effect.statusEntry.name || effect.statusName || 'Imported Status',
+      duration: effect.statusEntry.duration || '',
+      durationType: effect.statusEntry.durationType || 'custom',
+      durationEndBehavior: effect.statusEntry.durationEndBehavior || 'delete',
+      maxDuration: effect.statusEntry.maxDuration || '',
+      replenishTrigger: effect.statusEntry.replenishTrigger || 'custom',
+      replenishAmount: effect.statusEntry.replenishAmount || '',
+      description: effect.statusEntry.description || '',
+      effects: effect.statusEntry.effects || [],
+      actions: effect.statusEntry.actions || [],
+      localVariables: effect.statusEntry.localVariables || [],
+      scripts: effect.statusEntry.scripts || [],
+      active: effect.statusEntry.active ?? true,
+      color: effect.statusEntry.color || '#f59e0b',
+      hidden: effect.statusEntry.hidden ?? false,
+      folderId: effect.statusFolderId || null,
+    };
+  }, []);
+
+  const buildStatusExportPayload = useCallback((status: CharacterStatus): StatusExportPayload => ({
+    schema: 'inoraxium-character-entry',
+    version: 1,
+    kind: 'status',
+    exportedAt: new Date().toISOString(),
+    sourceCharacterName: character?.name || undefined,
+    folderName: null,
+    entry: status,
+  }), [character?.name]);
+
+  const safeExportFileName = (name: string, suffix: string) => (
+    `${(name || 'entry').trim().toLowerCase().replace(/[^a-z0-9_-]+/gi, '-').replace(/^-+|-+$/g, '') || 'entry'}-${suffix}.json`
+  );
+
+  const previewStatusEffect = useCallback((effect: StatusEffect) => {
+    const status = buildStatusFromEffect(effect);
+    if (status) setStatusPreview(status);
+  }, [buildStatusFromEffect]);
+
+  const showAppliedStatusesForEffect = useCallback((effect: StatusEffect, effectIndex: number) => {
+    if (!character) return;
+    const source = getSelectedStatusSource(effect, effectIndex);
+    if (!source) return;
+    const statuses = (character.statuses || []).filter(status => (
+      status.linkedStatusSourceType === source.linkedStatusSourceType
+      && status.linkedStatusSourceId === source.linkedStatusSourceId
+      && status.linkedStatusSourceEffectId === source.linkedStatusSourceEffectId
+    ));
+    setAppliedStatusList({
+      title: effect.statusName || effect.statusEntry?.name || 'Applied Statuses',
+      statuses,
+    });
+  }, [character, getSelectedStatusSource]);
 
   const renderCard = (entry: LibraryEntry) => {
     const thumbUrl = getEntryThumbUrl(entry.entry);
@@ -916,9 +1218,53 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     const entry = selectedEntry.entry;
     const imageUrl = getEntryImageUrl(entry);
     const thumbUrl = getEntryThumbUrl(entry);
+    const statusSourceEntry = selectedEntry.kind === 'status' ? getStatusSourceEntry(entry as CharacterStatus) : null;
+    const autoStatusEffects = selectedEntry.kind === 'general-item' || selectedEntry.kind === 'inventory-item' || selectedEntry.kind === 'status';
+    const isControlledItem = selectedEntry.kind === 'general-item' || selectedEntry.kind === 'inventory-item';
+    const isControlledStatus = selectedEntry.kind === 'status';
+    const hasEntryControls = isControlledItem || isControlledStatus;
+    const isEntryEnabled = isControlledStatus
+      ? (entry as CharacterStatus).active !== false
+      : isControlledItem
+        ? !!(entry as CharacterGeneralItem | CharacterInventoryItem).equipped
+        : false;
 
     return (
-      <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto`}>
+      <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto ${hasEntryControls ? 'relative pt-14' : ''}`}>
+        {hasEntryControls && (
+          <>
+            <button
+              type="button"
+              onClick={() => {
+                if (!canControlCharacter) return;
+                if (isControlledStatus) void toggleSelectedStatusActive();
+                if (isControlledItem) void toggleSelectedItemEquipped();
+              }}
+              disabled={!canControlCharacter}
+              className={`absolute left-4 top-4 inline-grid h-10 w-10 place-items-center rounded-lg border text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+                isEntryEnabled
+                  ? 'border-emerald-500/45 bg-emerald-600 hover:bg-emerald-500'
+                  : 'border-amber-500/45 bg-amber-500 hover:bg-amber-400'
+              }`}
+              title={
+                isControlledStatus
+                  ? isEntryEnabled ? 'Deactivate status' : 'Activate status'
+                  : isEntryEnabled ? 'Unequip item' : 'Equip item'
+              }
+            >
+              {isControlledStatus ? <Power size={18} /> : <PackageCheck size={18} />}
+            </button>
+            <button
+              type="button"
+              onClick={() => void deleteSelectedEntry()}
+              disabled={!canControlCharacter}
+              className="absolute right-4 top-4 inline-grid h-10 w-10 place-items-center rounded-lg border border-rose-500/45 bg-rose-700 text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+              title={isControlledStatus ? 'Delete status' : 'Delete item'}
+            >
+              <Trash2 size={18} />
+            </button>
+          </>
+        )}
         {thumbUrl && (
           <a href={imageUrl || thumbUrl} target="_blank" rel="noreferrer" className="mb-5 block overflow-hidden rounded-2xl border border-amber-900/20 bg-amber-100/45">
             <img
@@ -940,6 +1286,15 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
         <h2 className="text-4xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
           {getEntryName(selectedEntry)}
         </h2>
+        {statusSourceEntry && (
+          <button
+            type="button"
+            onClick={() => navigateToLibraryEntry(statusSourceEntry.kind, statusSourceEntry.entry.id)}
+            className="mt-4 inline-flex items-center gap-2 rounded-xl border border-cyan-800/25 bg-cyan-100/60 px-4 py-2 text-sm font-bold text-cyan-950 transition hover:bg-cyan-200/70"
+          >
+            Go to source
+          </button>
+        )}
 
         {'description' in entry && entry.description ? (
           <p className="mt-4 whitespace-pre-wrap rounded-xl border border-amber-900/15 bg-white/35 p-4 text-[16px] leading-8 text-stone-800">
@@ -955,7 +1310,20 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Details</h3>
           <div className="space-y-2 text-[15px] leading-7 text-stone-800">
             <div><span className="font-bold text-amber-950">Folder:</span> {selectedEntry.folderLabel}</div>
-            {'quantity' in entry && <div><span className="font-bold text-amber-950">Quantity:</span> {entry.quantity}</div>}
+            {'quantity' in entry && (
+              <div>
+                <span className="font-bold text-amber-950">Quantity:</span>{' '}
+                <button
+                  type="button"
+                  onClick={() => void editItemQuantity()}
+                  disabled={!canControlCharacter || !isControlledItem}
+                  className="rounded-lg border border-amber-900/15 bg-white/50 px-2 py-0.5 font-mono text-sm text-emerald-800 transition hover:border-amber-700/35 hover:bg-amber-100/70 disabled:cursor-default disabled:border-transparent disabled:bg-transparent disabled:text-stone-800"
+                  title={canControlCharacter ? 'Edit quantity' : 'Control access is required'}
+                >
+                  {entry.quantity}
+                </button>
+              </div>
+            )}
             {'status' in entry && entry.status && <div><span className="font-bold text-amber-950">Status:</span> {entry.status}</div>}
             {'rarity' in entry && entry.rarity && <div><span className="font-bold text-amber-950">Rarity:</span> {entry.rarity}</div>}
             {'equipped' in entry && <div><span className="font-bold text-amber-950">Equipped:</span> {entry.equipped ? 'Yes' : 'No'}</div>}
@@ -1016,8 +1384,12 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 'localVariables' in entry ? entry.localVariables : undefined,
                 canControlCharacter,
                 rollMacro,
-                (effect) => void applyStatusEffect(effect),
+                (effect, effectIndex) => void applyStatusEffect(effect, getSelectedStatusSource(effect, effectIndex)),
                 editActionUsage,
+                resolveEffectTargetLabel,
+                false,
+                showAppliedStatusesForEffect,
+                previewStatusEffect,
               ))}
             </div>
           </section>
@@ -1027,7 +1399,16 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           <section className="mt-5">
             <h3 className="mb-3 text-xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>Effects</h3>
             <div className="space-y-2">
-              {(entry.effects || []).map((effect, index) => renderEffectPill(effect, index, canControlCharacter, (entryEffect) => void applyStatusEffect(entryEffect)))}
+              {(entry.effects || []).map((effect, index) => renderEffectPill(
+                effect,
+                index,
+                canControlCharacter,
+                (entryEffect, effectIndex) => void applyStatusEffect(entryEffect, getSelectedStatusSource(entryEffect, effectIndex)),
+                resolveEffectTargetLabel,
+                autoStatusEffects,
+                showAppliedStatusesForEffect,
+                previewStatusEffect,
+              ))}
             </div>
           </section>
         )}
@@ -1210,6 +1591,81 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           </div>
         </div>
       )}
+      {statusPreview && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm" onClick={() => setStatusPreview(null)}>
+          <div className="w-full max-w-2xl rounded-2xl border border-violet-700/50 bg-stone-950 p-5 text-violet-50 shadow-[0_0_40px_rgba(167,139,250,0.18)]" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-violet-300">Status Export</div>
+              <h3 className="mt-1 text-2xl text-white" style={{ fontFamily: "'Cinzel', serif" }}>{statusPreview.name}</h3>
+              {statusPreview.description && <p className="mt-3 whitespace-pre-wrap rounded-xl border border-violet-800/25 bg-white/5 p-3 text-sm leading-6 text-stone-200">{statusPreview.description}</p>}
+            </div>
+            <div className="max-h-[46vh] space-y-2 overflow-y-auto pr-1">
+              {(statusPreview.effects || []).length === 0 ? (
+                <div className="rounded-xl border border-dashed border-stone-700/60 px-3 py-4 text-center text-sm italic text-stone-500">No effects in this status.</div>
+              ) : (statusPreview.effects || []).map((effect, index) => (
+                <div key={effect.id || index} className="rounded-xl border border-violet-800/25 bg-white/5 px-3 py-2 text-sm">
+                  <span className="font-bold text-violet-200">{effect.effectType || 'attribute'}:</span> {resolveEffectTargetLabel(effect)} <code className="text-amber-200">{effect.value || '0'}</code>
+                </div>
+              ))}
+            </div>
+            <div className="mt-5 flex flex-wrap justify-end gap-2">
+              <button onClick={() => setStatusPreview(null)} className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100">Cancel</button>
+              <button
+                onClick={() => {
+                  const payload = buildStatusExportPayload(statusPreview);
+                  navigator.clipboard.writeText(JSON.stringify(payload, null, 2))
+                    .then(() => setActionMessage('Status JSON copied to clipboard.'))
+                    .catch(() => setActionMessage('Clipboard access was blocked.'));
+                  setStatusPreview(null);
+                }}
+                className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+              >
+                Copy to Clipboard
+              </button>
+              <button
+                onClick={() => {
+                  downloadJsonFile(buildStatusExportPayload(statusPreview), safeExportFileName(statusPreview.name, 'status'));
+                  setStatusPreview(null);
+                }}
+                className="rounded-lg border border-violet-500/60 bg-violet-900/40 px-4 py-2 text-sm font-bold text-violet-100 transition hover:bg-violet-800/55"
+              >
+                Save JSON
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {appliedStatusList && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm" onClick={() => setAppliedStatusList(null)}>
+          <div className="w-full max-w-xl rounded-2xl border border-emerald-700/50 bg-stone-950 p-5 text-emerald-50 shadow-[0_0_40px_rgba(16,185,129,0.18)]" onClick={(event) => event.stopPropagation()}>
+            <div className="mb-4">
+              <div className="text-[11px] uppercase tracking-[0.22em] text-emerald-300">Applied Statuses</div>
+              <h3 className="mt-1 text-2xl text-white" style={{ fontFamily: "'Cinzel', serif" }}>{appliedStatusList.title}</h3>
+            </div>
+            <div className="space-y-2">
+              {appliedStatusList.statuses.length === 0 ? (
+                <div className="rounded-xl border border-dashed border-stone-700/60 px-3 py-4 text-center text-sm italic text-stone-500">No active/applied status instances found from this source.</div>
+              ) : appliedStatusList.statuses.map(status => (
+                <button
+                  key={status.id}
+                  type="button"
+                  onClick={() => {
+                    setAppliedStatusList(null);
+                    navigateToLibraryEntry('status', status.id);
+                  }}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-emerald-800/30 bg-white/5 px-4 py-3 text-left transition hover:border-amber-400/45 hover:bg-amber-950/25"
+                >
+                  <span className="truncate font-bold text-emerald-50">{status.name || status.id}</span>
+                  <span className="rounded-lg border border-emerald-500/25 bg-black/25 px-3 py-1 text-xs text-emerald-100">{status.active === false ? 'Inactive' : 'Active'}</span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button onClick={() => setAppliedStatusList(null)} className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100">Close</button>
+            </div>
+          </div>
+        </div>
+      )}
       <div className="mx-auto w-full max-w-none 2xl:max-w-[1900px]">
         <div className="mb-6 flex flex-wrap items-center justify-between gap-3">
           <button
@@ -1248,8 +1704,10 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
               <p className="mt-3 text-[16px] leading-8 text-stone-800">{meta.subtitle}</p>
             </section>
 
+            <HomebrewPageNav characterId={characterId} currentPage={category as HomebrewPageId} />
+
             {(filterTabs.length > 1 || category === 'inventory' || category === 'spells') && (
-              <div className="sticky top-4 z-20 rounded-2xl border border-stone-950/20 bg-stone-950/88 p-3 shadow-[0_16px_34px_rgba(68,38,17,0.22)] backdrop-blur-md">
+              <div className="sticky top-[4.9rem] z-20 rounded-2xl border border-stone-950/20 bg-stone-950/88 p-3 shadow-[0_16px_34px_rgba(68,38,17,0.22)] backdrop-blur-md">
                 <div className="flex flex-wrap items-center gap-3">
                   <div className="flex min-w-0 flex-1 flex-wrap gap-2 py-0.5">
                     {filterTabs.map((tab) => {

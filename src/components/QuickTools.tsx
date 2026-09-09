@@ -3,6 +3,9 @@ import { Check, ChevronLeft, Clock3, X } from 'lucide-react';
 import { CharacterData } from '../types/character';
 import { saveCharacter } from '../lib/firestore';
 import { applyCharacterTimeProgression, CharacterTimeAction } from '../lib/characterTime';
+import { buildCharacterSheetSyncValues } from '../lib/characterContext';
+import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
+import { setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
 
 interface QuickToolsProps {
   character: CharacterData | null;
@@ -40,9 +43,25 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
 
     try {
       const updatedCharacter = applyCharacterTimeProgression(character, option.action, { minutes });
+      setCachedHomebrewCharacter(updatedCharacter);
       onCharacterUpdated(updatedCharacter);
       const saveResult = await saveCharacter(updatedCharacter);
-      setMessage(saveResult.localSaved || saveResult.remoteSaved ? `${option.label} applied.` : 'Could not save changes.');
+      if (!saveResult.localSaved && !saveResult.remoteSaved) {
+        setMessage('Could not save changes.');
+        return;
+      }
+      if (updatedCharacter.sendToSpreadsheet ?? true) {
+        const syncResult = await syncCharacterSheet({
+          characterId: updatedCharacter.id,
+          characterName: updatedCharacter.name,
+          sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+          tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+          values: buildCharacterSheetSyncValues(updatedCharacter),
+        });
+        setMessage(syncResult.success ? `${option.label} applied.` : `${option.label} applied. Spreadsheet: ${syncResult.message}`);
+      } else {
+        setMessage(`${option.label} applied.`);
+      }
       setMinuteAction(null);
       setIsOpen(false);
     } catch (error) {

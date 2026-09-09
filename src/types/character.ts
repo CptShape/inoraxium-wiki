@@ -289,7 +289,7 @@ export interface CharacterStatus {
   folderId?: string | null;
   scriptSourceConditionId?: string;
   scriptSourceTemplateStatusId?: string;
-  linkedStatusSourceType?: 'general-item' | 'inventory-item' | 'status';
+  linkedStatusSourceType?: 'general-item' | 'inventory-item' | 'spell' | 'status';
   linkedStatusSourceId?: string;
   linkedStatusSourceEffectId?: string;
 }
