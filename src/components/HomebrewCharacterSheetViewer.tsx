@@ -1,7 +1,7 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { ArrowLeft, Backpack, Dices, FlaskConical, SlidersHorizontal, Sparkles, UserRound } from 'lucide-react';
 import { CharacterBar, CharacterData, CharacterLocalVariable, CustomAttribute, SkillAttribute, StatusEffect } from '../types/character';
-import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
+import { loadCharacterById, loadUserDiceSettings, subscribeCharacterById, updateCharacterFields, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { HomebrewLibraryCategory } from './HomebrewLibraryViewer';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
@@ -548,34 +548,32 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
     const cachedCharacter = getCachedHomebrewCharacter(characterId);
     if (cachedCharacter) setCharacter(cachedCharacter);
     setIsLoading(!cachedCharacter);
     setError(null);
 
-    loadCharacterById(characterId, userId)
-      .then((loadedCharacter) => {
-        if (!isMounted) return;
+    const unsubscribe = subscribeCharacterById(
+      characterId,
+      userId,
+      (loadedCharacter) => {
         if (!loadedCharacter) {
           setCharacter(null);
           setError('This character could not be found, or you do not have access to it.');
         } else {
           setCharacter(loadedCharacter);
+          setError(null);
         }
-      })
-      .catch((err) => {
-        if (!isMounted) return;
+        setIsLoading(false);
+      },
+      (err) => {
         console.error(err);
         setError('Failed to load this homebrew character sheet.');
-      })
-      .finally(() => {
-        if (isMounted) setIsLoading(false);
-      });
+        setIsLoading(false);
+      },
+    );
 
-    return () => {
-      isMounted = false;
-    };
+    return unsubscribe;
   }, [characterId, setCharacter, userId]);
 
   const libraryCards: Array<{
@@ -773,16 +771,19 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
       ? max - contribution
       : nextUnclampedRawCurrent;
 
+    const freshCharacter = await loadCharacterById(character.id, userId);
+    const baseCharacter = freshCharacter || character;
     const nextCharacter = {
-      ...character,
-      bars: (character.bars || []).map((entry) => (
+      ...baseCharacter,
+      bars: (baseCharacter.bars || []).map((entry) => (
         entry.id === bar.id
           ? { ...entry, currentValue: `${Math.round(nextRawCurrent * 100) / 100}` }
           : entry
       )),
+      updatedAt: Date.now(),
     };
     setCharacter(nextCharacter);
-    const saveResult = await saveCharacter(nextCharacter);
+    const saveResult = await updateCharacterFields(nextCharacter.id, userId, { bars: nextCharacter.bars });
     if (!saveResult.localSaved && !saveResult.remoteSaved) {
       setActionMessage('Bar update could not be saved.');
       return;
@@ -1103,7 +1104,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 pr-24 text-stone-900" style={parchmentBackground}>
-      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
+      <QuickTools character={character} canControl={canControlCharacter} userId={userId} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
           type="button"

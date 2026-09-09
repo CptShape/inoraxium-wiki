@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { Check, ChevronLeft, Clock3, X } from 'lucide-react';
 import { CharacterData } from '../types/character';
-import { saveCharacter } from '../lib/firestore';
+import { loadCharacterById, updateCharacterFields } from '../lib/firestore';
 import { applyCharacterTimeProgression, CharacterTimeAction } from '../lib/characterTime';
 import { buildCharacterSheetSyncValues } from '../lib/characterContext';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
@@ -11,6 +11,7 @@ interface QuickToolsProps {
   character: CharacterData | null;
   canControl: boolean;
   onCharacterUpdated: (character: CharacterData) => void;
+  userId?: string | null;
 }
 
 const proceedOptions: Array<{
@@ -29,6 +30,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
   character,
   canControl,
   onCharacterUpdated,
+  userId = null,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
   const [minuteAction, setMinuteAction] = useState<typeof proceedOptions[number] | null>(null);
@@ -42,10 +44,18 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
     setMessage(null);
 
     try {
-      const updatedCharacter = applyCharacterTimeProgression(character, option.action, { minutes });
+      const freshCharacter = await loadCharacterById(character.id, userId);
+      const baseCharacter = freshCharacter || character;
+      const updatedCharacter = applyCharacterTimeProgression(baseCharacter, option.action, { minutes });
       setCachedHomebrewCharacter(updatedCharacter);
       onCharacterUpdated(updatedCharacter);
-      const saveResult = await saveCharacter(updatedCharacter);
+      const saveResult = await updateCharacterFields(updatedCharacter.id, userId, {
+        bars: updatedCharacter.bars,
+        statuses: updatedCharacter.statuses,
+        inventory: updatedCharacter.inventory,
+        generalItems: updatedCharacter.generalItems,
+        spells: updatedCharacter.spells,
+      });
       if (!saveResult.localSaved && !saveResult.remoteSaved) {
         setMessage('Could not save changes.');
         return;

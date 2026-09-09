@@ -39,7 +39,7 @@ async function getFirestore() {
 
   try {
     const { initializeApp, getApps, getApp } = await import('firebase/app');
-    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or } = await import('firebase/firestore');
+    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or, onSnapshot } = await import('firebase/firestore');
 
     const app = getApps().length > 0 ? getApp() : initializeApp({
       apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -65,6 +65,7 @@ async function getFirestore() {
       where,
       arrayUnion,
       or,
+      onSnapshot,
     };
 
     return firestoreInstance;
@@ -83,6 +84,78 @@ const getLocalCharacters = (): CharacterData[] => JSON.parse(localStorage.getIte
 
 const setLocalCharacters = (characters: CharacterData[]) => {
   localStorage.setItem(STORAGE_KEY_LOCAL, JSON.stringify(characters));
+};
+
+export const updateCharacterFields = async (
+  characterId: string,
+  userId: string | null,
+  patch: Partial<CharacterData>,
+): Promise<CharacterSaveResult> => {
+  const localData: CharacterData[] = getLocalCharacters();
+  const existIdx = localData.findIndex(c => c.id === characterId);
+  const normalizedPatch = stripUndefinedDeep({ ...patch, updatedAt: Date.now() }) as Partial<CharacterData>;
+  if (existIdx >= 0) {
+    localData[existIdx] = { ...localData[existIdx], ...normalizedPatch, id: characterId };
+    setLocalCharacters(localData);
+  }
+
+  if (!userId || userId === 'guest') {
+    return { localSaved: true, remoteSaved: false, remoteSkipped: true };
+  }
+
+  const fs = await getFirestore();
+  if (!fs) return { localSaved: true, remoteSaved: false, remoteSkipped: true };
+
+  try {
+    await fs.setDoc(fs.doc(fs.db, 'characters', characterId), normalizedPatch, { merge: true });
+    return { localSaved: true, remoteSaved: true, remoteSkipped: false };
+  } catch (err) {
+    console.error('Failed to update character fields in Firestore:', err);
+    return { localSaved: true, remoteSaved: false, remoteSkipped: false, error: err };
+  }
+};
+
+export const subscribeCharacterById = (
+  characterId: string,
+  userId: string | null,
+  onChange: (character: CharacterData | null) => void,
+  onError: (error: unknown) => void,
+): (() => void) => {
+  let unsubscribe = () => {};
+  let disposed = false;
+
+  getFirestore()
+    .then((fs) => {
+      if (!fs) {
+        loadCharacterById(characterId, userId).then(onChange).catch(onError);
+        return;
+      }
+      unsubscribe = fs.onSnapshot(
+        fs.doc(fs.db, 'characters', characterId),
+        (snapshot: any) => {
+          if (disposed) return;
+          if (!snapshot.exists()) {
+            onChange(null);
+            return;
+          }
+          const data = { id: snapshot.id, ...snapshot.data() } as CharacterData;
+          const canRead = data.userId === userId
+            || data.visibility === 'public'
+            || !data.userId
+            || data.userId === 'guest'
+            || (!!userId && (data.controlUserIds || []).includes(userId))
+            || (!!userId && (data.viewUserIds || []).includes(userId));
+          onChange(canRead ? data : null);
+        },
+        onError,
+      );
+    })
+    .catch(onError);
+
+  return () => {
+    disposed = true;
+    unsubscribe();
+  };
 };
 
 const stripUndefinedDeep = (value: unknown): unknown => {
