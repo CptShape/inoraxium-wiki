@@ -12,7 +12,7 @@ import {
   CharacterStatus,
   StatusEffect,
 } from '../types/character';
-import { loadCharacterById, loadUserDiceSettings, saveCharacter, UserDiceSettings } from '../lib/firestore';
+import { loadCharacterById, loadUserDiceSettings, subscribeCharacterById, updateCharacterFields, UserDiceSettings } from '../lib/firestore';
 import { authProvider } from '../lib/auth';
 import { buildCharacterFormulaContext, buildCharacterSheetSyncValues, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula, getCharacterBarMode } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
@@ -506,34 +506,32 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   }, []);
 
   useEffect(() => {
-    let isMounted = true;
     const cachedCharacter = getCachedHomebrewCharacter(characterId);
     if (cachedCharacter) setCharacter(cachedCharacter);
     setIsLoading(!cachedCharacter);
     setError(null);
 
-    loadCharacterById(characterId, userId)
-      .then((loadedCharacter) => {
-        if (!isMounted) return;
+    const unsubscribe = subscribeCharacterById(
+      characterId,
+      userId,
+      (loadedCharacter) => {
         if (!loadedCharacter) {
           setCharacter(null);
           setError('This character could not be found, or you do not have access to it.');
         } else {
           setCharacter(loadedCharacter);
+          setError(null);
         }
-      })
-      .catch((err) => {
-        if (!isMounted) return;
+        setIsLoading(false);
+      },
+      (err) => {
         console.error(err);
         setError('Failed to load this homebrew library.');
-      })
-      .finally(() => {
-        if (isMounted) setIsLoading(false);
-      });
+        setIsLoading(false);
+      },
+    );
 
-    return () => {
-      isMounted = false;
-    };
+    return unsubscribe;
   }, [characterId, setCharacter, userId]);
 
   const meta = categoryMeta[category];
@@ -674,9 +672,19 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     return buildCharacterFormulaContext(character);
   }, [character]);
 
-  const persistHomebrewCharacter = useCallback(async (nextCharacter: CharacterData, successMessage = 'Updated.') => {
+  const persistHomebrewCharacter = useCallback(async (
+    draftCharacter: CharacterData,
+    successMessage = 'Updated.',
+    patchKeys: Array<keyof CharacterData>,
+  ) => {
+    const freshCharacter = await loadCharacterById(draftCharacter.id, userId);
+    const baseCharacter = freshCharacter || character || draftCharacter;
+    const patch = patchKeys.reduce<Partial<CharacterData>>((nextPatch, key) => {
+      return { ...nextPatch, [key]: draftCharacter[key] };
+    }, {});
+    const nextCharacter = { ...baseCharacter, ...patch, updatedAt: Date.now() };
     setCharacter(nextCharacter);
-    const saveResult = await saveCharacter(nextCharacter);
+    const saveResult = await updateCharacterFields(nextCharacter.id, userId, patch);
     if (!saveResult.localSaved && !saveResult.remoteSaved) {
       setActionMessage('Update could not be saved.');
       return;
@@ -695,7 +703,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       values: buildCharacterSheetSyncValues(nextCharacter),
     });
     setActionMessage(syncResult.success ? successMessage : `${successMessage} Spreadsheet: ${syncResult.message}`);
-  }, []);
+  }, [character, setCharacter, userId]);
 
   const resolveEffectTargetLabel = useCallback((effect: StatusEffect): string => {
     if (!character) return effect.targetLabel || effect.targetId || 'unknown_target';
@@ -893,6 +901,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     source?: Pick<CharacterStatus, 'linkedStatusSourceType' | 'linkedStatusSourceId' | 'linkedStatusSourceEffectId'> | null,
   ) => {
     if (!character || !canControlCharacter || effect.effectType !== 'status' || !effect.statusEntry) return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
     const newStatus: CharacterStatus = {
       id: `st_${uid()}`,
       name: effect.statusEntry.name || effect.statusName || 'Imported Status',
@@ -913,9 +922,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       folderId: effect.statusFolderId || null,
       ...(source || {}),
     };
-    const nextCharacter = { ...character, statuses: [...(character.statuses || []), newStatus] };
-    await persistHomebrewCharacter(nextCharacter, 'Status applied to character.');
-  }, [canControlCharacter, character, persistHomebrewCharacter]);
+    const nextCharacter = { ...baseCharacter, statuses: [...(baseCharacter.statuses || []), newStatus] };
+    await persistHomebrewCharacter(nextCharacter, 'Status applied to character.', ['statuses']);
+  }, [canControlCharacter, character, persistHomebrewCharacter, userId]);
 
   const submitLocalInputs = () => {
     if (!localInputRequest) return;
@@ -961,6 +970,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     ) => CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
   ) => {
     if (!character || !selectedEntry) return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
 
     const replaceEntry = <T extends { id: string }>(items: T[] | undefined) => (
       (items || []).map(item => (item.id === selectedEntry.entry.id ? updater(item as any) as T : item))
@@ -968,15 +978,25 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
     const nextCharacter: CharacterData =
       selectedEntry.kind === 'general-item'
-        ? { ...character, generalItems: replaceEntry(character.generalItems) }
+        ? { ...baseCharacter, generalItems: replaceEntry(baseCharacter.generalItems) }
         : selectedEntry.kind === 'inventory-item'
-          ? { ...character, inventory: replaceEntry(character.inventory) }
+          ? { ...baseCharacter, inventory: replaceEntry(baseCharacter.inventory) }
           : selectedEntry.kind === 'spell'
-            ? { ...character, spells: replaceEntry(character.spells) }
-            : { ...character, statuses: replaceEntry(character.statuses) };
+            ? { ...baseCharacter, spells: replaceEntry(baseCharacter.spells) }
+            : { ...baseCharacter, statuses: replaceEntry(baseCharacter.statuses) };
 
-    await persistHomebrewCharacter(nextCharacter);
-  }, [character, persistHomebrewCharacter, selectedEntry]);
+    await persistHomebrewCharacter(
+      nextCharacter,
+      'Updated.',
+      selectedEntry.kind === 'general-item'
+        ? ['generalItems']
+        : selectedEntry.kind === 'inventory-item'
+          ? ['inventory']
+          : selectedEntry.kind === 'spell'
+            ? ['spells']
+            : ['statuses'],
+    );
+  }, [character, persistHomebrewCharacter, selectedEntry, userId]);
 
   const editLocalVariableValue = useCallback(async (variable: CharacterLocalVariable) => {
     const nextValue = await requestFormulaEdit(
@@ -1044,38 +1064,49 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
   const deleteSelectedEntry = useCallback(async () => {
     if (!character || !selectedEntry || !canControlCharacter) return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
     const sourceType = selectedEntry.kind as NonNullable<CharacterStatus['linkedStatusSourceType']>;
     const sourceId = selectedEntry.entry.id;
-    const withoutLinkedStatuses = (character.statuses || []).filter(status => (
+    const withoutLinkedStatuses = (baseCharacter.statuses || []).filter(status => (
       !(status.linkedStatusSourceType === sourceType && status.linkedStatusSourceId === sourceId)
     ));
     const nextCharacter: CharacterData =
       selectedEntry.kind === 'general-item'
         ? {
-          ...character,
-          generalItems: (character.generalItems || []).filter(item => item.id !== sourceId),
+          ...baseCharacter,
+          generalItems: (baseCharacter.generalItems || []).filter(item => item.id !== sourceId),
           statuses: withoutLinkedStatuses,
         }
         : selectedEntry.kind === 'inventory-item'
           ? {
-            ...character,
-            inventory: (character.inventory || []).filter(item => item.id !== sourceId),
+            ...baseCharacter,
+            inventory: (baseCharacter.inventory || []).filter(item => item.id !== sourceId),
             statuses: withoutLinkedStatuses,
           }
           : selectedEntry.kind === 'spell'
             ? {
-              ...character,
-              spells: (character.spells || []).filter(item => item.id !== sourceId),
+              ...baseCharacter,
+              spells: (baseCharacter.spells || []).filter(item => item.id !== sourceId),
               statuses: withoutLinkedStatuses,
             }
             : {
-              ...character,
+              ...baseCharacter,
               statuses: withoutLinkedStatuses.filter(status => status.id !== sourceId),
             };
 
     setSelectedEntryKey(null);
-    await persistHomebrewCharacter(nextCharacter, 'Deleted.');
-  }, [canControlCharacter, character, persistHomebrewCharacter, selectedEntry]);
+    await persistHomebrewCharacter(
+      nextCharacter,
+      'Deleted.',
+      selectedEntry.kind === 'general-item'
+        ? ['generalItems', 'statuses']
+        : selectedEntry.kind === 'inventory-item'
+          ? ['inventory', 'statuses']
+          : selectedEntry.kind === 'spell'
+            ? ['spells', 'statuses']
+            : ['statuses'],
+    );
+  }, [canControlCharacter, character, persistHomebrewCharacter, selectedEntry, userId]);
 
   const buildStatusFromEffect = useCallback((effect: StatusEffect): CharacterStatus | null => {
     if (effect.effectType !== 'status' || !effect.statusEntry) return null;
@@ -1230,9 +1261,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
         : false;
 
     return (
-      <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto ${hasEntryControls ? 'relative pt-14' : ''}`}>
+      <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto`}>
         {hasEntryControls && (
-          <>
+          <div className="mb-5 flex items-center justify-between gap-3">
             <button
               type="button"
               onClick={() => {
@@ -1241,7 +1272,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 if (isControlledItem) void toggleSelectedItemEquipped();
               }}
               disabled={!canControlCharacter}
-              className={`absolute left-4 top-4 inline-grid h-10 w-10 place-items-center rounded-lg border text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
+              className={`inline-grid h-10 w-10 place-items-center rounded-lg border text-white shadow-sm transition disabled:cursor-not-allowed disabled:opacity-60 ${
                 isEntryEnabled
                   ? 'border-emerald-500/45 bg-emerald-600 hover:bg-emerald-500'
                   : 'border-amber-500/45 bg-amber-500 hover:bg-amber-400'
@@ -1258,12 +1289,12 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
               type="button"
               onClick={() => void deleteSelectedEntry()}
               disabled={!canControlCharacter}
-              className="absolute right-4 top-4 inline-grid h-10 w-10 place-items-center rounded-lg border border-rose-500/45 bg-rose-700 text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className="inline-grid h-10 w-10 place-items-center rounded-lg border border-rose-500/45 bg-rose-700 text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
               title={isControlledStatus ? 'Delete status' : 'Delete item'}
             >
               <Trash2 size={18} />
             </button>
-          </>
+          </div>
         )}
         {thumbUrl && (
           <a href={imageUrl || thumbUrl} target="_blank" rel="noreferrer" className="mb-5 block overflow-hidden rounded-2xl border border-amber-900/20 bg-amber-100/45">
@@ -1444,7 +1475,7 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#efe2bd] py-6 pl-4 pr-24 text-stone-900 xl:pl-6" style={parchmentBackground}>
-      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
+      <QuickTools character={character} canControl={canControlCharacter} userId={userId} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
           type="button"
