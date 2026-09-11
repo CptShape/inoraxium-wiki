@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
-import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload } from 'lucide-react';
+import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload, Copy } from 'lucide-react';
 import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
@@ -767,6 +767,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
   const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
   const [localInputError, setLocalInputError] = useState('');
+  const [itemUpdateIdsRequest, setItemUpdateIdsRequest] = useState<{
+    title: string;
+    ids: string[];
+    resolve: (ids: string[] | null) => void;
+  } | null>(null);
+  const [itemUpdateIdsDraft, setItemUpdateIdsDraft] = useState('');
+  const [itemUpdateChoiceRequest, setItemUpdateChoiceRequest] = useState<{
+    title: string;
+    items: Array<{ id: string; name: string; quantity: number; kind: 'general' | 'inventory' }>;
+    resolve: (item: { id: string; name: string; quantity: number; kind: 'general' | 'inventory' } | null) => void;
+  } | null>(null);
   const [charStatuses, setCharStatuses] = useState<CharacterStatus[]>([]);
   const [statusFolders, setStatusFolders] = useState<CharacterEntryFolder[]>([]);
   const [activeStatusCategoryId, setActiveStatusCategoryId] = useState<string | null>(null);
@@ -2653,6 +2664,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     if (discordErr) setDiceError(`Discord: ${discordErr}`);
   };
 
+  const copyEntryId = async (id: string) => {
+    try {
+      await navigator.clipboard.writeText(id);
+      setSheetSyncStatus({ tone: 'success', message: `Copied ID: ${id}` });
+    } catch {
+      setSheetSyncStatus({ tone: 'error', message: 'Clipboard access was blocked.' });
+    }
+  };
+
   const shareStatusAction = async (status: CharacterStatus, action: CharacterAction) => {
     const webhookUrl = mainDiceState.webhookUrl || '';
     if (!webhookUrl.trim()) {
@@ -3382,10 +3402,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   const cloneEffectForImport = (effect: Partial<StatusEffect> = {}): StatusEffect => ({
     id: `eff_${uid()}`,
-    effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' ? effect.effectType : 'attribute',
+    effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' || effect.effectType === 'item-update' ? effect.effectType : 'attribute',
     targetId: typeof effect.targetId === 'string' ? effect.targetId : '',
     value: typeof effect.value === 'string' ? effect.value : '0',
     canOverflow: effect.canOverflow ?? false,
+    itemUpdateArrayMode: effect.itemUpdateArrayMode ?? false,
+    itemUpdateIds: Array.isArray(effect.itemUpdateIds) ? effect.itemUpdateIds.filter((id): id is string => typeof id === 'string') : [],
     active: effect.active ?? true,
     useTargetPicker: effect.useTargetPicker ?? false,
     targetLabel: typeof effect.targetLabel === 'string' ? effect.targetLabel : undefined,
@@ -3768,6 +3790,31 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     canOverflow: false,
     active: true,
   });
+
+  const buildItemUpdateEffect = (): StatusEffect => ({
+    id: `eff_${uid()}`,
+    effectType: 'item-update',
+    targetId: '',
+    value: '0',
+    itemUpdateArrayMode: false,
+    itemUpdateIds: [],
+    active: true,
+  });
+
+  const requestItemUpdateIds = (title: string, ids: string[] = []): Promise<string[] | null> => (
+    new Promise((resolve) => {
+      setItemUpdateIdsDraft(ids.join('\n'));
+      setItemUpdateIdsRequest({
+        title,
+        ids,
+        resolve: (nextIds) => {
+          setItemUpdateIdsRequest(null);
+          setItemUpdateIdsDraft('');
+          resolve(nextIds);
+        },
+      });
+    })
+  );
 
   const requestBarUpdateTarget = (description: string): Promise<string> => {
     if (bars.length === 0) {
@@ -4156,6 +4203,58 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         currentValue: `${Math.round(nextCurrent * 100) / 100}`,
       };
     }));
+  };
+
+  const requestItemUpdateChoice = (title: string, items: Array<{ id: string; name: string; quantity: number; kind: 'general' | 'inventory' }>) => (
+    new Promise<{ id: string; name: string; quantity: number; kind: 'general' | 'inventory' } | null>((resolve) => {
+      setItemUpdateChoiceRequest({
+        title,
+        items,
+        resolve: (item) => {
+          setItemUpdateChoiceRequest(null);
+          resolve(item);
+        },
+      });
+    })
+  );
+
+  const applyItemUpdateEffect = async (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
+    if (effect.effectType !== 'item-update') return;
+    const context = getCharacterContext();
+    const localContext = await getLocalVariableContextWithInputs(
+      localVariables,
+      context,
+      effect.value || '0',
+      'Item Update Input Values',
+    );
+    if (!localContext) return;
+    const delta = evalCharFormula(effect.value || '0', context, localContext);
+    if (!Number.isFinite(delta)) return;
+
+    const ids = Array.from(new Set((effect.itemUpdateArrayMode ? effect.itemUpdateIds || [] : [effect.targetId || '']).map(id => id.trim()).filter(Boolean)));
+    const choices = ids.flatMap((id) => {
+      const generalItem = charGeneralItems.find(item => item.id === id);
+      if (generalItem) return [{ id, name: generalItem.name || id, quantity: Number(generalItem.quantity || 0), kind: 'general' as const }];
+      const inventoryItem = charInventory.find(item => item.id === id);
+      if (inventoryItem) return [{ id, name: inventoryItem.name || id, quantity: Number(inventoryItem.quantity || 0), kind: 'inventory' as const }];
+      return [];
+    });
+    if (choices.length === 0) return;
+
+    const selectedItem = effect.itemUpdateArrayMode ? await requestItemUpdateChoice('Choose Item To Update', choices) : choices[0];
+    if (!selectedItem) return;
+    const nextQuantity = Math.round((selectedItem.quantity + Math.round(delta * 100) / 100) * 100) / 100;
+    if (selectedItem.kind === 'general') {
+      setCharGeneralItems(prev => prev.map(item => item.id === selectedItem.id ? { ...item, quantity: nextQuantity } : item));
+    } else {
+      setCharInventory(prev => prev.map(item => item.id === selectedItem.id ? { ...item, quantity: nextQuantity } : item));
+    }
+    setSheetSyncStatus({
+      tone: nextQuantity < 0 ? 'error' : 'success',
+      message: nextQuantity < 0
+        ? "Eşyanın quantity'si 0'ın altına düştü"
+        : `${selectedItem.name}: ${selectedItem.quantity} → ${nextQuantity}`,
+    });
   };
 
   const getScriptRuntimeLocalVariables = (script: CharacterScript): CharacterLocalVariable[] | undefined => {
@@ -6215,6 +6314,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   const handleSaveAll = async () => {
     if (!selectedCharacter) return;
+    const sheetTabBeforeSave = activeSheetTab;
 
     if (!isCharacterOwner) {
       if (!canEditInventory) return;
@@ -6223,6 +6323,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       const updated = { ...selectedCharacter, generalItems: normalizedGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders };
       setCharacters(prev => prev.map(c => (c.id === selectedCharacter.id ? { ...c, generalItems: normalizedGeneralItems, inventory: charInventory, inventoryFolders, collapsedInventoryFolderIds: collapsedInventoryFolders } : c)));
       setSelectedCharacter(updated);
+      setActiveSheetTab(sheetTabBeforeSave);
       if (updated.sendToSpreadsheet ?? true) {
         const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
         setIsSheetSyncing(true);
@@ -6298,6 +6399,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     const saveResult = await saveCharacter(updated);
     setCharacters(characters.map(c => (c.id === updated.id ? updated : c)));
     setSelectedCharacter(updated);
+    setActiveSheetTab(sheetTabBeforeSave);
     if (!saveResult.remoteSaved && !saveResult.remoteSkipped) {
       window.alert('Character was saved locally, but Firestore save failed. Your browser has the changes, but the database does not yet.');
       setSheetSyncStatus({
@@ -6801,6 +6903,103 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               style={{ fontFamily: "'Cinzel', serif" }}
             >
               Apply
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderItemUpdateIdsModal = () => {
+    if (!itemUpdateIdsRequest) return null;
+
+    const submitIds = () => {
+      const ids = Array.from(new Set(
+        itemUpdateIdsDraft
+          .split(/[\r\n,]+/)
+          .map(id => id.trim())
+          .filter(Boolean)
+      ));
+      itemUpdateIdsRequest.resolve(ids);
+    };
+
+    return (
+      <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-emerald-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(16,185,129,0.18)]">
+          <h3 className="text-lg font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            {itemUpdateIdsRequest.title}
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            Add one item ID per line, or separate IDs with commas.
+          </p>
+          <textarea
+            autoFocus
+            value={itemUpdateIdsDraft}
+            onChange={(event) => setItemUpdateIdsDraft(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key === 'Escape') itemUpdateIdsRequest.resolve(null);
+              if (event.key === 'Enter' && (event.ctrlKey || event.metaKey)) submitIds();
+            }}
+            rows={8}
+            className="mt-4 w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-emerald-100 focus:border-emerald-500/60 focus:outline-none"
+            placeholder="item_abc&#10;item_xyz"
+          />
+          <div className="mt-5 flex justify-end gap-2">
+            <button
+              onClick={() => itemUpdateIdsRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel
+            </button>
+            <button
+              onClick={submitIds}
+              className="rounded-lg border border-emerald-500/60 bg-emerald-900/40 px-4 py-2 text-sm font-bold text-emerald-100 transition hover:bg-emerald-800/55"
+              style={{ fontFamily: "'Cinzel', serif" }}
+            >
+              Save IDs
+            </button>
+          </div>
+        </div>
+      </div>
+    );
+  };
+
+  const renderItemUpdateChoiceModal = () => {
+    if (!itemUpdateChoiceRequest) return null;
+
+    return (
+      <div className="fixed inset-0 z-[130] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+        <div className="w-full max-w-lg rounded-2xl border border-emerald-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(16,185,129,0.18)]">
+          <h3 className="text-lg font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>
+            {itemUpdateChoiceRequest.title}
+          </h3>
+          <p className="mt-2 text-sm leading-relaxed text-stone-300">
+            Choose which item should receive this quantity update.
+          </p>
+          <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+            {itemUpdateChoiceRequest.items.map((item) => (
+              <button
+                key={`${item.kind}:${item.id}`}
+                type="button"
+                onClick={() => itemUpdateChoiceRequest.resolve(item)}
+                className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-emerald-900/35 bg-emerald-950/15 p-3 text-left transition hover:border-emerald-500/60 hover:bg-emerald-900/25"
+              >
+                <span className="min-w-0">
+                  <span className="block truncate text-sm font-bold text-emerald-100">{item.name}</span>
+                  <span className="block truncate font-mono text-xs text-stone-500">{item.id}</span>
+                </span>
+                <span className="self-center rounded-lg border border-emerald-600/30 bg-black/30 px-3 py-1 font-mono text-sm text-emerald-100">
+                  Qty {item.quantity}
+                </span>
+              </button>
+            ))}
+          </div>
+          <div className="mt-5 flex justify-end">
+            <button
+              onClick={() => itemUpdateChoiceRequest.resolve(null)}
+              className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+            >
+              Cancel
             </button>
           </div>
         </div>
@@ -7534,6 +7733,77 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           );
         }
 
+        if (effect.effectType === 'item-update') {
+          const ids = effect.itemUpdateArrayMode ? (effect.itemUpdateIds || []) : [effect.targetId].filter(Boolean);
+          const itemSummary = ids.length === 0
+            ? 'Choose item IDs'
+            : ids.length === 1
+              ? ids[0]
+              : `${ids.length} item IDs`;
+          return (
+            <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_auto_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-center">
+              <button
+                onClick={() => applyItemUpdateEffect(effect, localVariables)}
+                disabled={!canEdit}
+                className="h-8 min-w-[4.5rem] px-2 rounded border text-xs font-bold justify-self-start bg-teal-900/30 border-teal-700/50 text-teal-200 hover:bg-teal-900/50 cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed"
+                title="Apply item quantity update"
+              >
+                Apply
+              </button>
+              <button
+                onClick={() => onUpdate(effectIndex, current => ({
+                  ...current,
+                  itemUpdateArrayMode: !(current.itemUpdateArrayMode ?? false),
+                  itemUpdateIds: current.itemUpdateIds || (current.targetId ? [current.targetId] : []),
+                }))}
+                disabled={!canEdit}
+                className={`h-8 w-9 rounded border grid place-items-center transition-all cursor-pointer disabled:opacity-40 disabled:cursor-not-allowed ${(effect.itemUpdateArrayMode ?? false) ? 'bg-teal-900/35 border-teal-400/50 text-teal-200' : 'bg-stone-900/40 border-stone-700/60 text-stone-500'}`}
+                title={(effect.itemUpdateArrayMode ?? false) ? 'Array mode' : 'Single item id mode'}
+              >
+                <Crown size={14} fill={(effect.itemUpdateArrayMode ?? false) ? 'currentColor' : 'none'} />
+              </button>
+              {(effect.itemUpdateArrayMode ?? false) ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    void requestItemUpdateIds('Item Update IDs', effect.itemUpdateIds || [])
+                      .then((nextIds) => {
+                        if (!nextIds) return;
+                        onUpdate(effectIndex, current => ({ ...current, itemUpdateIds: nextIds }));
+                      });
+                  }}
+                  disabled={!canEdit}
+                  className="min-w-0 truncate bg-stone-900 border border-stone-800 rounded px-3 py-2 text-left text-sm text-teal-200 font-mono focus:outline-none hover:border-teal-500/50 hover:bg-teal-950/30 disabled:opacity-60"
+                >
+                  {itemSummary}
+                </button>
+              ) : (
+                <input
+                  value={effect.targetId}
+                  onChange={(e) => onUpdate(effectIndex, current => ({ ...current, targetId: e.target.value }))}
+                  disabled={!canEdit}
+                  placeholder="Item ID"
+                  className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-teal-200 font-mono focus:outline-none disabled:opacity-60"
+                />
+              )}
+              <input
+                value={effect.value}
+                onChange={(e) => onUpdate(effectIndex, current => ({ ...current, value: e.target.value }))}
+                disabled={!canEdit}
+                placeholder="Quantity formula (e.g. -1)"
+                className="bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-teal-200 font-mono focus:outline-none disabled:opacity-60"
+              />
+              {canEdit ? (
+                <button onClick={() => onRemove(effectIndex)} className="text-stone-600 hover:text-red-400 cursor-pointer justify-self-end">
+                  <Trash2 size={14} />
+                </button>
+              ) : (
+                <div />
+              )}
+            </div>
+          );
+        }
+
         return (
           <div key={effect.id || effectIndex} className="grid grid-cols-1 md:grid-cols-[auto_auto_minmax(0,1fr)_minmax(0,1fr)_auto] gap-2 items-center">
             <button
@@ -7839,6 +8109,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
                             >
                               + Bar Update
+                            </button>
+                            <button
+                              onClick={() => updateStatusAction(status.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                              className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                            >
+                              + Item Update
                             </button>
                           </div>
                         )}
@@ -8264,6 +8540,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         {renderBarTargetResolverModal()}
         {renderEffectTargetResolverModal()}
         {renderLocalInputModal()}
+        {renderItemUpdateIdsModal()}
+        {renderItemUpdateChoiceModal()}
         {renderScriptValueTargetResolverModal()}
         {rollPopupResult && (
           <button
@@ -11203,6 +11481,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                             <Share2 size={12} /> Share Web
                           </button>
                           <button
+                            onClick={() => void copyEntryId(status.id)}
+                            className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded hover:bg-amber-900/20 cursor-pointer"
+                            title={`Copy ID: ${status.id}`}
+                          >
+                            <Copy size={12} /> ID
+                          </button>
+                          <button
                             onClick={() => exportCharacterEntry('status', status, statusFolders.find(folder => folder.id === status.folderId)?.name || null)}
                             className="inline-flex items-center gap-1 px-2 py-1 text-xs text-emerald-300 hover:text-emerald-200 border border-emerald-800/30 rounded hover:bg-emerald-900/20 cursor-pointer"
                           >
@@ -11448,6 +11733,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                               >
                                 + Bar Update
                               </button>
+                              <button
+                                onClick={() => {
+                                  const next = [...charStatuses];
+                                  next[actualIndex].effects = [...(next[actualIndex].effects || []), buildItemUpdateEffect()];
+                                  setCharStatuses(next);
+                                }}
+                                className="text-sm bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300"
+                              >
+                                + Item Update
+                              </button>
                             </div>
                           )}
                         </div>
@@ -11606,6 +11901,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                     className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
                                   >
                                     <Share2 size={12} /> Share Web
+                                  </button>
+                                  <button
+                                    onClick={() => void copyEntryId(item.id)}
+                                    className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded hover:bg-amber-900/20 cursor-pointer"
+                                    title={`Copy ID: ${item.id}`}
+                                  >
+                                    <Copy size={12} /> ID
                                   </button>
                                   <button
                                     onClick={() => exportCharacterEntry('item', itemState, null)}
@@ -11878,6 +12180,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                                     >
                                                       + Bar Update
                                                     </button>
+                                                    <button
+                                                      onClick={() => updateGeneralAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                                                      className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                                                    >
+                                                      + Item Update
+                                                    </button>
                                                   </div>
                                                 )}
                                               </div>
@@ -11923,6 +12231,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                           className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
                                         >
                                           + Bar Update
+                                        </button>
+                                        <button
+                                          onClick={() => updateGeneralItem(item.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                                          className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                                        >
+                                          + Item Update
                                         </button>
                                       </div>
                                     )}
@@ -12069,6 +12383,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                 className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
                               >
                                 <Share2 size={12} /> Share Web
+                              </button>
+                              <button
+                                onClick={() => void copyEntryId(item.id)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded hover:bg-amber-900/20 cursor-pointer"
+                                title={`Copy ID: ${item.id}`}
+                              >
+                                <Copy size={12} /> ID
                               </button>
                               <button
                                 onClick={() => exportCharacterEntry('item', item, inventoryFolders.find(folder => folder.id === item.folderId)?.name || null)}
@@ -12429,6 +12750,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                               >
                                                 + Bar Update
                                               </button>
+                                              <button
+                                                onClick={() => updateInventoryAction(item.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                                                className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                                              >
+                                                + Item Update
+                                              </button>
                                             </div>
                                           )}
                                         </div>
@@ -12479,6 +12806,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                     className="text-xs bg-cyan-900/20 hover:bg-cyan-900/40 px-2 py-1 rounded text-cyan-300 cursor-pointer"
                                   >
                                     + Bar Update
+                                  </button>
+                                  <button
+                                    onClick={() => updateInventoryItem(item.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                                    className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                                  >
+                                    + Item Update
                                   </button>
                                 </div>
                               )}
@@ -12706,6 +13039,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                 className="inline-flex items-center gap-1 px-2 py-1 text-xs text-indigo-300 hover:text-indigo-200 border border-indigo-800/30 rounded hover:bg-indigo-900/20 cursor-pointer"
                               >
                                 <Share2 size={12} /> Share Web
+                              </button>
+                              <button
+                                onClick={() => void copyEntryId(spell.id)}
+                                className="inline-flex items-center gap-1 px-2 py-1 text-xs text-amber-300 hover:text-amber-200 border border-amber-800/30 rounded hover:bg-amber-900/20 cursor-pointer"
+                                title={`Copy ID: ${spell.id}`}
+                              >
+                                <Copy size={12} /> ID
                               </button>
                               <button
                                 onClick={() => exportCharacterEntry('spell', spell, spellFolders.find(folder => folder.id === spell.folderId)?.name || null)}
@@ -13091,6 +13431,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                               >
                                                 + Bar Update
                                               </button>
+                                              <button
+                                                onClick={() => updateSpellAction(spell.id, action.id, current => ({ ...current, effects: [...(current.effects || []), buildItemUpdateEffect()] }))}
+                                                className="text-xs bg-emerald-900/20 hover:bg-emerald-900/40 px-2 py-1 rounded text-emerald-300 cursor-pointer"
+                                              >
+                                                + Item Update
+                                              </button>
                                             </div>
                                           )}
                                         </div>
@@ -13148,6 +13494,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       {renderBarTargetResolverModal()}
       {renderEffectTargetResolverModal()}
       {renderLocalInputModal()}
+      {renderItemUpdateIdsModal()}
+      {renderItemUpdateChoiceModal()}
       {renderScriptValueTargetResolverModal()}
       {rollPopupResult && (
         <button

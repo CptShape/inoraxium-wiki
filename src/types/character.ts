@@ -191,10 +191,12 @@ export interface CharacterInventoryItem {
 
 export interface StatusEffect {
   id?: string;
-  effectType?: 'attribute' | 'status' | 'bar-update';
+  effectType?: 'attribute' | 'status' | 'bar-update' | 'item-update';
   targetId: string;
   value: string;
   canOverflow?: boolean;
+  itemUpdateArrayMode?: boolean;
+  itemUpdateIds?: string[];
   active?: boolean;
   useTargetPicker?: boolean;
   targetLabel?: string;
