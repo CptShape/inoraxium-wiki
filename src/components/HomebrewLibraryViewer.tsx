@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { ArrowLeft, BookOpen, Dices, FolderOpen, ImageIcon, Layers3, PackageCheck, Power, Search, Shield, Sparkles, Trash2 } from 'lucide-react';
+import { ArrowLeft, BookOpen, Copy, Dices, FolderOpen, ImageIcon, Layers3, PackageCheck, Power, Search, Shield, Sparkles, Trash2 } from 'lucide-react';
 import {
   CharacterAction,
   CharacterDiceMacro,
@@ -54,6 +54,33 @@ interface RollResult {
   outcome?: 'success' | 'failure';
   dc?: number;
   rollTotal?: number;
+}
+
+interface BarUpdateResult {
+  barId: string;
+  barName: string;
+  formula: string;
+  delta: number;
+  previousValue: number;
+  nextValue: number;
+  timestamp: number;
+}
+
+interface ItemUpdateResult {
+  itemId: string;
+  itemName: string;
+  formula: string;
+  delta: number;
+  previousQuantity: number;
+  nextQuantity: number;
+  timestamp: number;
+}
+
+interface ItemUpdateChoice {
+  id: string;
+  name: string;
+  quantity: number;
+  kind: 'generalItems' | 'inventory';
 }
 
 interface StatusExportPayload {
@@ -293,6 +320,8 @@ const renderEffectPill = (
   autoStatusEffect = false,
   onShowAppliedStatuses?: (effect: StatusEffect, effectIndex: number) => void,
   onPreviewStatus?: (effect: StatusEffect) => void,
+  onApplyBarUpdate?: (effect: StatusEffect, effectIndex: number) => void,
+  onApplyItemUpdate?: (effect: StatusEffect, effectIndex: number) => void,
 ) => {
   const targetLabel = resolveEffectTargetLabel?.(effect) || effect.targetLabel || effect.targetId || 'unknown_target';
   if (effect.effectType === 'status') {
@@ -341,9 +370,35 @@ const renderEffectPill = (
 
   if (effect.effectType === 'bar-update') {
     return (
-      <div key={`effect-${index}`} className="rounded-xl border border-sky-900/15 bg-sky-100/45 px-3 py-2 text-sm text-stone-800">
+      <button
+        key={`effect-${index}`}
+        type="button"
+        onClick={() => onApplyBarUpdate?.(effect, index)}
+        disabled={!onApplyBarUpdate}
+        className="w-full rounded-xl border border-sky-900/15 bg-sky-100/45 px-3 py-2 text-left text-sm text-stone-800 transition hover:border-sky-700/35 hover:bg-sky-100/75 disabled:cursor-not-allowed disabled:opacity-60"
+        title="Apply bar update"
+      >
         <span className="font-bold text-sky-950">Bar:</span> {targetLabel || effect.barUpdateDescription || 'Target bar'} {effect.value || '0'}
-      </div>
+      </button>
+    );
+  }
+
+  if (effect.effectType === 'item-update') {
+    const ids = effect.itemUpdateArrayMode ? (effect.itemUpdateIds || []) : [effect.targetId].filter(Boolean);
+    const itemLabel = effect.itemUpdateArrayMode
+      ? ids.length > 0 ? `${ids.length} item${ids.length === 1 ? '' : 's'}` : 'Choose item'
+      : effect.targetId || 'Item ID';
+    return (
+      <button
+        key={`effect-${index}`}
+        type="button"
+        onClick={() => onApplyItemUpdate?.(effect, index)}
+        disabled={!onApplyItemUpdate}
+        className="w-full rounded-xl border border-emerald-900/15 bg-emerald-100/45 px-3 py-2 text-left text-sm text-stone-800 transition hover:border-emerald-700/35 hover:bg-emerald-100/75 disabled:cursor-not-allowed disabled:opacity-60"
+        title="Apply item quantity update"
+      >
+        <span className="font-bold text-emerald-950">Item:</span> {itemLabel} <span className="font-mono text-amber-900">{effect.value || '0'}</span>
+      </button>
     );
   }
 
@@ -371,6 +426,8 @@ const renderActionBlock = (
   autoStatusEffect = false,
   onShowAppliedStatuses?: (effect: StatusEffect, effectIndex: number) => void,
   onPreviewStatus?: (effect: StatusEffect) => void,
+  onApplyBarUpdate?: (effect: StatusEffect, effectIndex: number) => void,
+  onApplyItemUpdate?: (effect: StatusEffect, effectIndex: number) => void,
 ) => (
   <div key={action.id} className="rounded-xl border border-amber-900/15 bg-black/5 p-4">
     <div className="mb-2 flex flex-wrap items-center gap-3">
@@ -429,6 +486,8 @@ const renderActionBlock = (
           autoStatusEffect,
           onShowAppliedStatuses,
           onPreviewStatus,
+          onApplyBarUpdate,
+          onApplyItemUpdate,
         ))}
       </div>
     )}
@@ -452,6 +511,14 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [diceSettings, setDiceSettings] = useState<UserDiceSettings>({ macros: [], webhookUrl: '', autoSend: false });
   const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
+  const [barUpdateResult, setBarUpdateResult] = useState<BarUpdateResult | null>(null);
+  const [itemUpdateResult, setItemUpdateResult] = useState<ItemUpdateResult | null>(null);
+  const [itemUpdateWarning, setItemUpdateWarning] = useState<string | null>(null);
+  const [itemUpdateChoiceRequest, setItemUpdateChoiceRequest] = useState<{
+    title: string;
+    items: ItemUpdateChoice[];
+    resolve: (item: ItemUpdateChoice | null) => void;
+  } | null>(null);
   const [localInputRequest, setLocalInputRequest] = useState<{ title: string; variables: CharacterLocalVariable[]; resolve: (values: Record<string, number> | null) => void } | null>(null);
   const [localInputDrafts, setLocalInputDrafts] = useState<Record<string, string>>({});
   const [localInputError, setLocalInputError] = useState('');
@@ -498,6 +565,27 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     rollPopupTimeoutRef.current = window.setTimeout(() => {
       setRollPopupResult(null);
       rollPopupTimeoutRef.current = null;
+    }, 10000);
+  }, []);
+
+  const showBarUpdatePopup = useCallback((result: BarUpdateResult) => {
+    setBarUpdateResult(result);
+    window.setTimeout(() => {
+      setBarUpdateResult(current => (current?.timestamp === result.timestamp ? null : current));
+    }, 10000);
+  }, []);
+
+  const showItemUpdatePopup = useCallback((result: ItemUpdateResult) => {
+    setItemUpdateResult(result);
+    window.setTimeout(() => {
+      setItemUpdateResult(current => (current?.timestamp === result.timestamp ? null : current));
+    }, 10000);
+  }, []);
+
+  const showItemUpdateWarning = useCallback((message: string) => {
+    setItemUpdateWarning(message);
+    window.setTimeout(() => {
+      setItemUpdateWarning(current => (current === message ? null : current));
     }, 10000);
   }, []);
 
@@ -837,6 +925,44 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
     return { ...localContext, ...inputValues };
   }, [getLocalVariableContext, requestLocalInputValues]);
 
+  const getItemUpdateChoices = useCallback((sourceCharacter: CharacterData, ids: string[]): ItemUpdateChoice[] => {
+    const requestedIds = Array.from(new Set(ids.map(id => id.trim()).filter(Boolean)));
+    return requestedIds.flatMap((id) => {
+      const generalItem = (sourceCharacter.generalItems || []).find(item => item.id === id);
+      if (generalItem) {
+        return [{
+          id,
+          name: generalItem.name || id,
+          quantity: Number(generalItem.quantity ?? 0),
+          kind: 'generalItems' as const,
+        }];
+      }
+      const inventoryItem = (sourceCharacter.inventory || []).find(item => item.id === id);
+      if (inventoryItem) {
+        return [{
+          id,
+          name: inventoryItem.name || id,
+          quantity: Number(inventoryItem.quantity ?? 0),
+          kind: 'inventory' as const,
+        }];
+      }
+      return [];
+    });
+  }, []);
+
+  const requestItemUpdateChoice = useCallback((title: string, items: ItemUpdateChoice[]): Promise<ItemUpdateChoice | null> => (
+    new Promise((resolve) => {
+      setItemUpdateChoiceRequest({
+        title,
+        items,
+        resolve: (item) => {
+          setItemUpdateChoiceRequest(null);
+          resolve(item);
+        },
+      });
+    })
+  ), []);
+
   const executeMacro = useCallback((macro: CharacterDiceMacro, context: Record<string, number>, localContext: Record<string, number>): RollResult => {
     const steps: RollStep[] = [];
     const resolvedParts: string[] = [];
@@ -895,6 +1021,166 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       setActionMessage(discordErr ? `Discord: ${discordErr}` : null);
     }
   }, [character?.name, characterId, diceSettings.autoSend, diceSettings.webhookUrl, executeMacro, getCharacterContext, getLocalVariableContextWithInputs, showRollPopup]);
+
+  const applyBarUpdateEffect = useCallback(async (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
+    if (!character || !canControlCharacter || effect.effectType !== 'bar-update' || !effect.targetId) return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
+    const context = buildCharacterFormulaContext(baseCharacter);
+    const localContext = await getLocalVariableContextWithInputs(
+      localVariables,
+      context,
+      effect.value || '0',
+      'Bar Update Input Values',
+    );
+    if (!localContext) return;
+    const delta = evalCharacterFormula(effect.value || '0', context, localContext);
+    if (!Number.isFinite(delta)) {
+      setActionMessage('Bar update formula did not return a valid number.');
+      return;
+    }
+
+    const targetBar = (baseCharacter.bars || []).find(bar => bar.id === effect.targetId);
+    if (!targetBar) {
+      setActionMessage('Target bar could not be found.');
+      return;
+    }
+
+    const previousValue = evalCharacterFormula(targetBar.currentValue || '0', context);
+    const unclampedNext = previousValue + delta;
+    const max = getCharacterBarMode(targetBar) === 'resource' ? 0 : evalCharacterFormula(targetBar.maxValue || '0', context);
+    const shouldClamp = !(effect.canOverflow ?? false);
+    const nextValue = getCharacterBarMode(targetBar) === 'resource' || !shouldClamp || !Number.isFinite(max) || max <= 0
+      ? unclampedNext
+      : Math.min(unclampedNext, max);
+    const roundedNextValue = Math.round(nextValue * 100) / 100;
+
+    const nextBars = (baseCharacter.bars || []).map(bar => (
+      bar.id === targetBar.id ? { ...bar, currentValue: `${roundedNextValue}` } : bar
+    ));
+    const nextCharacter = { ...baseCharacter, bars: nextBars, updatedAt: Date.now() };
+    setCharacter(nextCharacter);
+    const saveResult = await updateCharacterFields(nextCharacter.id, userId, { bars: nextBars });
+    if (!saveResult.localSaved && !saveResult.remoteSaved) {
+      setActionMessage('Bar update could not be saved.');
+      return;
+    }
+    showBarUpdatePopup({
+      barId: targetBar.id,
+      barName: targetBar.name || targetBar.id,
+      formula: effect.value || '0',
+      delta: Math.round(delta * 100) / 100,
+      previousValue: Math.round(previousValue * 100) / 100,
+      nextValue: roundedNextValue,
+      timestamp: Date.now(),
+    });
+  }, [canControlCharacter, character, getLocalVariableContextWithInputs, setCharacter, showBarUpdatePopup, userId]);
+
+  const applyItemUpdateEffect = useCallback(async (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
+    if (!character || !canControlCharacter || effect.effectType !== 'item-update') return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
+    const context = buildCharacterFormulaContext(baseCharacter);
+    const localContext = await getLocalVariableContextWithInputs(
+      localVariables,
+      context,
+      effect.value || '0',
+      'Item Update Input Values',
+    );
+    if (!localContext) return;
+
+    const delta = evalCharacterFormula(effect.value || '0', context, localContext);
+    if (!Number.isFinite(delta)) {
+      setActionMessage('Item update formula did not return a valid number.');
+      return;
+    }
+
+    const ids = effect.itemUpdateArrayMode
+      ? (effect.itemUpdateIds || [])
+      : [effect.targetId || ''];
+    const choices = getItemUpdateChoices(baseCharacter, ids);
+    if (choices.length === 0) {
+      setActionMessage('Target item could not be found.');
+      return;
+    }
+
+    const selectedItem = effect.itemUpdateArrayMode
+      ? await requestItemUpdateChoice('Choose Item To Update', choices)
+      : choices[0];
+    if (!selectedItem) return;
+
+    const roundedDelta = Math.round(delta * 100) / 100;
+    const nextQuantity = Math.round((selectedItem.quantity + roundedDelta) * 100) / 100;
+    let nextCharacter: CharacterData;
+    let saveResult: Awaited<ReturnType<typeof updateCharacterFields>>;
+    if (selectedItem.kind === 'generalItems') {
+      const nextGeneralItems = (baseCharacter.generalItems || []).map(item => (
+        item.id === selectedItem.id ? { ...item, quantity: nextQuantity } : item
+      ));
+      nextCharacter = { ...baseCharacter, generalItems: nextGeneralItems, updatedAt: Date.now() };
+      setCharacter(nextCharacter);
+      saveResult = await updateCharacterFields(nextCharacter.id, userId, { generalItems: nextGeneralItems });
+    } else {
+      const nextInventory = (baseCharacter.inventory || []).map(item => (
+        item.id === selectedItem.id ? { ...item, quantity: nextQuantity } : item
+      ));
+      nextCharacter = { ...baseCharacter, inventory: nextInventory, updatedAt: Date.now() };
+      setCharacter(nextCharacter);
+      saveResult = await updateCharacterFields(nextCharacter.id, userId, { inventory: nextInventory });
+    }
+
+    if (!saveResult.localSaved && !saveResult.remoteSaved) {
+      setActionMessage('Item update could not be saved.');
+      return;
+    }
+
+    if (nextCharacter.sendToSpreadsheet ?? true) {
+      const syncResult = await syncCharacterSheet({
+        characterId: nextCharacter.id,
+        characterName: nextCharacter.name,
+        sheetId: DEFAULT_CHARACTER_SYNC_SHEET_ID,
+        tabName: DEFAULT_CHARACTER_SYNC_TAB_NAME,
+        values: buildCharacterSheetSyncValues(nextCharacter),
+      });
+      if (!syncResult.success) {
+        setActionMessage(`Item updated. Spreadsheet: ${syncResult.message}`);
+      }
+    }
+
+    showItemUpdatePopup({
+      itemId: selectedItem.id,
+      itemName: selectedItem.name,
+      formula: effect.value || '0',
+      delta: roundedDelta,
+      previousQuantity: selectedItem.quantity,
+      nextQuantity,
+      timestamp: Date.now(),
+    });
+    if (nextQuantity < 0) {
+      showItemUpdateWarning("Eşyanın quantity'si 0'ın altına düştü");
+    }
+  }, [
+    canControlCharacter,
+    character,
+    getItemUpdateChoices,
+    getLocalVariableContextWithInputs,
+    requestItemUpdateChoice,
+    setCharacter,
+    showItemUpdatePopup,
+    showItemUpdateWarning,
+    userId,
+  ]);
+
+  const undoBarUpdate = useCallback(async (result: BarUpdateResult) => {
+    if (!character || !canControlCharacter) return;
+    const baseCharacter = await loadCharacterById(character.id, userId) || character;
+    const nextBars = (baseCharacter.bars || []).map(bar => (
+      bar.id === result.barId ? { ...bar, currentValue: `${result.previousValue}` } : bar
+    ));
+    const nextCharacter = { ...baseCharacter, bars: nextBars, updatedAt: Date.now() };
+    setCharacter(nextCharacter);
+    const saveResult = await updateCharacterFields(nextCharacter.id, userId, { bars: nextBars });
+    setBarUpdateResult(null);
+    setActionMessage(saveResult.localSaved || saveResult.remoteSaved ? `${result.barName} restored.` : 'Bar update could not be restored.');
+  }, [canControlCharacter, character, setCharacter, userId]);
 
   const applyStatusEffect = useCallback(async (
     effect: StatusEffect,
@@ -1314,9 +1600,23 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
         <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-amber-900/20 bg-amber-100/60 px-3 py-1 text-xs uppercase tracking-[0.24em] text-amber-950">
           {selectedEntry.kind.replace('-', ' ')}
         </div>
-        <h2 className="text-4xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
-          {getEntryName(selectedEntry)}
-        </h2>
+        <div className="mt-1 flex items-start gap-3">
+          <h2 className="min-w-0 flex-1 text-4xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
+            {getEntryName(selectedEntry)}
+          </h2>
+          <button
+            type="button"
+            onClick={() => {
+              navigator.clipboard.writeText(entry.id)
+                .then(() => setActionMessage(`Copied ID: ${entry.id}`))
+                .catch(() => setActionMessage('Clipboard access was blocked.'));
+            }}
+            className="mt-1 inline-grid h-9 w-9 shrink-0 place-items-center rounded-lg border border-amber-900/20 bg-white/55 text-amber-950 transition hover:bg-amber-100/75"
+            title={`Copy ID: ${entry.id}`}
+          >
+            <Copy size={16} />
+          </button>
+        </div>
         {statusSourceEntry && (
           <button
             type="button"
@@ -1421,6 +1721,8 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 false,
                 showAppliedStatusesForEffect,
                 previewStatusEffect,
+                (effect) => void applyBarUpdateEffect(effect, 'localVariables' in entry ? entry.localVariables : undefined),
+                (effect) => void applyItemUpdateEffect(effect, 'localVariables' in entry ? entry.localVariables : undefined),
               ))}
             </div>
           </section>
@@ -1439,6 +1741,8 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 autoStatusEffects,
                 showAppliedStatusesForEffect,
                 previewStatusEffect,
+                (effect) => void applyBarUpdateEffect(effect, 'localVariables' in entry ? entry.localVariables : undefined),
+                (effect) => void applyItemUpdateEffect(effect, 'localVariables' in entry ? entry.localVariables : undefined),
               ))}
             </div>
           </section>
@@ -1515,6 +1819,115 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
             </div>
           </div>
         </button>
+      )}
+      {barUpdateResult && (
+        <div className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-sky-500/60 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-sky-200/10 backdrop-blur">
+          <div className="flex items-center justify-between gap-3 border-b border-sky-800/30 bg-sky-900/25 px-4 py-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {barUpdateResult.barName}
+              </div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-sky-300/80">Bar Update</div>
+            </div>
+            <span className="shrink-0 rounded-lg border border-sky-400/35 bg-sky-400/10 px-3 py-1 text-xl font-black text-sky-100">
+              {barUpdateResult.previousValue} → {barUpdateResult.nextValue}
+            </span>
+          </div>
+          <div className="space-y-3 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {barUpdateResult.formula} ({barUpdateResult.delta >= 0 ? '+' : ''}{barUpdateResult.delta})
+            </code>
+            <div className="flex justify-end gap-2">
+              <button
+                type="button"
+                onClick={() => setBarUpdateResult(null)}
+                className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-xs text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+              >
+                Close
+              </button>
+              <button
+                type="button"
+                onClick={() => void undoBarUpdate(barUpdateResult)}
+                className="rounded-lg border border-amber-500/55 bg-amber-600/20 px-3 py-2 text-xs font-bold text-amber-100 transition hover:bg-amber-600/35"
+              >
+                Take it back
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+      {itemUpdateResult && (
+        <button
+          type="button"
+          onClick={() => setItemUpdateResult(null)}
+          className="fixed bottom-5 right-5 z-[9999] w-[min(360px,calc(100vw-2.5rem))] overflow-hidden rounded-xl border border-emerald-500/60 bg-stone-950/95 text-left shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-emerald-200/10 backdrop-blur transition hover:border-emerald-300"
+        >
+          <div className="flex items-center justify-between gap-3 border-b border-emerald-800/30 bg-emerald-900/25 px-4 py-2">
+            <div className="min-w-0">
+              <div className="truncate text-sm font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                {itemUpdateResult.itemName}
+              </div>
+              <div className="text-[11px] uppercase tracking-[0.16em] text-emerald-300/80">Item Update</div>
+            </div>
+            <span className="shrink-0 rounded-lg border border-emerald-400/35 bg-emerald-400/10 px-3 py-1 text-xl font-black text-emerald-100">
+              {itemUpdateResult.previousQuantity} → {itemUpdateResult.nextQuantity}
+            </span>
+          </div>
+          <div className="space-y-2 px-4 py-3">
+            <code className="block truncate rounded border border-stone-700/60 bg-black/35 px-2 py-1 text-xs text-stone-300">
+              {itemUpdateResult.formula} ({itemUpdateResult.delta >= 0 ? '+' : ''}{itemUpdateResult.delta})
+            </code>
+            <div className="font-mono text-[11px] text-stone-500">{itemUpdateResult.itemId}</div>
+          </div>
+        </button>
+      )}
+      {itemUpdateWarning && (
+        <button
+          type="button"
+          onClick={() => setItemUpdateWarning(null)}
+          className="fixed bottom-5 right-5 z-[10000] w-[min(360px,calc(100vw-2.5rem))] rounded-xl border border-rose-500/60 bg-rose-950/95 px-4 py-3 text-left text-sm font-bold text-rose-100 shadow-[0_18px_55px_rgba(0,0,0,0.55)] ring-1 ring-rose-200/10 backdrop-blur transition hover:border-rose-300"
+        >
+          {itemUpdateWarning}
+        </button>
+      )}
+      {itemUpdateChoiceRequest && (
+        <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+          <div className="w-full max-w-lg rounded-2xl border border-emerald-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(16,185,129,0.18)]">
+            <h3 className="text-lg font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>
+              {itemUpdateChoiceRequest.title}
+            </h3>
+            <p className="mt-2 text-sm leading-relaxed text-stone-300">
+              Choose which item should receive this quantity update.
+            </p>
+            <div className="mt-4 max-h-[360px] space-y-2 overflow-y-auto pr-1">
+              {itemUpdateChoiceRequest.items.map((item) => (
+                <button
+                  key={`${item.kind}:${item.id}`}
+                  type="button"
+                  onClick={() => itemUpdateChoiceRequest.resolve(item)}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-emerald-900/35 bg-emerald-950/15 p-3 text-left transition hover:border-emerald-500/60 hover:bg-emerald-900/25"
+                >
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-bold text-emerald-100">{item.name}</span>
+                    <span className="block truncate font-mono text-xs text-stone-500">{item.id}</span>
+                  </span>
+                  <span className="self-center rounded-lg border border-emerald-600/30 bg-black/30 px-3 py-1 font-mono text-sm text-emerald-100">
+                    Qty {item.quantity}
+                  </span>
+                </button>
+              ))}
+            </div>
+            <div className="mt-5 flex justify-end">
+              <button
+                type="button"
+                onClick={() => itemUpdateChoiceRequest.resolve(null)}
+                className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+              >
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
       )}
       {localInputRequest && (
         <div className="fixed inset-0 z-[10000] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
