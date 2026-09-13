@@ -1,6 +1,6 @@
 import React from 'react';
 
-export type HomebrewPageId = 'characters' | 'overview' | 'inventory' | 'spells' | 'statuses' | 'attributes';
+export type HomebrewPageId = 'characters' | 'overview' | 'gallery' | 'inventory' | 'spells' | 'statuses' | 'attributes';
 
 interface HomebrewPageNavProps {
   characterId?: string | null;
@@ -10,6 +10,7 @@ interface HomebrewPageNavProps {
 const navItems: Array<{ id: HomebrewPageId; label: string }> = [
   { id: 'characters', label: 'Characters' },
   { id: 'overview', label: 'Overview' },
+  { id: 'gallery', label: 'Gallery' },
   { id: 'inventory', label: 'Inventory' },
   { id: 'spells', label: 'Spells' },
   { id: 'statuses', label: 'Statuses' },
@@ -19,6 +20,7 @@ const navItems: Array<{ id: HomebrewPageId; label: string }> = [
 const getHash = (pageId: HomebrewPageId, characterId?: string | null) => {
   if (pageId === 'characters' || !characterId) return '#homebrew-characters';
   if (pageId === 'overview') return `#homebrew-character-sheet/${encodeURIComponent(characterId)}`;
+  if (pageId === 'gallery') return `#homebrew-gallery/${encodeURIComponent(characterId)}`;
   if (pageId === 'attributes') return `#homebrew-character-sheet/${encodeURIComponent(characterId)}/attributes`;
   return `#homebrew-library/${pageId}/${encodeURIComponent(characterId)}`;
 };

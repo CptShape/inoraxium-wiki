@@ -6,6 +6,7 @@ import { HomebrewViewer, HomebrewViewerEntityType } from './components/HomebrewV
 import { HomebrewLibraryViewer, HomebrewLibraryCategory } from './components/HomebrewLibraryViewer';
 import { HomebrewCharacterSheetViewer } from './components/HomebrewCharacterSheetViewer';
 import { HomebrewCharactersPage } from './components/HomebrewCharactersPage';
+import { HomebrewGalleryViewer } from './components/HomebrewGalleryViewer';
 import { gameSystems } from './data/gameSystems';
 import { Chapter, GameSystemId } from './types';
 
@@ -71,6 +72,10 @@ interface HomebrewCharacterSheetRoute {
   page?: 'overview' | 'attributes';
 }
 
+interface HomebrewGalleryRoute {
+  characterId: string;
+}
+
 function App() {
   const [currentSystem, setCurrentSystem] = useState<GameSystemId>('inoraxium');
   const [activeChapterId, setActiveChapterId] = useState<string | null>(null);
@@ -83,6 +88,7 @@ function App() {
   const [homebrewViewerRoute, setHomebrewViewerRoute] = useState<HomebrewViewerRoute | null>(null);
   const [homebrewLibraryRoute, setHomebrewLibraryRoute] = useState<HomebrewLibraryRoute | null>(null);
   const [homebrewCharacterSheetRoute, setHomebrewCharacterSheetRoute] = useState<HomebrewCharacterSheetRoute | null>(null);
+  const [homebrewGalleryRoute, setHomebrewGalleryRoute] = useState<HomebrewGalleryRoute | null>(null);
   const [isHomebrewCharactersOpen, setIsHomebrewCharactersOpen] = useState(false);
 
   const systemDefinition = gameSystems[currentSystem];
@@ -130,6 +136,7 @@ function App() {
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
     setHomebrewCharacterSheetRoute(null);
+    setHomebrewGalleryRoute(null);
     setIsHomebrewCharactersOpen(false);
     setActiveChapterId(chapterId);
 
@@ -170,6 +177,7 @@ function App() {
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
     setHomebrewCharacterSheetRoute(null);
+    setHomebrewGalleryRoute(null);
     setIsHomebrewCharactersOpen(false);
     setActiveChapterId(null);
     setBreadcrumb([]);
@@ -192,6 +200,7 @@ function App() {
       setHomebrewViewerRoute(null);
       setHomebrewLibraryRoute(null);
       setHomebrewCharacterSheetRoute(null);
+      setHomebrewGalleryRoute(null);
       setIsHomebrewCharactersOpen(false);
       setActiveChapterId(null);
       setBreadcrumb([]);
@@ -213,6 +222,7 @@ function App() {
         setHomebrewViewerRoute({ entityType, characterId, entryId });
         setHomebrewLibraryRoute(null);
         setHomebrewCharacterSheetRoute(null);
+        setHomebrewGalleryRoute(null);
         setIsHomebrewCharactersOpen(false);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Viewer']);
@@ -236,6 +246,7 @@ function App() {
         setHomebrewViewerRoute(null);
         setHomebrewLibraryRoute({ category, characterId, selectedKind, selectedEntryId });
         setHomebrewCharacterSheetRoute(null);
+        setHomebrewGalleryRoute(null);
         setIsHomebrewCharactersOpen(false);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Library']);
@@ -248,6 +259,7 @@ function App() {
       setHomebrewViewerRoute(null);
       setHomebrewLibraryRoute(null);
       setHomebrewCharacterSheetRoute(null);
+      setHomebrewGalleryRoute(null);
       setIsHomebrewCharactersOpen(true);
       setActiveChapterId(null);
       setBreadcrumb(['Homebrew Characters']);
@@ -263,6 +275,7 @@ function App() {
         setHomebrewViewerRoute(null);
         setHomebrewLibraryRoute(null);
         setHomebrewCharacterSheetRoute({ characterId, page });
+        setHomebrewGalleryRoute(null);
         setIsHomebrewCharactersOpen(false);
         setActiveChapterId(null);
         setBreadcrumb(['Homebrew Character Sheet']);
@@ -271,9 +284,26 @@ function App() {
       }
     }
 
+    if (path[0] === 'homebrew-gallery') {
+      const characterId = path[1] ? decodeURIComponent(path[1]) : '';
+
+      if (characterId) {
+        setHomebrewViewerRoute(null);
+        setHomebrewLibraryRoute(null);
+        setHomebrewCharacterSheetRoute(null);
+        setHomebrewGalleryRoute({ characterId });
+        setIsHomebrewCharactersOpen(false);
+        setActiveChapterId(null);
+        setBreadcrumb(['Homebrew Gallery']);
+        setBreadcrumbPath(path);
+        return;
+      }
+    }
+
     setHomebrewViewerRoute(null);
     setHomebrewLibraryRoute(null);
     setHomebrewCharacterSheetRoute(null);
+    setHomebrewGalleryRoute(null);
     setIsHomebrewCharactersOpen(false);
 
     const targetId = path[path.length - 1];
@@ -321,6 +351,7 @@ function App() {
         setHomebrewViewerRoute(null);
         setHomebrewLibraryRoute(null);
         setHomebrewCharacterSheetRoute(null);
+        setHomebrewGalleryRoute(null);
         clearHash();
       }
     }
@@ -345,6 +376,11 @@ function App() {
         setActiveChapterId(null);
         setBreadcrumb([]);
         setBreadcrumbPath([]);
+        setHomebrewViewerRoute(null);
+        setHomebrewLibraryRoute(null);
+        setHomebrewCharacterSheetRoute(null);
+        setHomebrewGalleryRoute(null);
+        setIsHomebrewCharactersOpen(false);
       }
     };
     window.addEventListener('hashchange', handleHashChange);
@@ -388,6 +424,7 @@ function App() {
           setHomebrewViewerRoute(null);
           setHomebrewLibraryRoute(null);
           setHomebrewCharacterSheetRoute(null);
+          setHomebrewGalleryRoute(null);
           setIsHomebrewCharactersOpen(false);
           setActiveChapterId(null);
           setBreadcrumb([]);
@@ -400,6 +437,7 @@ function App() {
           setHomebrewViewerRoute(null);
           setHomebrewLibraryRoute(null);
           setHomebrewCharacterSheetRoute(null);
+          setHomebrewGalleryRoute(null);
           setIsHomebrewCharactersOpen(false);
           clearHash();
         }}
@@ -428,6 +466,11 @@ function App() {
         <HomebrewCharacterSheetViewer
           characterId={homebrewCharacterSheetRoute.characterId}
           page={homebrewCharacterSheetRoute.page}
+          onBack={() => window.history.back()}
+        />
+      ) : homebrewGalleryRoute ? (
+        <HomebrewGalleryViewer
+          characterId={homebrewGalleryRoute.characterId}
           onBack={() => window.history.back()}
         />
       ) : (
