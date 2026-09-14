@@ -47,6 +47,7 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
   const [error, setError] = useState<string | null>(null);
   const [fullscreenImage, setFullscreenImage] = useState<CharacterGalleryImage | null>(null);
   const [tagFilters, setTagFilters] = useState<Record<string, 'include' | 'exclude'>>({});
+  const [imageLayoutModes, setImageLayoutModes] = useState<Record<string, 'portrait' | 'landscape'>>({});
 
   const setCharacter = (nextCharacter: CharacterData | null) => {
     setCharacterState(nextCharacter);
@@ -127,7 +128,7 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
     return galleryImages.filter((image) => {
       const tags = (image.tags || []).map(tag => tag.toLowerCase());
       if (excludedTags.some(tag => tags.includes(tag))) return false;
-      if (includedTags.length > 0 && !includedTags.some(tag => tags.includes(tag))) return false;
+      if (includedTags.length > 0 && !includedTags.every(tag => tags.includes(tag))) return false;
       return true;
     });
   }, [galleryImages, tagFilters]);
@@ -292,15 +293,18 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
               No images match the selected tags.
             </div>
           ) : (
-            <div className="columns-1 gap-4 sm:columns-2 xl:columns-3 2xl:columns-4">
+            <div className="grid grid-flow-dense grid-cols-1 gap-4 sm:grid-cols-2 xl:grid-cols-4">
               {filteredGalleryImages.map((image) => {
                 const thumbUrl = getGalleryThumbUrl(image);
+                const layoutMode = imageLayoutModes[image.id] || 'portrait';
                 return (
                   <button
                     key={image.id}
                     type="button"
                     onClick={() => setFullscreenImage(image)}
-                    className="mb-4 block w-full break-inside-avoid overflow-hidden rounded-2xl border border-amber-900/20 bg-black/5 text-left shadow-[0_12px_28px_rgba(68,38,17,0.10)] transition hover:-translate-y-0.5 hover:border-amber-700/35 hover:shadow-[0_18px_36px_rgba(68,38,17,0.16)]"
+                    className={`block w-full overflow-hidden rounded-2xl border border-amber-900/20 bg-black/5 text-left shadow-[0_12px_28px_rgba(68,38,17,0.10)] transition hover:-translate-y-0.5 hover:border-amber-700/35 hover:shadow-[0_18px_36px_rgba(68,38,17,0.16)] ${
+                      layoutMode === 'landscape' ? 'sm:col-span-2 xl:col-span-2' : 'sm:col-span-1 xl:col-span-1'
+                    }`}
                     title={image.label || 'Open image'}
                   >
                     <img
@@ -308,6 +312,14 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
                       alt={image.label || character.name || 'Gallery image'}
                       className="h-auto w-full"
                       loading="lazy"
+                      onLoad={(event) => {
+                        const nextMode = event.currentTarget.naturalWidth > event.currentTarget.naturalHeight
+                          ? 'landscape'
+                          : 'portrait';
+                        setImageLayoutModes(current => (
+                          current[image.id] === nextMode ? current : { ...current, [image.id]: nextMode }
+                        ));
+                      }}
                       onError={(event) => {
                         const fallbackUrl = getGalleryDisplayUrl(image);
                         if (fallbackUrl && event.currentTarget.src !== fallbackUrl) {
