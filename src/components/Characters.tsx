@@ -1,6 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload, Copy } from 'lucide-react';
-import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
+import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGalleryTagCategory, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
 import { evalCharacterRollFormula } from '../lib/characterContext';
@@ -182,6 +182,12 @@ type MacroSheetSubTab = 'main' | 'rolls' | string;
 type ScriptSheetSubTab = 'main' | string;
 
 const SPECIAL_GALLERY_TAGS = new Set(['main', 'splash-art', 'token']);
+const GALLERY_TAG_CATEGORY_LABELS: Record<CharacterGalleryTagCategory, string> = {
+  character: 'Character Tags',
+  meta: 'Meta Tags',
+  general: 'General Tags',
+};
+const GALLERY_TAG_CATEGORY_ORDER: CharacterGalleryTagCategory[] = ['character', 'meta', 'general'];
 
 const normalizeGalleryCustomTag = (rawTag: string): string => (
   rawTag.trim().replace(/\s+/g, ' ').slice(0, 48)
@@ -198,6 +204,19 @@ const splitGalleryCustomTags = (rawTags: string): string[] => {
       seen.add(key);
       return true;
     });
+};
+
+const normalizeGalleryTagCategoryMap = (
+  tags: string[],
+  categories?: Record<string, CharacterGalleryTagCategory>,
+): Record<string, CharacterGalleryTagCategory> => {
+  const next: Record<string, CharacterGalleryTagCategory> = {};
+  tags.forEach((tag) => {
+    const key = tag.toLowerCase();
+    const category = categories?.[key];
+    next[key] = category && GALLERY_TAG_CATEGORY_ORDER.includes(category) ? category : 'general';
+  });
+  return next;
 };
 
 const getGalleryCustomTags = (images: CharacterGalleryImage[]): string[] => {
@@ -756,11 +775,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
-  const [galleryTagEditor, setGalleryTagEditor] = useState<{ imageId: string; x: number; y: number; input: string } | null>(null);
+  const [galleryTagEditor, setGalleryTagEditor] = useState<{ imageId: string; x: number; y: number; input: string; category: CharacterGalleryTagCategory } | null>(null);
+  const [galleryTagCategories, setGalleryTagCategories] = useState<Record<string, CharacterGalleryTagCategory>>({});
   const [bulkPixhostImportOpen, setBulkPixhostImportOpen] = useState(false);
   const [bulkPixhostImportText, setBulkPixhostImportText] = useState('');
   const [bulkPixhostImportError, setBulkPixhostImportError] = useState('');
   const [bulkPixhostTagInput, setBulkPixhostTagInput] = useState('');
+  const [bulkPixhostTagCategory, setBulkPixhostTagCategory] = useState<CharacterGalleryTagCategory>('general');
   const [bulkPixhostTags, setBulkPixhostTags] = useState<string[]>([]);
   const [batchImgurImportOpen, setBatchImgurImportOpen] = useState(false);
   const [batchImgurAlbumUrl, setBatchImgurAlbumUrl] = useState('');
@@ -893,6 +914,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const historyCloseTimeoutRef = useRef<number | null>(null);
   const rollPopupTimeoutRef = useRef<number | null>(null);
   const allGalleryCustomTags = getGalleryCustomTags(galleryImages);
+  const galleryTagsByCategory = GALLERY_TAG_CATEGORY_ORDER.reduce((acc, category) => {
+    acc[category] = allGalleryCustomTags.filter(tag => (galleryTagCategories[tag.toLowerCase()] || 'general') === category);
+    return acc;
+  }, {} as Record<CharacterGalleryTagCategory, string[]>);
 
   const dismissRollPopup = useCallback(() => {
     if (rollPopupTimeoutRef.current) {
@@ -1022,6 +1047,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setPortraitImportUrl(nextPortraitUrl);
       setPortraitLoadError(false);
       setGalleryImages(selectedCharacter.gallery || []);
+      setGalleryTagCategories(normalizeGalleryTagCategoryMap(
+        getGalleryCustomTags(selectedCharacter.gallery || []),
+        selectedCharacter.galleryTagCategories,
+      ));
       setDisplayStats(selectedCharacter.displayStats || []);
       setDisplaySlotStates(selectedCharacter.displaySlotStates || {});
       setOverviewSettings({
@@ -4578,9 +4607,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const importBulkPixhostGalleryLinks = () => {
     if (!isCharacterOwner) return;
     const parsedLinks = parseBulkPixhostLinks(bulkPixhostImportText);
+    const typedTags = splitGalleryCustomTags(bulkPixhostTagInput);
     const appliedTags = Array.from(new Set([
       ...bulkPixhostTags,
-      ...splitGalleryCustomTags(bulkPixhostTagInput),
+      ...typedTags,
     ].map(normalizeGalleryCustomTag).filter(Boolean)));
     if (parsedLinks.length === 0) {
       setBulkPixhostImportError('No valid Pixhost show links were found.');
@@ -4594,6 +4624,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       return;
     }
 
+    setGalleryTagCategories(prev => {
+      const next = { ...prev };
+      bulkPixhostTags.forEach((tag) => {
+        next[tag.toLowerCase()] = next[tag.toLowerCase()] || 'general';
+      });
+      typedTags.forEach((tag) => {
+        next[tag.toLowerCase()] = bulkPixhostTagCategory;
+      });
+      return next;
+    });
     const now = Date.now();
     setGalleryImages(prev => [
       ...prev,
@@ -4608,6 +4648,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     ]);
     setBulkPixhostImportText('');
     setBulkPixhostTagInput('');
+    setBulkPixhostTagCategory('general');
     setBulkPixhostTags([]);
     setBulkPixhostImportError('');
     setBulkPixhostImportOpen(false);
@@ -4721,9 +4762,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     setGalleryImages(prev => prev.map(image => (image.id === imageId ? updater(image) : image)));
   };
 
+  const setGalleryTagCategory = (rawTag: string, category: CharacterGalleryTagCategory) => {
+    const tag = normalizeGalleryCustomTag(rawTag);
+    if (!tag || SPECIAL_GALLERY_TAGS.has(tag.toLowerCase())) return;
+    setGalleryTagCategories(prev => ({ ...prev, [tag.toLowerCase()]: category }));
+  };
+
   const toggleGalleryCustomTag = (imageId: string, rawTag: string) => {
     const tag = normalizeGalleryCustomTag(rawTag);
     if (!tag || SPECIAL_GALLERY_TAGS.has(tag.toLowerCase())) return;
+    setGalleryTagCategories(prev => ({ ...prev, [tag.toLowerCase()]: prev[tag.toLowerCase()] || 'general' }));
     setGalleryImages(prev => prev.map(image => {
       if (image.id !== imageId) return image;
       const tags = image.tags || [];
@@ -4741,6 +4789,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     if (!galleryTagEditor) return;
     const tags = splitGalleryCustomTags(galleryTagEditor.input);
     if (tags.length === 0) return;
+    setGalleryTagCategories(prev => {
+      const next = { ...prev };
+      tags.forEach((tag) => {
+        next[tag.toLowerCase()] = galleryTagEditor.category;
+      });
+      return next;
+    });
     setGalleryImages(prev => prev.map(image => {
       if (image.id !== galleryTagEditor.imageId) return image;
       const nextTags = [...(image.tags || [])];
@@ -6277,6 +6332,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       notes: '',
       portraitUrl: '',
       gallery: [],
+      galleryTagCategories: {},
       tags: [],
       displayStats: [],
       displaySlotStates: {},
@@ -6569,6 +6625,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       notes,
       portraitUrl,
       gallery: galleryImages,
+      galleryTagCategories: normalizeGalleryTagCategoryMap(allGalleryCustomTags, galleryTagCategories),
       tags: charTags,
       displayStats,
       displaySlotStates,
@@ -8860,7 +8917,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 onClick={() => setGalleryTagEditor(null)}
               />
               <div
-                className="fixed z-[110] w-[340px] rounded-2xl border border-emerald-700/45 bg-stone-950 p-4 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+                className="fixed z-[110] w-[440px] max-w-[calc(100vw-24px)] rounded-2xl border border-emerald-700/45 bg-stone-950 p-4 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
                 style={{ left: galleryTagEditor.x, top: galleryTagEditor.y }}
                 onClick={(event) => event.stopPropagation()}
               >
@@ -8902,31 +8959,57 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   {allGalleryCustomTags.length > 0 && (
                     <div>
                       <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/80">Used on this character</div>
-                      <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto pr-1">
-                        {allGalleryCustomTags.map((tag) => {
-                          const active = imageTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
-                          return (
-                            <button
-                              key={tag}
-                              type="button"
-                              onClick={() => toggleGalleryCustomTag(image.id, tag)}
-                              className={`rounded-full border px-2.5 py-1 text-xs font-bold transition ${
-                                active
-                                  ? 'border-emerald-400/55 bg-emerald-900/40 text-emerald-100'
-                                  : 'border-stone-700/70 bg-stone-900/60 text-stone-400 hover:border-cyan-500/55 hover:text-cyan-100'
-                              }`}
-                            >
-                              {tag}
-                            </button>
-                          );
-                        })}
+                      <div className="grid gap-2 sm:grid-cols-3">
+                        {GALLERY_TAG_CATEGORY_ORDER.map((category) => (
+                          <div
+                            key={category}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const tag = event.dataTransfer.getData('text/gallery-tag');
+                              if (tag) setGalleryTagCategory(tag, category);
+                            }}
+                            className="min-h-24 rounded-xl border border-stone-800 bg-stone-900/45 p-2"
+                          >
+                            <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.14em] text-stone-400">
+                              {GALLERY_TAG_CATEGORY_LABELS[category]}
+                            </div>
+                            <div className="flex max-h-32 flex-wrap gap-1.5 overflow-y-auto pr-1">
+                              {(galleryTagsByCategory[category] || []).length === 0 ? (
+                                <span className="text-[11px] italic text-stone-600">Drop here</span>
+                              ) : (galleryTagsByCategory[category] || []).map((tag) => {
+                                const active = imageTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
+                                return (
+                                  <button
+                                    key={tag}
+                                    type="button"
+                                    draggable
+                                    onDragStart={(event) => {
+                                      event.dataTransfer.setData('text/gallery-tag', tag);
+                                      event.dataTransfer.effectAllowed = 'move';
+                                    }}
+                                    onClick={() => toggleGalleryCustomTag(image.id, tag)}
+                                    className={`rounded-full border px-2 py-1 text-[11px] font-bold transition ${
+                                      active
+                                        ? 'border-emerald-400/55 bg-emerald-900/40 text-emerald-100'
+                                        : 'border-stone-700/70 bg-stone-950/70 text-stone-400 hover:border-cyan-500/55 hover:text-cyan-100'
+                                    }`}
+                                    title="Click to add/remove. Drag to move category."
+                                  >
+                                    {tag}
+                                  </button>
+                                );
+                              })}
+                            </div>
+                          </div>
+                        ))}
                       </div>
                     </div>
                   )}
 
                   <div>
                     <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300/80">New tag</div>
-                    <div className="flex gap-2">
+                    <div className="grid gap-2 sm:grid-cols-[1fr_auto_auto]">
                       <input
                         autoFocus
                         value={galleryTagEditor.input}
@@ -8938,6 +9021,15 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                         className="min-w-0 flex-1 rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-emerald-500/60"
                         placeholder="scene, npc, city..."
                       />
+                      <select
+                        value={galleryTagEditor.category}
+                        onChange={(event) => setGalleryTagEditor(current => (current ? { ...current, category: event.target.value as CharacterGalleryTagCategory } : current))}
+                        className="rounded-lg border border-stone-700 bg-stone-900 px-2 py-2 text-xs font-bold text-emerald-100 outline-none focus:border-emerald-500/60"
+                      >
+                        {GALLERY_TAG_CATEGORY_ORDER.map((category) => (
+                          <option key={category} value={category}>{GALLERY_TAG_CATEGORY_LABELS[category]}</option>
+                        ))}
+                      </select>
                       <button
                         type="button"
                         onClick={addGalleryTagFromEditor}
@@ -8978,36 +9070,56 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   Apply tags to imported images
                 </div>
                 {allGalleryCustomTags.length > 0 && (
-                  <div className="mb-3 flex flex-wrap gap-2">
-                    {allGalleryCustomTags.map((tag) => {
-                      const active = bulkPixhostTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
-                      return (
-                        <button
-                          key={tag}
-                          type="button"
-                          onClick={() => setBulkPixhostTags(prev => (
-                            active
-                              ? prev.filter(currentTag => currentTag.toLowerCase() !== tag.toLowerCase())
-                              : [...prev, tag]
-                          ))}
-                          className={`rounded-full border px-2.5 py-1 text-xs font-bold transition ${
-                            active
-                              ? 'border-emerald-300/60 bg-emerald-700/35 text-emerald-100'
-                              : 'border-stone-700/70 bg-stone-900/60 text-stone-400 hover:border-emerald-500/55 hover:text-emerald-100'
-                          }`}
-                        >
-                          {tag}
-                        </button>
-                      );
-                    })}
+                  <div className="mb-3 grid gap-2 md:grid-cols-3">
+                    {GALLERY_TAG_CATEGORY_ORDER.map((category) => (
+                      <div key={category} className="rounded-lg border border-stone-800/70 bg-stone-950/35 p-2">
+                        <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.12em] text-stone-400">
+                          {GALLERY_TAG_CATEGORY_LABELS[category]}
+                        </div>
+                        <div className="flex flex-wrap gap-1.5">
+                          {(galleryTagsByCategory[category] || []).map((tag) => {
+                            const active = bulkPixhostTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
+                            return (
+                              <button
+                                key={tag}
+                                type="button"
+                                onClick={() => setBulkPixhostTags(prev => (
+                                  active
+                                    ? prev.filter(currentTag => currentTag.toLowerCase() !== tag.toLowerCase())
+                                    : [...prev, tag]
+                                ))}
+                                className={`rounded-full border px-2 py-1 text-[11px] font-bold transition ${
+                                  active
+                                    ? 'border-emerald-300/60 bg-emerald-700/35 text-emerald-100'
+                                    : 'border-stone-700/70 bg-stone-900/60 text-stone-400 hover:border-emerald-500/55 hover:text-emerald-100'
+                                }`}
+                              >
+                                {tag}
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 )}
-                <input
-                  value={bulkPixhostTagInput}
-                  onChange={(event) => setBulkPixhostTagInput(event.target.value)}
-                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-emerald-100 outline-none focus:border-emerald-500/60"
-                  placeholder="New tags for all imported images, comma separated"
-                />
+                <div className="grid gap-2 sm:grid-cols-[1fr_auto]">
+                  <input
+                    value={bulkPixhostTagInput}
+                    onChange={(event) => setBulkPixhostTagInput(event.target.value)}
+                    className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-emerald-100 outline-none focus:border-emerald-500/60"
+                    placeholder="New tags for all imported images, comma separated"
+                  />
+                  <select
+                    value={bulkPixhostTagCategory}
+                    onChange={(event) => setBulkPixhostTagCategory(event.target.value as CharacterGalleryTagCategory)}
+                    className="rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-xs font-bold text-emerald-100 outline-none focus:border-emerald-500/60"
+                  >
+                    {GALLERY_TAG_CATEGORY_ORDER.map((category) => (
+                      <option key={category} value={category}>{GALLERY_TAG_CATEGORY_LABELS[category]}</option>
+                    ))}
+                  </select>
+                </div>
               </div>
               {bulkPixhostImportError && (
                 <div className="mt-3 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
@@ -9021,6 +9133,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     setBulkPixhostImportOpen(false);
                     setBulkPixhostImportError('');
                     setBulkPixhostTagInput('');
+                    setBulkPixhostTagCategory('general');
                     setBulkPixhostTags([]);
                   }}
                   className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
@@ -10121,9 +10234,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                           if (!isCharacterOwner) return;
                           setGalleryTagEditor({
                             imageId: image.id,
-                            x: Math.min(event.clientX, window.innerWidth - 360),
+                            x: Math.min(event.clientX, window.innerWidth - 460),
                             y: Math.min(event.clientY, window.innerHeight - 380),
                             input: '',
+                            category: 'general',
                           });
                         }}
                         className={`overflow-hidden rounded-2xl border bg-stone-950/45 shadow-lg ${

@@ -121,6 +121,7 @@ export interface CharacterOverviewSettings {
 }
 
 export type CharacterGalleryImageTag = 'main' | 'splash-art' | 'token' | (string & {});
+export type CharacterGalleryTagCategory = 'character' | 'meta' | 'general';
 
 export interface CharacterGalleryImage {
   id: string;
@@ -318,6 +319,7 @@ export interface CharacterData {
   notes?: string;
   portraitUrl?: string;
   gallery?: CharacterGalleryImage[];
+  galleryTagCategories?: Record<string, CharacterGalleryTagCategory>;
   createdAt?: number;
   tags?: string[];
   displayStats?: CharacterDisplayStat[];
