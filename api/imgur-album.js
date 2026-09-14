@@ -113,7 +113,7 @@ const readAlbumUrl = (req) => {
 const fetchAlbumJsonImages = async (albumId) => {
   const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}/layout/blog.json`, {
     headers: {
-      Accept: 'application/json',
+      Accept: 'application/json,text/html',
       'User-Agent': 'Mozilla/5.0 InoraxiumWiki/1.0',
     },
   });
@@ -122,7 +122,12 @@ const fetchAlbumJsonImages = async (albumId) => {
     throw new Error(`Imgur album JSON request failed (${response.status}).`);
   }
 
-  const data = await response.json();
+  const text = await response.text();
+  if (/^\s*</.test(text)) {
+    return dedupeImages(extractImagesFromHtml(text));
+  }
+
+  const data = JSON.parse(text);
   return dedupeImages(collectImagesFromJson(data));
 };
 
