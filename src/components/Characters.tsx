@@ -111,6 +111,7 @@ import { addEntryToPartyInventory, loadAdminAccess, loadCharacters, loadPartiesF
 import { authProvider } from '../lib/auth';
 import { addCombatantToBattleTracker } from '../lib/battleTracker';
 import { getPixhostDirectImageUrl, isDirectImageUrl, uploadImageToPixhost } from '../lib/pixhost';
+import { loadImgurAlbumImages } from '../lib/imgur';
 
 interface RollStep {
   label: string;
@@ -726,6 +727,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [bulkPixhostImportOpen, setBulkPixhostImportOpen] = useState(false);
   const [bulkPixhostImportText, setBulkPixhostImportText] = useState('');
   const [bulkPixhostImportError, setBulkPixhostImportError] = useState('');
+  const [batchImgurImportOpen, setBatchImgurImportOpen] = useState(false);
+  const [batchImgurAlbumUrl, setBatchImgurAlbumUrl] = useState('');
+  const [batchImgurImportError, setBatchImgurImportError] = useState('');
+  const [batchImgurImporting, setBatchImgurImporting] = useState(false);
   const [displayStats, setDisplayStats] = useState<CharacterDisplayStat[]>([]);
   const [displaySlotStates, setDisplaySlotStates] = useState<Record<string, 'unlocked' | 'locked' | 'blocked'>>({});
   const [overviewSettings, setOverviewSettings] = useState<CharacterOverviewSettings>({ mainAttributeIds: [], valueBoxes: [] });
@@ -4542,6 +4547,49 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       tone: 'success',
       message: `${newLinks.length} Pixhost image${newLinks.length === 1 ? '' : 's'} added to gallery. Save the character to keep them in Firestore.`,
     });
+  };
+
+  const importImgurAlbumGalleryLinks = async () => {
+    if (!isCharacterOwner || batchImgurImporting) return;
+    if (!batchImgurAlbumUrl.trim()) {
+      setBatchImgurImportError('Paste an Imgur album link first.');
+      return;
+    }
+
+    setBatchImgurImporting(true);
+    setBatchImgurImportError('');
+    try {
+      const albumImages = await loadImgurAlbumImages(batchImgurAlbumUrl);
+      const existingUrls = new Set(galleryImages.map(image => image.url));
+      const newImages = albumImages.filter(image => !existingUrls.has(image.url));
+      if (newImages.length === 0) {
+        setBatchImgurImportError('All images from this Imgur album are already in the gallery.');
+        return;
+      }
+
+      const now = Date.now();
+      setGalleryImages(prev => [
+        ...prev,
+        ...newImages.map((image, index): CharacterGalleryImage => ({
+          id: `gallery_${uid()}`,
+          url: image.url,
+          thumbUrl: image.url,
+          label: image.label,
+          tags: [],
+          createdAt: now + index,
+        })),
+      ]);
+      setBatchImgurAlbumUrl('');
+      setBatchImgurImportOpen(false);
+      setSheetSyncStatus({
+        tone: 'success',
+        message: `${newImages.length} Imgur image${newImages.length === 1 ? '' : 's'} added to gallery. Save the character to keep them in Firestore.`,
+      });
+    } catch (error) {
+      setBatchImgurImportError(error instanceof Error ? error.message : 'Imgur album import failed.');
+    } finally {
+      setBatchImgurImporting(false);
+    }
   };
 
   const getDisplayImageUrl = (imageUrl?: string, thumbUrl?: string): string => {
@@ -8745,6 +8793,59 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             </div>
           </div>
         )}
+        {batchImgurImportOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-xl rounded-2xl border border-violet-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(139,92,246,0.18)]">
+              <h3 className="text-lg font-bold text-violet-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                Batch Imgur Album Import
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-stone-300">
+                Paste an Imgur album link. Every direct image in the album will be added to this gallery.
+              </p>
+              <input
+                autoFocus
+                value={batchImgurAlbumUrl}
+                onChange={(event) => {
+                  setBatchImgurAlbumUrl(event.target.value);
+                  setBatchImgurImportError('');
+                }}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter') void importImgurAlbumGalleryLinks();
+                  if (event.key === 'Escape') setBatchImgurImportOpen(false);
+                }}
+                className="mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-violet-100 outline-none focus:border-violet-500/60"
+                placeholder="https://imgur.com/a/albumId"
+              />
+              {batchImgurImportError && (
+                <div className="mt-3 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                  {batchImgurImportError}
+                </div>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBatchImgurImportOpen(false);
+                    setBatchImgurImportError('');
+                  }}
+                  disabled={batchImgurImporting}
+                  className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100 disabled:cursor-not-allowed disabled:opacity-50"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void importImgurAlbumGalleryLinks()}
+                  disabled={batchImgurImporting}
+                  className="rounded-lg border border-violet-500/60 bg-violet-900/40 px-4 py-2 text-sm font-bold text-violet-100 transition hover:bg-violet-800/55 disabled:cursor-not-allowed disabled:opacity-50"
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  {batchImgurImporting ? 'Loading...' : 'Add Album Images'}
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {partyTransferTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div className="w-full max-w-lg rounded-2xl border border-sky-800/45 bg-stone-950 p-5 shadow-2xl">
@@ -9738,6 +9839,19 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   >
                     <Upload size={16} />
                     Bulk Pixhost
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBatchImgurImportOpen(true);
+                      setBatchImgurImportError('');
+                    }}
+                    disabled={!isCharacterOwner || batchImgurImporting}
+                    className="inline-flex items-center gap-2 rounded-xl border border-violet-700/45 bg-violet-950/30 px-4 py-2 text-sm font-bold text-violet-100 hover:bg-violet-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    <Upload size={16} />
+                    Batch Imgur
                   </button>
                 </div>
               </div>
