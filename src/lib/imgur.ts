@@ -213,7 +213,7 @@ const loadImgurAlbumImagesFromProxy = async (albumUrlOrId: string): Promise<Imgu
 const loadImgurAlbumImagesFromPublicJson = async (albumId: string): Promise<ImgurAlbumImage[]> => {
   const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}/layout/blog.json`, {
     headers: {
-      Accept: 'application/json',
+      Accept: 'application/json,text/html',
     },
   }).catch((error) => {
     throw new Error(`Imgur album JSON could not be reached. ${error instanceof Error ? error.message : ''}`.trim());
@@ -223,7 +223,14 @@ const loadImgurAlbumImagesFromPublicJson = async (albumId: string): Promise<Imgu
     throw new Error(`Imgur album JSON request failed (${response.status}).`);
   }
 
-  const data = await response.json().catch(() => null);
+  const text = await response.text();
+  if (/^\s*</.test(text)) {
+    const imagesFromHtml = extractImgurImagesFromHtml(text);
+    if (imagesFromHtml.length > 0) return imagesFromHtml;
+    throw new Error('Imgur album JSON endpoint returned HTML without direct image links.');
+  }
+
+  const data = JSON.parse(text) as unknown;
   const images = extractImgurImagesFromJson(data);
   if (images.length > 0) return images;
 
