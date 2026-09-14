@@ -120,7 +120,7 @@ export interface CharacterOverviewSettings {
   valueBoxes?: CharacterOverviewValueBox[];
 }
 
-export type CharacterGalleryImageTag = 'main' | 'splash-art' | 'token';
+export type CharacterGalleryImageTag = 'main' | 'splash-art' | 'token' | (string & {});
 
 export interface CharacterGalleryImage {
   id: string;

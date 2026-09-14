@@ -181,6 +181,38 @@ type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' |
 type MacroSheetSubTab = 'main' | 'rolls' | string;
 type ScriptSheetSubTab = 'main' | string;
 
+const SPECIAL_GALLERY_TAGS = new Set(['main', 'splash-art', 'token']);
+
+const normalizeGalleryCustomTag = (rawTag: string): string => (
+  rawTag.trim().replace(/\s+/g, ' ').slice(0, 48)
+);
+
+const splitGalleryCustomTags = (rawTags: string): string[] => {
+  const seen = new Set<string>();
+  return rawTags
+    .split(/[,;\n]/)
+    .map(normalizeGalleryCustomTag)
+    .filter((tag) => {
+      const key = tag.toLowerCase();
+      if (!tag || SPECIAL_GALLERY_TAGS.has(key) || seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
+};
+
+const getGalleryCustomTags = (images: CharacterGalleryImage[]): string[] => {
+  const tagMap = new Map<string, string>();
+  images.forEach((image) => {
+    (image.tags || []).forEach((tag) => {
+      const normalized = normalizeGalleryCustomTag(tag);
+      const key = normalized.toLowerCase();
+      if (!normalized || SPECIAL_GALLERY_TAGS.has(key) || tagMap.has(key)) return;
+      tagMap.set(key, normalized);
+    });
+  });
+  return Array.from(tagMap.values()).sort((left, right) => left.localeCompare(right));
+};
+
 const STATUS_DURATION_OPTIONS: Array<{ value: CharacterStatusDurationType; label: string }> = [
   { value: 'custom', label: 'Custom' },
   { value: 'round', label: 'Round' },
@@ -724,9 +756,12 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
+  const [galleryTagEditor, setGalleryTagEditor] = useState<{ imageId: string; x: number; y: number; input: string } | null>(null);
   const [bulkPixhostImportOpen, setBulkPixhostImportOpen] = useState(false);
   const [bulkPixhostImportText, setBulkPixhostImportText] = useState('');
   const [bulkPixhostImportError, setBulkPixhostImportError] = useState('');
+  const [bulkPixhostTagInput, setBulkPixhostTagInput] = useState('');
+  const [bulkPixhostTags, setBulkPixhostTags] = useState<string[]>([]);
   const [batchImgurImportOpen, setBatchImgurImportOpen] = useState(false);
   const [batchImgurAlbumUrl, setBatchImgurAlbumUrl] = useState('');
   const [batchImgurImportError, setBatchImgurImportError] = useState('');
@@ -857,6 +892,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const galleryUploadInputRef = useRef<HTMLInputElement | null>(null);
   const historyCloseTimeoutRef = useRef<number | null>(null);
   const rollPopupTimeoutRef = useRef<number | null>(null);
+  const allGalleryCustomTags = getGalleryCustomTags(galleryImages);
 
   const dismissRollPopup = useCallback(() => {
     if (rollPopupTimeoutRef.current) {
@@ -4542,6 +4578,10 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const importBulkPixhostGalleryLinks = () => {
     if (!isCharacterOwner) return;
     const parsedLinks = parseBulkPixhostLinks(bulkPixhostImportText);
+    const appliedTags = Array.from(new Set([
+      ...bulkPixhostTags,
+      ...splitGalleryCustomTags(bulkPixhostTagInput),
+    ].map(normalizeGalleryCustomTag).filter(Boolean)));
     if (parsedLinks.length === 0) {
       setBulkPixhostImportError('No valid Pixhost show links were found.');
       return;
@@ -4562,11 +4602,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         url: link.url,
         thumbUrl: link.thumbUrl,
         label: '',
-        tags: [],
+        tags: appliedTags,
         createdAt: now + index,
       })),
     ]);
     setBulkPixhostImportText('');
+    setBulkPixhostTagInput('');
+    setBulkPixhostTags([]);
     setBulkPixhostImportError('');
     setBulkPixhostImportOpen(false);
     setSheetSyncStatus({
@@ -4677,6 +4719,39 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   const updateGalleryImage = (imageId: string, updater: (image: CharacterGalleryImage) => CharacterGalleryImage) => {
     setGalleryImages(prev => prev.map(image => (image.id === imageId ? updater(image) : image)));
+  };
+
+  const toggleGalleryCustomTag = (imageId: string, rawTag: string) => {
+    const tag = normalizeGalleryCustomTag(rawTag);
+    if (!tag || SPECIAL_GALLERY_TAGS.has(tag.toLowerCase())) return;
+    setGalleryImages(prev => prev.map(image => {
+      if (image.id !== imageId) return image;
+      const tags = image.tags || [];
+      const hasTag = tags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
+      return {
+        ...image,
+        tags: hasTag
+          ? tags.filter(currentTag => currentTag.toLowerCase() !== tag.toLowerCase())
+          : [...tags, tag],
+      };
+    }));
+  };
+
+  const addGalleryTagFromEditor = () => {
+    if (!galleryTagEditor) return;
+    const tags = splitGalleryCustomTags(galleryTagEditor.input);
+    if (tags.length === 0) return;
+    setGalleryImages(prev => prev.map(image => {
+      if (image.id !== galleryTagEditor.imageId) return image;
+      const nextTags = [...(image.tags || [])];
+      tags.forEach((tag) => {
+        if (!nextTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase())) {
+          nextTags.push(tag);
+        }
+      });
+      return { ...image, tags: nextTags };
+    }));
+    setGalleryTagEditor(current => (current ? { ...current, input: '' } : current));
   };
 
   const removeGalleryImage = (imageId: string) => {
@@ -8771,6 +8846,113 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             </div>
           </div>
         )}
+        {galleryTagEditor && (() => {
+          const image = galleryImages.find(item => item.id === galleryTagEditor.imageId);
+          if (!image) return null;
+          const imageTags = image.tags || [];
+          const customImageTags = imageTags.filter(tag => !SPECIAL_GALLERY_TAGS.has(tag.toLowerCase()));
+          return (
+            <>
+              <button
+                type="button"
+                aria-label="Close gallery tag editor"
+                className="fixed inset-0 z-[105] cursor-default bg-transparent"
+                onClick={() => setGalleryTagEditor(null)}
+              />
+              <div
+                className="fixed z-[110] w-[340px] rounded-2xl border border-emerald-700/45 bg-stone-950 p-4 shadow-[0_18px_50px_rgba(0,0,0,0.55)]"
+                style={{ left: galleryTagEditor.x, top: galleryTagEditor.y }}
+                onClick={(event) => event.stopPropagation()}
+              >
+                <div className="mb-3 flex items-start justify-between gap-3">
+                  <div>
+                    <h3 className="text-sm font-bold text-emerald-100" style={{ fontFamily: "'Cinzel', serif" }}>Image Tags</h3>
+                    <p className="mt-1 text-xs text-stone-400">Add or remove custom tags for this image.</p>
+                  </div>
+                  <button
+                    type="button"
+                    onClick={() => setGalleryTagEditor(null)}
+                    className="rounded-lg border border-stone-700 bg-stone-900 p-1.5 text-stone-300 hover:text-stone-100"
+                  >
+                    <X size={14} />
+                  </button>
+                </div>
+                <div className="space-y-3">
+                  <div>
+                    <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300/80">Current tags</div>
+                    {customImageTags.length === 0 ? (
+                      <p className="rounded-lg border border-dashed border-stone-700/70 px-3 py-2 text-xs italic text-stone-500">No custom tags yet.</p>
+                    ) : (
+                      <div className="flex flex-wrap gap-2">
+                        {customImageTags.map((tag) => (
+                          <button
+                            key={tag}
+                            type="button"
+                            onClick={() => toggleGalleryCustomTag(image.id, tag)}
+                            className="rounded-full border border-emerald-400/45 bg-emerald-900/35 px-2.5 py-1 text-xs font-bold text-emerald-100 hover:border-red-300/60 hover:bg-red-950/40 hover:text-red-100"
+                            title="Remove tag"
+                          >
+                            {tag} <span className="ml-1 text-emerald-200/70">x</span>
+                          </button>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+
+                  {allGalleryCustomTags.length > 0 && (
+                    <div>
+                      <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-cyan-300/80">Used on this character</div>
+                      <div className="flex max-h-28 flex-wrap gap-2 overflow-y-auto pr-1">
+                        {allGalleryCustomTags.map((tag) => {
+                          const active = imageTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => toggleGalleryCustomTag(image.id, tag)}
+                              className={`rounded-full border px-2.5 py-1 text-xs font-bold transition ${
+                                active
+                                  ? 'border-emerald-400/55 bg-emerald-900/40 text-emerald-100'
+                                  : 'border-stone-700/70 bg-stone-900/60 text-stone-400 hover:border-cyan-500/55 hover:text-cyan-100'
+                              }`}
+                            >
+                              {tag}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div>
+                    <div className="mb-1 text-[10px] font-bold uppercase tracking-[0.18em] text-amber-300/80">New tag</div>
+                    <div className="flex gap-2">
+                      <input
+                        autoFocus
+                        value={galleryTagEditor.input}
+                        onChange={(event) => setGalleryTagEditor(current => (current ? { ...current, input: event.target.value } : current))}
+                        onKeyDown={(event) => {
+                          if (event.key === 'Enter') addGalleryTagFromEditor();
+                          if (event.key === 'Escape') setGalleryTagEditor(null);
+                        }}
+                        className="min-w-0 flex-1 rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-amber-100 outline-none focus:border-emerald-500/60"
+                        placeholder="scene, npc, city..."
+                      />
+                      <button
+                        type="button"
+                        onClick={addGalleryTagFromEditor}
+                        className="rounded-lg border border-emerald-500/55 bg-emerald-900/35 px-3 py-2 text-xs font-bold text-emerald-100 hover:bg-emerald-800/45"
+                      >
+                        Add
+                      </button>
+                    </div>
+                    <p className="mt-1 text-[11px] text-stone-500">Use commas for multiple tags.</p>
+                  </div>
+                </div>
+              </div>
+            </>
+          );
+        })()}
         {bulkPixhostImportOpen && (
           <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
             <div className="w-full max-w-3xl rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
@@ -8791,6 +8973,42 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 className="mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 outline-none focus:border-cyan-500/60"
                 placeholder="[url=https://pixhost.to/show/.../image.png][img]https://t3.pixhost.to/thumbs/...[/img][/url]"
               />
+              <div className="mt-4 rounded-xl border border-emerald-800/35 bg-emerald-950/10 p-3">
+                <div className="mb-2 text-[10px] font-bold uppercase tracking-[0.18em] text-emerald-300/80">
+                  Apply tags to imported images
+                </div>
+                {allGalleryCustomTags.length > 0 && (
+                  <div className="mb-3 flex flex-wrap gap-2">
+                    {allGalleryCustomTags.map((tag) => {
+                      const active = bulkPixhostTags.some(currentTag => currentTag.toLowerCase() === tag.toLowerCase());
+                      return (
+                        <button
+                          key={tag}
+                          type="button"
+                          onClick={() => setBulkPixhostTags(prev => (
+                            active
+                              ? prev.filter(currentTag => currentTag.toLowerCase() !== tag.toLowerCase())
+                              : [...prev, tag]
+                          ))}
+                          className={`rounded-full border px-2.5 py-1 text-xs font-bold transition ${
+                            active
+                              ? 'border-emerald-300/60 bg-emerald-700/35 text-emerald-100'
+                              : 'border-stone-700/70 bg-stone-900/60 text-stone-400 hover:border-emerald-500/55 hover:text-emerald-100'
+                          }`}
+                        >
+                          {tag}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+                <input
+                  value={bulkPixhostTagInput}
+                  onChange={(event) => setBulkPixhostTagInput(event.target.value)}
+                  className="w-full rounded-lg border border-stone-700 bg-stone-900 px-3 py-2 text-sm text-emerald-100 outline-none focus:border-emerald-500/60"
+                  placeholder="New tags for all imported images, comma separated"
+                />
+              </div>
               {bulkPixhostImportError && (
                 <div className="mt-3 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
                   {bulkPixhostImportError}
@@ -8802,6 +9020,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                   onClick={() => {
                     setBulkPixhostImportOpen(false);
                     setBulkPixhostImportError('');
+                    setBulkPixhostTagInput('');
+                    setBulkPixhostTags([]);
                   }}
                   className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
                 >
@@ -9896,6 +10116,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     return (
                       <div
                         key={image.id}
+                        onContextMenu={(event) => {
+                          event.preventDefault();
+                          if (!isCharacterOwner) return;
+                          setGalleryTagEditor({
+                            imageId: image.id,
+                            x: Math.min(event.clientX, window.innerWidth - 360),
+                            y: Math.min(event.clientY, window.innerHeight - 380),
+                            input: '',
+                          });
+                        }}
                         className={`overflow-hidden rounded-2xl border bg-stone-950/45 shadow-lg ${
                           isMain ? 'border-amber-400/55 ring-1 ring-amber-300/35' : 'border-cyan-900/35'
                         }`}
@@ -9932,6 +10162,14 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                 Token
                               </span>
                             )}
+                            {tags
+                              .filter(tag => !SPECIAL_GALLERY_TAGS.has(tag.toLowerCase()))
+                              .slice(0, 4)
+                              .map((tag) => (
+                                <span key={tag} className="rounded-full border border-emerald-300/45 bg-emerald-950/75 px-2 py-1 text-[10px] font-bold uppercase tracking-[0.12em] text-emerald-100">
+                                  {tag}
+                                </span>
+                              ))}
                           </div>
                         </button>
                         <div className="space-y-3 p-3">
