@@ -18,6 +18,8 @@ interface ImgurApiResponse {
   status?: number;
 }
 
+type UnknownRecord = Record<string, unknown>;
+
 const IMGUR_CLIENT_ID = import.meta.env.VITE_IMGUR_CLIENT_ID as string | undefined;
 const CONFIGURED_IMGUR_ALBUM_PROXY_ENDPOINT = import.meta.env.VITE_IMGUR_ALBUM_PROXY_URL as string | undefined;
 const PIXHOST_UPLOAD_PROXY_ENDPOINT = import.meta.env.VITE_PIXHOST_UPLOAD_PROXY_URL as string | undefined;
@@ -102,6 +104,47 @@ const extractImgurImagesFromHtml = (html: string): ImgurAlbumImage[] => {
   return normalizeImgurImages(rawImages);
 };
 
+const isRecord = (value: unknown): value is UnknownRecord => (
+  Boolean(value) && typeof value === 'object' && !Array.isArray(value)
+);
+
+const collectImgurImagesFromJson = (value: unknown, rawImages: ImgurApiImage[] = []): ImgurApiImage[] => {
+  if (Array.isArray(value)) {
+    value.forEach(item => collectImgurImagesFromJson(item, rawImages));
+    return rawImages;
+  }
+
+  if (!isRecord(value)) return rawImages;
+
+  const linkValue = value.link || value.url || value.href || value.src;
+  if (typeof linkValue === 'string' && /^https?:\/\/i\.imgur\.com\/.+\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(linkValue)) {
+    rawImages.push({
+      id: typeof value.id === 'string' ? value.id : undefined,
+      title: typeof value.title === 'string' ? value.title : null,
+      name: typeof value.name === 'string' ? value.name : null,
+      link: linkValue,
+    });
+  }
+
+  const hash = typeof value.hash === 'string' ? value.hash : typeof value.id === 'string' ? value.id : '';
+  const ext = typeof value.ext === 'string' ? value.ext : typeof value.extension === 'string' ? value.extension : '';
+  if (hash && /^\.[a-z0-9]+$/i.test(ext)) {
+    rawImages.push({
+      id: hash,
+      title: typeof value.title === 'string' ? value.title : null,
+      name: typeof value.name === 'string' ? value.name : null,
+      link: `https://i.imgur.com/${hash}${ext}`,
+    });
+  }
+
+  Object.values(value).forEach(item => collectImgurImagesFromJson(item, rawImages));
+  return rawImages;
+};
+
+const extractImgurImagesFromJson = (value: unknown): ImgurAlbumImage[] => (
+  normalizeImgurImages(collectImgurImagesFromJson(value))
+);
+
 const loadImgurAlbumImagesFromApi = async (albumId: string): Promise<ImgurAlbumImage[]> => {
   const endpoints = [
     `https://api.imgur.com/3/album/${encodeURIComponent(albumId)}/images`,
@@ -167,6 +210,26 @@ const loadImgurAlbumImagesFromProxy = async (albumUrlOrId: string): Promise<Imgu
   throw new Error('Imgur album proxy did not return any direct image links.');
 };
 
+const loadImgurAlbumImagesFromPublicJson = async (albumId: string): Promise<ImgurAlbumImage[]> => {
+  const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}/layout/blog.json`, {
+    headers: {
+      Accept: 'application/json',
+    },
+  }).catch((error) => {
+    throw new Error(`Imgur album JSON could not be reached. ${error instanceof Error ? error.message : ''}`.trim());
+  });
+
+  if (!response.ok) {
+    throw new Error(`Imgur album JSON request failed (${response.status}).`);
+  }
+
+  const data = await response.json().catch(() => null);
+  const images = extractImgurImagesFromJson(data);
+  if (images.length > 0) return images;
+
+  throw new Error('Imgur album JSON did not include any direct image links.');
+};
+
 const loadImgurAlbumImagesFromPublicPage = async (albumId: string): Promise<ImgurAlbumImage[]> => {
   const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}`, {
     headers: {
@@ -210,6 +273,12 @@ export const loadImgurAlbumImages = async (albumUrlOrId: string): Promise<ImgurA
     } catch (error) {
       errors.push(error instanceof Error ? error.message : 'Imgur API failed.');
     }
+  }
+
+  try {
+    return await loadImgurAlbumImagesFromPublicJson(albumId);
+  } catch (error) {
+    errors.push(error instanceof Error ? error.message : 'Imgur public album JSON failed.');
   }
 
   try {

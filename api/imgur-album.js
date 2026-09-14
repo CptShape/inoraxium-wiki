@@ -53,11 +53,93 @@ const extractImagesFromHtml = (html) => {
   return images;
 };
 
+const collectImagesFromJson = (value, images = []) => {
+  if (Array.isArray(value)) {
+    value.forEach(item => collectImagesFromJson(item, images));
+    return images;
+  }
+
+  if (!value || typeof value !== 'object') return images;
+
+  const link = value.link || value.url || value.href || value.src;
+  if (typeof link === 'string' && /^https?:\/\/i\.imgur\.com\/.+\.(?:avif|gif|jpe?g|png|webp)(?:[?#].*)?$/i.test(link)) {
+    images.push({
+      id: typeof value.id === 'string' ? value.id : link.toLowerCase(),
+      link,
+      name: typeof value.title === 'string'
+        ? value.title
+        : typeof value.name === 'string'
+          ? value.name
+          : imageLabelFromUrl(link, `Imgur image ${images.length + 1}`),
+    });
+  }
+
+  const hash = typeof value.hash === 'string' ? value.hash : typeof value.id === 'string' ? value.id : '';
+  const ext = typeof value.ext === 'string' ? value.ext : typeof value.extension === 'string' ? value.extension : '';
+  if (hash && /^\.[a-z0-9]+$/i.test(ext)) {
+    const imageUrl = `https://i.imgur.com/${hash}${ext}`;
+    images.push({
+      id: hash,
+      link: imageUrl,
+      name: typeof value.title === 'string'
+        ? value.title
+        : typeof value.name === 'string'
+          ? value.name
+          : imageLabelFromUrl(imageUrl, `Imgur image ${images.length + 1}`),
+    });
+  }
+
+  Object.values(value).forEach(item => collectImagesFromJson(item, images));
+  return images;
+};
+
+const dedupeImages = (images) => {
+  const seen = new Set();
+  return images.filter((image) => {
+    const key = String(image.link || '').toLowerCase();
+    if (!key || seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+};
+
 const readAlbumUrl = (req) => {
   if (req.method === 'GET') {
     return req.query?.albumUrl || req.query?.url || req.query?.id || '';
   }
   return req.body?.albumUrl || req.body?.url || req.body?.id || '';
+};
+
+const fetchAlbumJsonImages = async (albumId) => {
+  const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}/layout/blog.json`, {
+    headers: {
+      Accept: 'application/json',
+      'User-Agent': 'Mozilla/5.0 InoraxiumWiki/1.0',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Imgur album JSON request failed (${response.status}).`);
+  }
+
+  const data = await response.json();
+  return dedupeImages(collectImagesFromJson(data));
+};
+
+const fetchAlbumHtmlImages = async (albumId) => {
+  const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}`, {
+    headers: {
+      Accept: 'text/html,application/xhtml+xml',
+      'User-Agent': 'Mozilla/5.0 InoraxiumWiki/1.0',
+    },
+  });
+
+  if (!response.ok) {
+    throw new Error(`Imgur album page request failed (${response.status}).`);
+  }
+
+  const html = await response.text();
+  return dedupeImages(extractImagesFromHtml(html));
 };
 
 export default async function handler(req, res) {
@@ -81,30 +163,21 @@ export default async function handler(req, res) {
     return;
   }
 
-  try {
-    const response = await fetch(`https://imgur.com/a/${encodeURIComponent(albumId)}`, {
-      headers: {
-        Accept: 'text/html,application/xhtml+xml',
-        'User-Agent': 'Mozilla/5.0 InoraxiumWiki/1.0',
-      },
-    });
-
-    if (!response.ok) {
-      res.status(response.status).json({ error: `Imgur album page request failed (${response.status}).` });
-      return;
+  const errors = [];
+  for (const loader of [fetchAlbumJsonImages, fetchAlbumHtmlImages]) {
+    try {
+      const images = await loader(albumId);
+      if (images.length > 0) {
+        res.status(200).json({ data: images });
+        return;
+      }
+      errors.push('No direct image links were found.');
+    } catch (error) {
+      errors.push(error instanceof Error ? error.message : 'Imgur album request failed.');
     }
-
-    const html = await response.text();
-    const images = extractImagesFromHtml(html);
-    if (images.length === 0) {
-      res.status(404).json({ error: 'Imgur album page did not include any direct image links.' });
-      return;
-    }
-
-    res.status(200).json({ data: images });
-  } catch (error) {
-    res.status(502).json({
-      error: `Imgur album could not be reached. ${error instanceof Error ? error.message : ''}`.trim(),
-    });
   }
+
+  res.status(502).json({
+    error: `Imgur album could not be imported. ${errors.join(' ')}`.trim(),
+  });
 }
