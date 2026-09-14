@@ -21,6 +21,8 @@ const parchmentBackground = {
 const sectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-6 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
 
+const SPECIAL_GALLERY_TAGS = new Set(['main', 'splash-art', 'token']);
+
 const getGalleryDisplayUrl = (image: CharacterGalleryImage): string => {
   const imageUrl = image.url || '';
   const thumbUrl = image.thumbUrl || '';
@@ -38,6 +40,7 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
   const [isLoading, setIsLoading] = useState(() => !getCachedHomebrewCharacter(characterId));
   const [error, setError] = useState<string | null>(null);
   const [fullscreenImage, setFullscreenImage] = useState<CharacterGalleryImage | null>(null);
+  const [tagFilters, setTagFilters] = useState<Record<string, 'include' | 'exclude'>>({});
 
   const setCharacter = (nextCharacter: CharacterData | null) => {
     setCharacterState(nextCharacter);
@@ -85,6 +88,51 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
       .slice()
       .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
   ), [character?.gallery]);
+
+  const galleryTags = useMemo(() => {
+    const tagMap = new Map<string, string>();
+    galleryImages.forEach((image) => {
+      (image.tags || []).forEach((tag) => {
+        const normalized = tag.trim();
+        const key = normalized.toLowerCase();
+        if (!normalized || SPECIAL_GALLERY_TAGS.has(key) || tagMap.has(key)) return;
+        tagMap.set(key, normalized);
+      });
+    });
+    return Array.from(tagMap.values()).sort((left, right) => left.localeCompare(right));
+  }, [galleryImages]);
+
+  const filteredGalleryImages = useMemo(() => {
+    const includedTags = Object.entries(tagFilters)
+      .filter(([, mode]) => mode === 'include')
+      .map(([tag]) => tag.toLowerCase());
+    const excludedTags = Object.entries(tagFilters)
+      .filter(([, mode]) => mode === 'exclude')
+      .map(([tag]) => tag.toLowerCase());
+
+    return galleryImages.filter((image) => {
+      const tags = (image.tags || []).map(tag => tag.toLowerCase());
+      if (excludedTags.some(tag => tags.includes(tag))) return false;
+      if (includedTags.length > 0 && !includedTags.some(tag => tags.includes(tag))) return false;
+      return true;
+    });
+  }, [galleryImages, tagFilters]);
+
+  const cycleTagFilter = (tag: string) => {
+    setTagFilters((current) => {
+      const key = tag.toLowerCase();
+      const mode = current[key];
+      const next = { ...current };
+      if (!mode) {
+        next[key] = 'include';
+      } else if (mode === 'include') {
+        next[key] = 'exclude';
+      } else {
+        delete next[key];
+      }
+      return next;
+    });
+  };
 
   if (isLoading) {
     return (
@@ -176,19 +224,52 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
               </h1>
             </div>
             <div className="rounded-full border border-amber-900/15 bg-white/50 px-4 py-2 text-sm font-bold text-amber-950">
-              {galleryImages.length} image{galleryImages.length === 1 ? '' : 's'}
+              {filteredGalleryImages.length} / {galleryImages.length} image{galleryImages.length === 1 ? '' : 's'}
             </div>
           </div>
         </header>
 
         <section className={sectionClass}>
+          {galleryTags.length > 0 && (
+            <div className="mb-5 rounded-2xl border border-amber-900/15 bg-white/35 p-3">
+              <div className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-amber-950/70" style={{ fontFamily: "'Cinzel', serif" }}>
+                Tags
+              </div>
+              <div className="flex flex-wrap gap-2">
+                {galleryTags.map((tag) => {
+                  const mode = tagFilters[tag.toLowerCase()];
+                  return (
+                    <button
+                      key={tag}
+                      type="button"
+                      onClick={() => cycleTagFilter(tag)}
+                      className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                        mode === 'include'
+                          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-950'
+                          : mode === 'exclude'
+                            ? 'border-rose-700/50 bg-rose-100 text-rose-950'
+                            : 'border-amber-900/15 bg-white/65 text-stone-700 hover:border-amber-700/35 hover:text-amber-950'
+                      }`}
+                      title={mode === 'include' ? 'Showing this tag' : mode === 'exclude' ? 'Hiding this tag' : 'Neutral'}
+                    >
+                      {tag}
+                    </button>
+                  );
+                })}
+              </div>
+            </div>
+          )}
           {galleryImages.length === 0 ? (
             <div className="rounded-2xl border border-dashed border-amber-900/25 bg-white/35 px-5 py-12 text-center text-stone-600">
               No gallery images yet.
             </div>
+          ) : filteredGalleryImages.length === 0 ? (
+            <div className="rounded-2xl border border-dashed border-amber-900/25 bg-white/35 px-5 py-12 text-center text-stone-600">
+              No images match the selected tags.
+            </div>
           ) : (
             <div className="columns-1 gap-4 sm:columns-2 xl:columns-3 2xl:columns-4">
-              {galleryImages.map((image) => {
+              {filteredGalleryImages.map((image) => {
                 const thumbUrl = getGalleryThumbUrl(image);
                 return (
                   <button
@@ -215,9 +296,11 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
                         {image.label && (
                           <div className="text-sm font-bold text-amber-950">{image.label}</div>
                         )}
-                        {(image.tags || []).length > 0 && (
+                        {(image.tags || []).filter(tag => !SPECIAL_GALLERY_TAGS.has(tag.toLowerCase())).length > 0 && (
                           <div className="flex flex-wrap gap-1.5">
-                            {(image.tags || []).map((tag) => (
+                            {(image.tags || [])
+                              .filter(tag => !SPECIAL_GALLERY_TAGS.has(tag.toLowerCase()))
+                              .map((tag) => (
                               <span key={tag} className="rounded-full border border-amber-900/15 bg-white/60 px-2 py-0.5 text-[10px] uppercase tracking-[0.16em] text-stone-600">
                                 {tag}
                               </span>
