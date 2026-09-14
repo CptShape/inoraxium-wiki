@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useState } from 'react';
 import { ArrowLeft, ImageIcon, X } from 'lucide-react';
-import { CharacterData, CharacterGalleryImage } from '../types/character';
+import { CharacterData, CharacterGalleryImage, CharacterGalleryTagCategory } from '../types/character';
 import { authProvider } from '../lib/auth';
 import { loadCharacterById, subscribeCharacterById } from '../lib/firestore';
 import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
@@ -22,6 +22,12 @@ const sectionClass =
   'rounded-2xl border border-amber-900/20 bg-white/45 p-6 shadow-[0_18px_36px_rgba(68,38,17,0.12)] backdrop-blur-[1px]';
 
 const SPECIAL_GALLERY_TAGS = new Set(['main', 'splash-art', 'token']);
+const GALLERY_TAG_CATEGORY_LABELS: Record<CharacterGalleryTagCategory, string> = {
+  character: 'Character Tags',
+  meta: 'Meta Tags',
+  general: 'General Tags',
+};
+const GALLERY_TAG_CATEGORY_ORDER: CharacterGalleryTagCategory[] = ['character', 'meta', 'general'];
 
 const getGalleryDisplayUrl = (image: CharacterGalleryImage): string => {
   const imageUrl = image.url || '';
@@ -101,6 +107,14 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
     });
     return Array.from(tagMap.values()).sort((left, right) => left.localeCompare(right));
   }, [galleryImages]);
+
+  const galleryTagsByCategory = useMemo(() => {
+    const categories = character?.galleryTagCategories || {};
+    return GALLERY_TAG_CATEGORY_ORDER.reduce((acc, category) => {
+      acc[category] = galleryTags.filter(tag => (categories[tag.toLowerCase()] || 'general') === category);
+      return acc;
+    }, {} as Record<CharacterGalleryTagCategory, string[]>);
+  }, [character?.galleryTagCategories, galleryTags]);
 
   const filteredGalleryImages = useMemo(() => {
     const includedTags = Object.entries(tagFilters)
@@ -232,28 +246,38 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
         <section className={sectionClass}>
           {galleryTags.length > 0 && (
             <div className="mb-5 rounded-2xl border border-amber-900/15 bg-white/35 p-3">
-              <div className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-amber-950/70" style={{ fontFamily: "'Cinzel', serif" }}>
-                Tags
-              </div>
-              <div className="flex flex-wrap gap-2">
-                {galleryTags.map((tag) => {
-                  const mode = tagFilters[tag.toLowerCase()];
+              <div className="space-y-3">
+                {GALLERY_TAG_CATEGORY_ORDER.map((category) => {
+                  const tags = galleryTagsByCategory[category] || [];
+                  if (tags.length === 0) return null;
                   return (
-                    <button
-                      key={tag}
-                      type="button"
-                      onClick={() => cycleTagFilter(tag)}
-                      className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
-                        mode === 'include'
-                          ? 'border-emerald-700/50 bg-emerald-100 text-emerald-950'
-                          : mode === 'exclude'
-                            ? 'border-rose-700/50 bg-rose-100 text-rose-950'
-                            : 'border-amber-900/15 bg-white/65 text-stone-700 hover:border-amber-700/35 hover:text-amber-950'
-                      }`}
-                      title={mode === 'include' ? 'Showing this tag' : mode === 'exclude' ? 'Hiding this tag' : 'Neutral'}
-                    >
-                      {tag}
-                    </button>
+                    <div key={category}>
+                      <div className="mb-2 text-xs font-bold uppercase tracking-[0.22em] text-amber-950/70" style={{ fontFamily: "'Cinzel', serif" }}>
+                        {GALLERY_TAG_CATEGORY_LABELS[category]}
+                      </div>
+                      <div className="flex flex-wrap gap-2">
+                        {tags.map((tag) => {
+                          const mode = tagFilters[tag.toLowerCase()];
+                          return (
+                            <button
+                              key={tag}
+                              type="button"
+                              onClick={() => cycleTagFilter(tag)}
+                              className={`rounded-full border px-3 py-1.5 text-xs font-bold transition ${
+                                mode === 'include'
+                                  ? 'border-emerald-700/50 bg-emerald-100 text-emerald-950'
+                                  : mode === 'exclude'
+                                    ? 'border-rose-700/50 bg-rose-100 text-rose-950'
+                                    : 'border-amber-900/15 bg-white/65 text-stone-700 hover:border-amber-700/35 hover:text-amber-950'
+                              }`}
+                              title={mode === 'include' ? 'Showing this tag' : mode === 'exclude' ? 'Hiding this tag' : 'Neutral'}
+                            >
+                              {tag}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
