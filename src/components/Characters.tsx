@@ -723,6 +723,9 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
+  const [bulkPixhostImportOpen, setBulkPixhostImportOpen] = useState(false);
+  const [bulkPixhostImportText, setBulkPixhostImportText] = useState('');
+  const [bulkPixhostImportError, setBulkPixhostImportError] = useState('');
   const [displayStats, setDisplayStats] = useState<CharacterDisplayStat[]>([]);
   const [displaySlotStates, setDisplaySlotStates] = useState<Record<string, 'unlocked' | 'locked' | 'blocked'>>({});
   const [overviewSettings, setOverviewSettings] = useState<CharacterOverviewSettings>({ mainAttributeIds: [], valueBoxes: [] });
@@ -4487,6 +4490,58 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
         ...image,
       },
     ]);
+  };
+
+  const parseBulkPixhostLinks = (rawText: string): Array<{ url: string; label: string }> => {
+    const normalizedText = rawText
+      .replace(/\\_/g, '_')
+      .replace(/\\\[/g, '[')
+      .replace(/\\\]/g, ']')
+      .replace(/&amp;/g, '&')
+      .replace(/&#x20;/g, ' ');
+    const urlMatches = Array.from(normalizedText.matchAll(/https?:\/\/pixhost\.to\/show\/[^\s\]\)]+?\.(?:png|jpe?g|webp|gif)/gi));
+    const uniqueUrls = Array.from(new Set(urlMatches.map(match => match[0].trim())));
+    return uniqueUrls.map((url) => {
+      const rawName = decodeURIComponent(url.split('/').pop() || 'Pixhost image');
+      const label = rawName.replace(/\.(png|jpe?g|webp|gif)$/i, '');
+      return { url, label };
+    });
+  };
+
+  const importBulkPixhostGalleryLinks = () => {
+    if (!isCharacterOwner) return;
+    const parsedLinks = parseBulkPixhostLinks(bulkPixhostImportText);
+    if (parsedLinks.length === 0) {
+      setBulkPixhostImportError('No valid Pixhost show links were found.');
+      return;
+    }
+
+    const existingUrls = new Set(galleryImages.map(image => image.url));
+    const newLinks = parsedLinks.filter(link => !existingUrls.has(link.url));
+    if (newLinks.length === 0) {
+      setBulkPixhostImportError('All detected Pixhost links are already in the gallery.');
+      return;
+    }
+
+    const now = Date.now();
+    setGalleryImages(prev => [
+      ...prev,
+      ...newLinks.map((link, index): CharacterGalleryImage => ({
+        id: `gallery_${uid()}`,
+        url: link.url,
+        thumbUrl: '',
+        label: link.label,
+        tags: [],
+        createdAt: now + index,
+      })),
+    ]);
+    setBulkPixhostImportText('');
+    setBulkPixhostImportError('');
+    setBulkPixhostImportOpen(false);
+    setSheetSyncStatus({
+      tone: 'success',
+      message: `${newLinks.length} Pixhost image${newLinks.length === 1 ? '' : 's'} added to gallery. Save the character to keep them in Firestore.`,
+    });
   };
 
   const getDisplayImageUrl = (imageUrl?: string, thumbUrl?: string): string => {
@@ -8642,6 +8697,54 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
             </div>
           </div>
         )}
+        {bulkPixhostImportOpen && (
+          <div className="fixed inset-0 z-[110] flex items-center justify-center bg-black/75 px-4 backdrop-blur-sm">
+            <div className="w-full max-w-3xl rounded-2xl border border-cyan-700/50 bg-stone-950 p-5 shadow-[0_0_40px_rgba(34,211,238,0.18)]">
+              <h3 className="text-lg font-bold text-cyan-100" style={{ fontFamily: "'Cinzel', serif" }}>
+                Bulk Pixhost Import
+              </h3>
+              <p className="mt-2 text-sm leading-relaxed text-stone-300">
+                Paste Pixhost BBCode or copied link blocks. Only the main pixhost.to/show image links will be added; thumbnail links are ignored.
+              </p>
+              <textarea
+                autoFocus
+                value={bulkPixhostImportText}
+                onChange={(event) => {
+                  setBulkPixhostImportText(event.target.value);
+                  setBulkPixhostImportError('');
+                }}
+                rows={10}
+                className="mt-4 w-full rounded-xl border border-stone-700 bg-stone-900 px-3 py-2 text-sm font-mono text-cyan-100 outline-none focus:border-cyan-500/60"
+                placeholder="[url=https://pixhost.to/show/.../image.png][img]https://t3.pixhost.to/thumbs/...[/img][/url]"
+              />
+              {bulkPixhostImportError && (
+                <div className="mt-3 rounded-lg border border-red-800/40 bg-red-950/30 px-3 py-2 text-sm text-red-200">
+                  {bulkPixhostImportError}
+                </div>
+              )}
+              <div className="mt-5 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    setBulkPixhostImportOpen(false);
+                    setBulkPixhostImportError('');
+                  }}
+                  className="rounded-lg border border-stone-700 bg-stone-900 px-4 py-2 text-sm text-stone-300 transition hover:border-stone-500 hover:text-stone-100"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={importBulkPixhostGalleryLinks}
+                  className="rounded-lg border border-cyan-500/60 bg-cyan-900/40 px-4 py-2 text-sm font-bold text-cyan-100 transition hover:bg-cyan-800/55"
+                  style={{ fontFamily: "'Cinzel', serif" }}
+                >
+                  Add Images
+                </button>
+              </div>
+            </div>
+          </div>
+        )}
         {partyTransferTarget && (
           <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4">
             <div className="w-full max-w-lg rounded-2xl border border-sky-800/45 bg-stone-950 p-5 shadow-2xl">
@@ -9613,15 +9716,30 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                     Add portraits, reference art, and tokens. Main sets the default portrait; Splash Art is shown on the Homebrew Character Overview.
                   </p>
                 </div>
-                <button
-                  onClick={chooseGalleryUploadMode}
-                  disabled={!isCharacterOwner || galleryUploading}
-                  className="inline-flex items-center gap-2 rounded-xl border border-cyan-700/45 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45 disabled:cursor-not-allowed disabled:opacity-50"
-                  style={{ fontFamily: "'Cinzel', serif" }}
-                >
-                  <Upload size={16} />
-                  {galleryUploading ? 'Uploading...' : 'Image Upload'}
-                </button>
+                <div className="flex flex-wrap justify-end gap-2">
+                  <button
+                    onClick={chooseGalleryUploadMode}
+                    disabled={!isCharacterOwner || galleryUploading}
+                    className="inline-flex items-center gap-2 rounded-xl border border-cyan-700/45 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    <Upload size={16} />
+                    {galleryUploading ? 'Uploading...' : 'Image Upload'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      setBulkPixhostImportOpen(true);
+                      setBulkPixhostImportError('');
+                    }}
+                    disabled={!isCharacterOwner}
+                    className="inline-flex items-center gap-2 rounded-xl border border-emerald-700/45 bg-emerald-950/30 px-4 py-2 text-sm font-bold text-emerald-100 hover:bg-emerald-900/40 disabled:cursor-not-allowed disabled:opacity-50"
+                    style={{ fontFamily: "'Cinzel', serif" }}
+                  >
+                    <Upload size={16} />
+                    Bulk Pixhost
+                  </button>
+                </div>
               </div>
 
               {galleryImages.length === 0 ? (
