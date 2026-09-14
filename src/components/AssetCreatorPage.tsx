@@ -127,6 +127,16 @@ const createBarUpdateEffect = (): StatusEffect => ({
   barUpdateDescription: 'Choose which bar this asset should update when imported.',
 });
 
+const createItemUpdateEffect = (): StatusEffect => ({
+  id: `eff_${uid()}`,
+  effectType: 'item-update',
+  targetId: '',
+  value: '0',
+  active: true,
+  itemUpdateArrayMode: false,
+  itemUpdateIds: [],
+});
+
 const createMacro = (): CharacterDiceMacro => ({
   id: `macro_${uid()}`,
   name: 'New Macro',
@@ -271,9 +281,12 @@ const importNumber = (value: unknown, fallback: number) => (typeof value === 'nu
 
 const normalizeImportedEffect = (effect: Partial<StatusEffect> = {}): StatusEffect => ({
   id: importString(effect.id, `eff_${uid()}`),
-  effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' ? effect.effectType : 'attribute',
+  effectType: effect.effectType === 'status' || effect.effectType === 'bar-update' || effect.effectType === 'item-update' ? effect.effectType : 'attribute',
   targetId: importString(effect.targetId, ''),
   value: importString(effect.value, '0'),
+  canOverflow: effect.canOverflow ?? false,
+  itemUpdateArrayMode: effect.itemUpdateArrayMode ?? false,
+  itemUpdateIds: Array.isArray(effect.itemUpdateIds) ? effect.itemUpdateIds.filter((id): id is string => typeof id === 'string') : [],
   active: effect.active ?? true,
   useTargetPicker: effect.useTargetPicker ?? true,
   targetLabel: typeof effect.targetLabel === 'string' ? effect.targetLabel : undefined,
@@ -493,6 +506,9 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
           <button type="button" className={smallButtonClass} onClick={() => onChange([...effects, createBarUpdateEffect()])}>
             <Plus size={14} /> Bar Update
           </button>
+          <button type="button" className={smallButtonClass} onClick={() => onChange([...effects, createItemUpdateEffect()])}>
+            <Plus size={14} /> Item Update
+          </button>
         </div>
       </div>
       {effects.length === 0 ? (
@@ -521,6 +537,46 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
               value={effect.value}
               onChange={event => updateEffect(index, { value: event.target.value })}
               placeholder="+100"
+            />
+            <button type="button" className={dangerButtonClass} onClick={() => onChange(effects.filter((_, effectIndex) => effectIndex !== index))}>
+              <Trash2 size={14} />
+            </button>
+          </div>
+        ) : effect.effectType === 'item-update' ? (
+          <div key={effect.id || index} className="grid gap-2 rounded-md border border-emerald-900/30 bg-black/25 p-2 md:grid-cols-[auto_auto_minmax(0,1fr)_minmax(0,1fr)_auto]">
+            <span className="rounded border border-emerald-700/50 bg-emerald-900/30 px-3 py-2 text-xs font-semibold text-emerald-200">Apply</span>
+            <button
+              type="button"
+              className={`rounded border px-3 py-2 text-xs font-semibold ${effect.itemUpdateArrayMode ? 'border-emerald-500/60 bg-emerald-500/20 text-emerald-100' : 'border-stone-700 bg-stone-900 text-stone-400'}`}
+              onClick={() => updateEffect(index, {
+                itemUpdateArrayMode: !(effect.itemUpdateArrayMode ?? false),
+                itemUpdateIds: effect.itemUpdateIds || (effect.targetId ? [effect.targetId] : []),
+              })}
+            >
+              {effect.itemUpdateArrayMode ? 'Array' : 'Single'}
+            </button>
+            {effect.itemUpdateArrayMode ? (
+              <textarea
+                className={`${inputClass} min-h-10`}
+                value={(effect.itemUpdateIds || []).join('\n')}
+                onChange={event => updateEffect(index, {
+                  itemUpdateIds: Array.from(new Set(event.target.value.split(/[\r\n,]+/).map(id => id.trim()).filter(Boolean))),
+                })}
+                placeholder="One item ID per line"
+              />
+            ) : (
+              <input
+                className={inputClass}
+                value={effect.targetId}
+                onChange={event => updateEffect(index, { targetId: event.target.value })}
+                placeholder="item_id"
+              />
+            )}
+            <input
+              className={inputClass}
+              value={effect.value}
+              onChange={event => updateEffect(index, { value: event.target.value })}
+              placeholder="-1"
             />
             <button type="button" className={dangerButtonClass} onClick={() => onChange(effects.filter((_, effectIndex) => effectIndex !== index))}>
               <Trash2 size={14} />
