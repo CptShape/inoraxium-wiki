@@ -109,13 +109,17 @@ const readNested = (value, path) => (
   ), value)
 );
 
-const collectPreferredJsonImages = (data) => dedupeImages([
-  ...collectImagesFromJson(readNested(data, ['data', 'album_images', 'images'])),
-  ...collectImagesFromJson(readNested(data, ['album_images', 'images'])),
-  ...collectImagesFromJson(readNested(data, ['data', 'images'])),
-  ...collectImagesFromJson(readNested(data, ['images'])),
-  ...collectImagesFromJson(data),
-]);
+const collectPreferredJsonImages = (data) => {
+  const preferredImages = dedupeImages([
+    ...collectImagesFromJson(readNested(data, ['data', 'album_images', 'images'])),
+    ...collectImagesFromJson(readNested(data, ['album_images', 'images'])),
+    ...collectImagesFromJson(readNested(data, ['data', 'images'])),
+    ...collectImagesFromJson(readNested(data, ['images'])),
+  ]);
+
+  if (preferredImages.length > 0) return preferredImages;
+  return dedupeImages(collectImagesFromJson(data));
+};
 
 const readAlbumUrl = (req) => {
   if (req.method === 'GET') {

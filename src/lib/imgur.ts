@@ -145,15 +145,17 @@ const readNested = (value: unknown, path: string[]): unknown => (
   path.reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), value)
 );
 
-const extractImgurImagesFromJson = (value: unknown): ImgurAlbumImage[] => (
-  normalizeImgurImages([
+const extractImgurImagesFromJson = (value: unknown): ImgurAlbumImage[] => {
+  const preferredImages = normalizeImgurImages([
     ...collectImgurImagesFromJson(readNested(value, ['data', 'album_images', 'images'])),
     ...collectImgurImagesFromJson(readNested(value, ['album_images', 'images'])),
     ...collectImgurImagesFromJson(readNested(value, ['data', 'images'])),
     ...collectImgurImagesFromJson(readNested(value, ['images'])),
-    ...collectImgurImagesFromJson(value),
-  ])
-);
+  ]);
+  if (preferredImages.length > 0) return preferredImages;
+
+  return normalizeImgurImages(collectImgurImagesFromJson(value));
+};
 
 const loadImgurAlbumImagesFromApi = async (albumId: string): Promise<ImgurAlbumImage[]> => {
   const endpoints = [
