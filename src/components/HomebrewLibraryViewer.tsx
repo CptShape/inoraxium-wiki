@@ -80,7 +80,7 @@ interface ItemUpdateChoice {
   id: string;
   name: string;
   quantity: number;
-  kind: 'generalItems' | 'inventory';
+  kind: 'generalItems' | 'inventory' | 'missing';
 }
 
 interface StatusExportPayload {
@@ -311,6 +311,18 @@ const buildFolderGroups = (entries: LibraryEntry[]): FolderGroup[] => {
   return Array.from(groups.values()).sort((left, right) => left.label.localeCompare(right.label, undefined, { sensitivity: 'base' }));
 };
 
+const parseItemUpdateIds = (effect: StatusEffect): string[] => {
+  const sourceIds = effect.itemUpdateArrayMode
+    ? (effect.itemUpdateIds && effect.itemUpdateIds.length > 0 ? effect.itemUpdateIds : [effect.targetId || ''])
+    : [effect.targetId || ''];
+  return Array.from(new Set(
+    sourceIds
+      .flatMap(id => id.split(/[\r\n,]+/))
+      .map(id => id.trim())
+      .filter(Boolean)
+  ));
+};
+
 const renderEffectPill = (
   effect: StatusEffect,
   index: number,
@@ -384,7 +396,7 @@ const renderEffectPill = (
   }
 
   if (effect.effectType === 'item-update') {
-    const ids = effect.itemUpdateArrayMode ? (effect.itemUpdateIds || []) : [effect.targetId].filter(Boolean);
+    const ids = parseItemUpdateIds(effect);
     const itemLabel = effect.itemUpdateArrayMode
       ? ids.length > 0 ? `${ids.length} item${ids.length === 1 ? '' : 's'}` : 'Choose item'
       : effect.targetId || 'Item ID';
@@ -946,7 +958,12 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
           kind: 'inventory' as const,
         }];
       }
-      return [];
+      return [{
+        id,
+        name: id,
+        quantity: 0,
+        kind: 'missing' as const,
+      }];
     });
   }, []);
 
@@ -1076,7 +1093,11 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
   }, [canControlCharacter, character, getLocalVariableContextWithInputs, setCharacter, showBarUpdatePopup, userId]);
 
   const applyItemUpdateEffect = useCallback(async (effect: StatusEffect, localVariables?: CharacterLocalVariable[]) => {
-    if (!character || !canControlCharacter || effect.effectType !== 'item-update') return;
+    if (!character || effect.effectType !== 'item-update') return;
+    if (!canControlCharacter) {
+      setActionMessage('Control access is required for Item Update.');
+      return;
+    }
     const baseCharacter = await loadCharacterById(character.id, userId) || character;
     const context = buildCharacterFormulaContext(baseCharacter);
     const localContext = await getLocalVariableContextWithInputs(
@@ -1093,19 +1114,26 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
       return;
     }
 
-    const ids = effect.itemUpdateArrayMode
-      ? (effect.itemUpdateIds || [])
-      : [effect.targetId || ''];
+    const ids = parseItemUpdateIds(effect);
+    if (ids.length === 0) {
+      setActionMessage('Item Update has no item IDs.');
+      return;
+    }
     const choices = getItemUpdateChoices(baseCharacter, ids);
-    if (choices.length === 0) {
+    const availableChoices = choices.filter(choice => choice.kind !== 'missing');
+    if (!effect.itemUpdateArrayMode && availableChoices.length === 0) {
       setActionMessage('Target item could not be found.');
       return;
     }
 
     const selectedItem = effect.itemUpdateArrayMode
       ? await requestItemUpdateChoice('Choose Item To Update', choices)
-      : choices[0];
+      : availableChoices[0];
     if (!selectedItem) return;
+    if (selectedItem.kind === 'missing') {
+      setActionMessage('Selected item could not be found.');
+      return;
+    }
 
     const roundedDelta = Math.round(delta * 100) / 100;
     const nextQuantity = Math.round((selectedItem.quantity + roundedDelta) * 100) / 100;
@@ -1904,15 +1932,18 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
                 <button
                   key={`${item.kind}:${item.id}`}
                   type="button"
-                  onClick={() => itemUpdateChoiceRequest.resolve(item)}
-                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-emerald-900/35 bg-emerald-950/15 p-3 text-left transition hover:border-emerald-500/60 hover:bg-emerald-900/25"
+                  onClick={() => {
+                    if (item.kind !== 'missing') itemUpdateChoiceRequest.resolve(item);
+                  }}
+                  disabled={item.kind === 'missing'}
+                  className="grid w-full grid-cols-[minmax(0,1fr)_auto] gap-3 rounded-xl border border-emerald-900/35 bg-emerald-950/15 p-3 text-left transition hover:border-emerald-500/60 hover:bg-emerald-900/25 disabled:cursor-not-allowed disabled:border-rose-900/35 disabled:bg-rose-950/15 disabled:opacity-75"
                 >
                   <span className="min-w-0">
                     <span className="block truncate text-sm font-bold text-emerald-100">{item.name}</span>
                     <span className="block truncate font-mono text-xs text-stone-500">{item.id}</span>
                   </span>
-                  <span className="self-center rounded-lg border border-emerald-600/30 bg-black/30 px-3 py-1 font-mono text-sm text-emerald-100">
-                    Qty {item.quantity}
+                  <span className={`self-center rounded-lg border bg-black/30 px-3 py-1 font-mono text-sm ${item.kind === 'missing' ? 'border-rose-600/30 text-rose-200' : 'border-emerald-600/30 text-emerald-100'}`}>
+                    {item.kind === 'missing' ? 'Not found' : `Qty ${item.quantity}`}
                   </span>
                 </button>
               ))}
