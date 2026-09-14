@@ -103,6 +103,20 @@ const dedupeImages = (images) => {
   });
 };
 
+const readNested = (value, path) => (
+  path.reduce((current, key) => (
+    current && typeof current === 'object' && !Array.isArray(current) ? current[key] : undefined
+  ), value)
+);
+
+const collectPreferredJsonImages = (data) => dedupeImages([
+  ...collectImagesFromJson(readNested(data, ['data', 'album_images', 'images'])),
+  ...collectImagesFromJson(readNested(data, ['album_images', 'images'])),
+  ...collectImagesFromJson(readNested(data, ['data', 'images'])),
+  ...collectImagesFromJson(readNested(data, ['images'])),
+  ...collectImagesFromJson(data),
+]);
+
 const readAlbumUrl = (req) => {
   if (req.method === 'GET') {
     return req.query?.albumUrl || req.query?.url || req.query?.id || '';
@@ -128,7 +142,7 @@ const fetchAlbumJsonImages = async (albumId) => {
   }
 
   const data = JSON.parse(text);
-  return dedupeImages(collectImagesFromJson(data));
+  return collectPreferredJsonImages(data);
 };
 
 const fetchAlbumHtmlImages = async (albumId) => {

@@ -141,8 +141,18 @@ const collectImgurImagesFromJson = (value: unknown, rawImages: ImgurApiImage[] =
   return rawImages;
 };
 
+const readNested = (value: unknown, path: string[]): unknown => (
+  path.reduce<unknown>((current, key) => (isRecord(current) ? current[key] : undefined), value)
+);
+
 const extractImgurImagesFromJson = (value: unknown): ImgurAlbumImage[] => (
-  normalizeImgurImages(collectImgurImagesFromJson(value))
+  normalizeImgurImages([
+    ...collectImgurImagesFromJson(readNested(value, ['data', 'album_images', 'images'])),
+    ...collectImgurImagesFromJson(readNested(value, ['album_images', 'images'])),
+    ...collectImgurImagesFromJson(readNested(value, ['data', 'images'])),
+    ...collectImgurImagesFromJson(readNested(value, ['images'])),
+    ...collectImgurImagesFromJson(value),
+  ])
 );
 
 const loadImgurAlbumImagesFromApi = async (albumId: string): Promise<ImgurAlbumImage[]> => {

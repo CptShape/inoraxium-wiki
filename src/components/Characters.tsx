@@ -4600,7 +4600,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           id: `gallery_${uid()}`,
           url: image.url,
           thumbUrl: image.url,
-          label: image.label,
+          label: '',
           tags: [],
           createdAt: now + index,
         })),
