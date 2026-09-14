@@ -4497,20 +4497,46 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     ]);
   };
 
-  const parseBulkPixhostLinks = (rawText: string): Array<{ url: string; label: string }> => {
+  const parseBulkPixhostLinks = (rawText: string): Array<{ url: string; thumbUrl: string }> => {
     const normalizedText = rawText
       .replace(/\\_/g, '_')
       .replace(/\\\[/g, '[')
       .replace(/\\\]/g, ']')
       .replace(/&amp;/g, '&')
       .replace(/&#x20;/g, ' ');
-    const urlMatches = Array.from(normalizedText.matchAll(/https?:\/\/pixhost\.to\/show\/[^\s\]\)]+?\.(?:png|jpe?g|webp|gif)/gi));
-    const uniqueUrls = Array.from(new Set(urlMatches.map(match => match[0].trim())));
-    return uniqueUrls.map((url) => {
-      const rawName = decodeURIComponent(url.split('/').pop() || 'Pixhost image');
-      const label = rawName.replace(/\.(png|jpe?g|webp|gif)$/i, '');
-      return { url, label };
+    const linksByShowUrl = new Map<string, { url: string; thumbUrl: string }>();
+    const pairedMatches = Array.from(normalizedText.matchAll(
+      /\[url=(https?:\/\/pixhost\.to\/show\/[^\]\s]+?\.(?:png|jpe?g|webp|gif))\]\[img\](https?:\/\/[^ \]\[]+?\.(?:png|jpe?g|webp|gif)(?:\?[^ \]\[]*)?)\[\/img\]\[\/url\]/gi,
+    ));
+
+    pairedMatches.forEach((match) => {
+      const showUrl = match[1].trim();
+      const thumbUrl = match[2].trim();
+      linksByShowUrl.set(showUrl, {
+        url: getPixhostDirectImageUrl(showUrl, thumbUrl),
+        thumbUrl,
+      });
     });
+
+    const markdownMatches = Array.from(normalizedText.matchAll(
+      /\[(https?:\/\/pixhost\.to\/show\/[^\]\s]+?\.(?:png|jpe?g|webp|gif))\]\((https?:\/\/pixhost\.to\/show\/[^\)\s]+?\.(?:png|jpe?g|webp|gif))\)/gi,
+    ));
+    markdownMatches.forEach((match) => {
+      const showUrl = (match[2] || match[1]).trim();
+      if (!linksByShowUrl.has(showUrl)) {
+        linksByShowUrl.set(showUrl, { url: showUrl, thumbUrl: '' });
+      }
+    });
+
+    const urlMatches = Array.from(normalizedText.matchAll(/https?:\/\/pixhost\.to\/show\/[^\s\]\)]+?\.(?:png|jpe?g|webp|gif)/gi));
+    urlMatches.forEach((match) => {
+      const showUrl = match[0].trim();
+      if (!linksByShowUrl.has(showUrl)) {
+        linksByShowUrl.set(showUrl, { url: showUrl, thumbUrl: '' });
+      }
+    });
+
+    return Array.from(linksByShowUrl.values());
   };
 
   const importBulkPixhostGalleryLinks = () => {
@@ -4534,8 +4560,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       ...newLinks.map((link, index): CharacterGalleryImage => ({
         id: `gallery_${uid()}`,
         url: link.url,
-        thumbUrl: '',
-        label: link.label,
+        thumbUrl: link.thumbUrl,
+        label: '',
         tags: [],
         createdAt: now + index,
       })),
