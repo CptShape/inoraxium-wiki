@@ -413,13 +413,13 @@ const CampaignsPage: React.FC = () => {
     entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
     source: PartyEntrySource,
   ) => (
-    <div key={`${kind}-${entry.id}`} className="rounded-xl border border-sky-800/35 bg-black/30 p-4">
-      <div className="flex flex-wrap items-start justify-between gap-3">
-        <div>
-          <h4 className="text-lg font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{entry.name || 'Unnamed Entry'}</h4>
+    <div key={`${kind}-${entry.id}`} className="min-w-0 rounded-xl border border-sky-800/35 bg-black/30 p-4">
+      <div className="grid gap-3 xl:grid-cols-[minmax(0,1fr)_auto] xl:items-start">
+        <div className="min-w-0">
+          <h4 className="break-words text-lg font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{entry.name || 'Unnamed Entry'}</h4>
           {'description' in entry && entry.description && <p className="mt-2 max-w-2xl whitespace-pre-wrap text-sm text-sky-100/65">{entry.description}</p>}
         </div>
-        <div className="flex flex-wrap items-center justify-end gap-2">
+        <div className="flex min-w-0 flex-wrap items-center justify-start gap-2 xl:justify-end">
           {'quantity' in entry && (
             <input
               type="text"
@@ -439,7 +439,7 @@ const CampaignsPage: React.FC = () => {
                 takeFromParty(event.target.value, kind, entry);
                 event.target.value = '';
               }}
-              className="rounded-lg border border-emerald-700/45 bg-emerald-950/35 px-3 py-2 text-sm text-emerald-100"
+              className="min-w-0 max-w-full rounded-lg border border-emerald-700/45 bg-emerald-950/35 px-3 py-2 text-sm text-emerald-100"
             >
               <option value="">Take...</option>
               {controlledCharacters.map((character) => (
@@ -481,7 +481,7 @@ const CampaignsPage: React.FC = () => {
   }
 
   return (
-    <div className="min-h-[calc(100vh-120px)] rounded-2xl border border-sky-900/40 bg-[#06111f] p-6 text-sky-50 shadow-2xl">
+    <div className="min-h-[calc(100vh-120px)] w-full rounded-2xl border border-sky-900/40 bg-[#06111f] p-4 text-sky-50 shadow-2xl sm:p-5 xl:p-6">
       {selectedCampaign && selectedMember && (
         <div className="fixed inset-0 z-[1000] grid place-items-center bg-black/70 px-4">
           <div className="w-full max-w-md rounded-2xl border border-sky-700/45 bg-[#07101d] p-5 shadow-2xl">
@@ -571,18 +571,28 @@ const CampaignsPage: React.FC = () => {
           </div>
         </div>
       )}
-      <div className="mb-6 rounded-2xl border border-sky-800/35 bg-black/40 p-5">
-        <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80" style={{ fontFamily: "'Cinzel', serif" }}>Inoraxium Tools</p>
-        <h2 className="mt-2 text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Campaigns</h2>
-        <p className="mt-2 max-w-3xl text-sm text-sky-100/65">
-          Create campaigns, invite players, organize parties, and keep shared party inventory separate from character sheets.
-        </p>
-        {statusMessage && <p className="mt-3 text-sm text-cyan-200/80">{statusMessage}</p>}
+      <div className="mb-5 rounded-2xl border border-sky-800/35 bg-black/40 p-4 sm:p-5">
+        <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="min-w-0">
+            <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80" style={{ fontFamily: "'Cinzel', serif" }}>Inoraxium Tools</p>
+            <h2 className="mt-2 text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Campaigns</h2>
+            <p className="mt-2 max-w-4xl text-sm text-sky-100/65">
+              Create campaigns, invite players, organize parties, and keep shared party inventory separate from character sheets.
+            </p>
+          </div>
+          {selectedCampaign && (
+            <div className="rounded-xl border border-sky-800/35 bg-sky-950/25 px-3 py-2 text-right text-xs text-sky-100/60">
+              <div className="font-bold text-sky-100">{selectedCampaign.name}</div>
+              <div>{isSelectedCampaignDm ? 'DM' : 'Player'} view</div>
+            </div>
+          )}
+        </div>
+        {statusMessage && <p className="mt-3 rounded-xl border border-cyan-800/25 bg-cyan-950/15 px-3 py-2 text-sm text-cyan-200/80">{statusMessage}</p>}
       </div>
 
       {!selectedCampaign ? (
-        <div className="grid gap-6 lg:grid-cols-[360px_1fr]">
-          <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
+        <div className="grid min-w-0 gap-5 xl:grid-cols-[minmax(300px,380px)_minmax(0,1fr)]">
+          <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-4 sm:p-5">
             <h3 className="mb-4 text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Create a Campaign</h3>
             <input
               value={newCampaignName}
@@ -595,23 +605,23 @@ const CampaignsPage: React.FC = () => {
             </button>
           </section>
 
-          <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
+          <section className="min-w-0 rounded-2xl border border-sky-900/40 bg-black/30 p-4 sm:p-5">
             <div className="mb-4 flex items-center justify-between gap-3">
               <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Your Campaigns</h3>
               <button onClick={refreshCampaigns} className="rounded-lg border border-sky-800/45 px-3 py-2 text-xs text-sky-200 hover:bg-sky-900/30">
                 <RefreshCw size={14} />
               </button>
             </div>
-            <div className="space-y-3">
+            <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
               {campaigns.length === 0 ? (
-                <p className="rounded-xl border border-dashed border-sky-900/45 p-6 text-center text-sky-100/45">No campaigns yet.</p>
+                <p className="rounded-xl border border-dashed border-sky-900/45 p-6 text-center text-sky-100/45 lg:col-span-2 2xl:col-span-3">No campaigns yet.</p>
               ) : campaigns.map((campaign) => (
-                <div key={campaign.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-900/35 bg-black/25 p-4">
-                  <div>
-                    <h4 className="font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{campaign.name}</h4>
+                <div key={campaign.id} className="flex min-w-0 flex-col gap-4 rounded-xl border border-sky-900/35 bg-black/25 p-4">
+                  <div className="min-w-0">
+                    <h4 className="break-words font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{campaign.name}</h4>
                     <p className="text-xs text-sky-100/45">{(campaign.dmUserIds || []).includes(authState.uid!) ? 'DM' : 'Player'} • {(campaign.members || []).length} users</p>
                   </div>
-                  <button onClick={() => setSelectedCampaignId(campaign.id)} className="rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-sm text-amber-100 hover:bg-amber-900/40">
+                  <button onClick={() => setSelectedCampaignId(campaign.id)} className="mt-auto rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-sm text-amber-100 hover:bg-amber-900/40">
                     Load
                   </button>
                 </div>
@@ -620,60 +630,75 @@ const CampaignsPage: React.FC = () => {
           </section>
         </div>
       ) : !selectedParty ? (
-        <div className="grid gap-6 xl:grid-cols-[minmax(0,1fr)_420px]">
-          <main className="space-y-6">
-            <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
-              <div className="flex flex-wrap items-start justify-between gap-3">
-                <div>
-                  <button onClick={() => setSelectedCampaignId(null)} className="mb-3 text-sm text-cyan-300 hover:text-cyan-100">← Back to campaigns</button>
-                  <h3 className="text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{selectedCampaign.name}</h3>
-                  <p className="mt-1 text-sm text-sky-100/55">Role: {isSelectedCampaignDm ? 'DM' : 'Player'}</p>
+        <div className="space-y-5">
+          <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-4 sm:p-5">
+            <div className="flex flex-wrap items-start justify-between gap-3">
+              <div className="min-w-0">
+                <button onClick={() => setSelectedCampaignId(null)} className="mb-3 text-sm text-cyan-300 hover:text-cyan-100">← Back to campaigns</button>
+                <h3 className="break-words text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{selectedCampaign.name}</h3>
+                <div className="mt-2 flex flex-wrap gap-2 text-xs text-sky-100/65">
+                  <span className="rounded-full border border-sky-800/45 bg-sky-950/35 px-3 py-1">Role: {isSelectedCampaignDm ? 'DM' : 'Player'}</span>
+                  <span className="rounded-full border border-sky-800/45 bg-sky-950/35 px-3 py-1">{selectedCampaignMembers.length} users</span>
+                  <span className="rounded-full border border-sky-800/45 bg-sky-950/35 px-3 py-1">{parties.length} parties</span>
                 </div>
-                <button onClick={handleCopyInvite} className="inline-flex items-center gap-2 rounded-xl border border-cyan-700/55 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45">
-                  <Copy size={15} /> Invite
-                </button>
               </div>
-            </section>
+              <button onClick={handleCopyInvite} className="inline-flex shrink-0 items-center gap-2 rounded-xl border border-cyan-700/55 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45">
+                <Copy size={15} /> Invite
+              </button>
+            </div>
+          </section>
 
-            <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
-              <div className="mb-4 flex flex-wrap items-end justify-between gap-3">
-                <div>
-                  <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Party List</h3>
-                  <p className="text-sm text-sky-100/45">Parties start private. DM and party creator can see private parties.</p>
-                </div>
-                <div className="flex gap-2">
-                  <input value={newPartyName} onChange={(event) => setNewPartyName(event.target.value)} placeholder="Party name" className="rounded-lg border border-sky-900/55 bg-stone-950/70 px-3 py-2 text-sm text-sky-50 outline-none focus:border-cyan-400" />
-                  <button onClick={handleCreateParty} disabled={isBusy} className="rounded-lg border border-cyan-700/55 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45 disabled:opacity-50">Create a Party</button>
-                </div>
-              </div>
-              <div className="space-y-3">
-                {parties.length === 0 ? (
-                  <p className="rounded-xl border border-dashed border-sky-900/45 p-6 text-center text-sky-100/45">No parties yet.</p>
-                ) : parties.map((party) => (
-                  <div key={party.id} className="flex flex-wrap items-center justify-between gap-3 rounded-xl border border-sky-900/35 bg-black/25 p-4">
-                    <div>
-                      <h4 className="font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{party.name}</h4>
-                      <p className="text-xs text-sky-100/45">{party.visibility} • {party.characterIds.length} characters</p>
-                    </div>
-                    <button onClick={() => setSelectedPartyId(party.id)} className="rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-sm text-amber-100 hover:bg-amber-900/40">
-                      Load
+          <div className="grid min-w-0 gap-5 2xl:grid-cols-[minmax(0,1fr)_430px]">
+            <main className="min-w-0">
+              <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-4 sm:p-5">
+                <div className="mb-4 grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(320px,460px)] xl:items-end">
+                  <div className="min-w-0">
+                    <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>Party List</h3>
+                    <p className="mt-1 max-w-3xl text-sm text-sky-100/45">Parties start private. DM and party creator can see private parties.</p>
+                  </div>
+                  <div className="grid min-w-0 gap-2 sm:grid-cols-[minmax(0,1fr)_auto]">
+                    <input
+                      value={newPartyName}
+                      onChange={(event) => setNewPartyName(event.target.value)}
+                      placeholder="Party name"
+                      className="min-w-0 rounded-lg border border-sky-900/55 bg-stone-950/70 px-3 py-2 text-sm text-sky-50 outline-none focus:border-cyan-400"
+                    />
+                    <button onClick={handleCreateParty} disabled={isBusy} className="inline-flex min-w-[150px] items-center justify-center gap-2 whitespace-nowrap rounded-lg border border-cyan-700/55 bg-cyan-950/35 px-4 py-2 text-sm font-bold text-cyan-100 hover:bg-cyan-900/45 disabled:opacity-50">
+                      <Plus size={15} /> Create Party
                     </button>
                   </div>
-                ))}
-              </div>
-            </section>
-          </main>
+                </div>
+                <div className="grid gap-3 lg:grid-cols-2 2xl:grid-cols-3">
+                  {parties.length === 0 ? (
+                    <p className="rounded-xl border border-dashed border-sky-900/45 p-6 text-center text-sky-100/45 lg:col-span-2 2xl:col-span-3">No parties yet.</p>
+                  ) : parties.map((party) => (
+                    <div key={party.id} className="flex min-w-0 flex-col gap-4 rounded-xl border border-sky-900/35 bg-black/25 p-4">
+                      <div className="min-w-0">
+                        <h4 className="break-words font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{party.name}</h4>
+                        <p className="mt-1 text-xs text-sky-100/45">{party.visibility} • {party.characterIds.length} characters</p>
+                      </div>
+                      <button onClick={() => setSelectedPartyId(party.id)} className="mt-auto rounded-lg border border-amber-700/50 bg-amber-950/30 px-4 py-2 text-sm text-amber-100 hover:bg-amber-900/40">
+                        Load
+                      </button>
+                    </div>
+                  ))}
+                </div>
+              </section>
+            </main>
 
-          <aside className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
-            <h3 className="mb-4 text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>User List</h3>
-            <div className="space-y-2">
+            <aside className="min-w-0 rounded-2xl border border-sky-900/40 bg-black/30 p-4 sm:p-5">
+              <div className="mb-4 flex items-center justify-between gap-3">
+                <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>User List</h3>
+                <span className="rounded-full border border-sky-800/45 bg-sky-950/35 px-3 py-1 text-xs text-sky-100/60">{selectedCampaignMembers.length}</span>
+              </div>
+              <div className="grid gap-2 md:grid-cols-2 2xl:grid-cols-1">
               {selectedCampaignMembers.map((member) => {
                 const { displayName, email } = getMemberDisplay(member);
                 return (
                   <button
                     key={member.uid}
                     onClick={() => setSelectedMemberUid(member.uid)}
-                    className="flex w-full items-center justify-between gap-3 rounded-xl border border-sky-900/30 bg-black/25 p-3 text-left transition-all hover:border-cyan-500/55 hover:bg-cyan-950/20"
+                    className="grid w-full min-w-0 grid-cols-[minmax(0,1fr)_auto] items-center gap-3 rounded-xl border border-sky-900/30 bg-black/25 p-3 text-left transition-all hover:border-cyan-500/55 hover:bg-cyan-950/20"
                   >
                     <div className="min-w-0">
                       <p className="truncate font-bold text-sky-100">{displayName}</p>
@@ -685,13 +710,14 @@ const CampaignsPage: React.FC = () => {
                   </button>
                 );
               })}
-            </div>
-          </aside>
+              </div>
+            </aside>
+          </div>
         </div>
       ) : (
         <div className="space-y-6">
           <section className="rounded-2xl border border-sky-900/40 bg-black/30 p-5">
-            <div className="flex flex-wrap items-start justify-between gap-3">
+          <div className="flex min-w-0 flex-wrap items-start justify-between gap-3">
               <div>
                 <button onClick={() => setSelectedPartyId(null)} className="mb-3 text-sm text-cyan-300 hover:text-cyan-100">← Back to campaign</button>
                 <h3 className="text-3xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{selectedParty.name}</h3>
@@ -704,14 +730,14 @@ const CampaignsPage: React.FC = () => {
           </section>
 
           <div className="rounded-2xl border border-sky-900/40 bg-black/30 p-3">
-            <div className="flex flex-wrap gap-2">
+            <div className="flex min-w-0 flex-wrap gap-2">
               {[
                 { key: 'characters', label: 'Characters', icon: <Users size={15} /> },
                 { key: 'inventory', label: 'Party Inventory', icon: <Backpack size={15} /> },
                 { key: 'spells', label: 'Spells', icon: <Sparkles size={15} /> },
                 { key: 'statuses', label: 'Statuses', icon: <Shield size={15} /> },
               ].map((tab) => (
-                <button key={tab.key} onClick={() => setPartyTab(tab.key as PartyTab)} className={`inline-flex items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold ${partyTab === tab.key ? 'border-amber-400/60 bg-amber-950/40 text-amber-100' : 'border-sky-900/50 bg-black/20 text-sky-100/55 hover:text-sky-100'}`} style={{ fontFamily: "'Cinzel', serif" }}>
+                <button key={tab.key} onClick={() => setPartyTab(tab.key as PartyTab)} className={`inline-flex min-w-0 items-center gap-2 rounded-xl border px-4 py-2 text-sm font-bold ${partyTab === tab.key ? 'border-amber-400/60 bg-amber-950/40 text-amber-100' : 'border-sky-900/50 bg-black/20 text-sky-100/55 hover:text-sky-100'}`} style={{ fontFamily: "'Cinzel', serif" }}>
                   {tab.icon} {tab.label}
                 </button>
               ))}
