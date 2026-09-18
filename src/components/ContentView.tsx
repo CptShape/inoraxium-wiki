@@ -359,6 +359,9 @@ export const ContentView: React.FC<ContentViewProps> = ({
     );
   }
 
+  const wideModuleContents = new Set(['battle-tracker', 'world-map', 'characters', 'session', 'campaigns', 'asset-creator']);
+  const isWideModule = wideModuleContents.has(activeChapter.content || '');
+
   const hasParts = parts.length > 0;
   const currentPart = parts[activePartIndex];
   const prevPart = activePartIndex > 0 ? parts[activePartIndex - 1] : null;
@@ -483,8 +486,10 @@ export const ContentView: React.FC<ContentViewProps> = ({
       {/* ── Scrollable content ────────────────────────────────────────────── */}
       <div ref={scrollContainerRef} className="flex-1 overflow-y-auto">
         <div 
-          className="mx-auto px-12 py-10 transition-all duration-300"
-          style={{ width: `${(activeChapter.width ?? 0.5) * 100}%`, minWidth: '320px' }}
+          className={`mx-auto py-10 transition-all duration-300 ${isWideModule ? 'px-4 sm:px-6 2xl:px-10' : 'px-12'}`}
+          style={isWideModule
+            ? { width: '100%', maxWidth: '1900px', minWidth: '320px' }
+            : { width: `${(activeChapter.width ?? 0.5) * 100}%`, minWidth: '320px' }}
         >
 
           {/* ── Breadcrumb + Share Link ────────────────────────────────────── */}
