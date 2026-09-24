@@ -3,7 +3,7 @@ import { createPortal } from 'react-dom';
 import { X } from 'lucide-react';
 import './homebrewEditor.css';
 
-export function HomebrewDialog({ title, children, onClose, busy = false }: { title: string; children: ReactNode; onClose: () => void; busy?: boolean }) {
+export function HomebrewDialog({ title, children, onClose, busy = false, headerActions }: { title: string; children: ReactNode; onClose: () => void; busy?: boolean; headerActions?: ReactNode }) {
   const ref = useRef<HTMLDivElement>(null), id = useId();
   useEffect(() => {
     const previous = document.activeElement as HTMLElement | null;
@@ -20,6 +20,6 @@ export function HomebrewDialog({ title, children, onClose, busy = false }: { tit
         else if (e.shiftKey && (document.activeElement === first || document.activeElement === ref.current)) { e.preventDefault(); last.focus(); }
         else if (!e.shiftKey && document.activeElement === last) { e.preventDefault(); first.focus(); }
       }
-    }}><header><h2 id={id}>{title}</h2><button type="button" className="hb-icon" disabled={busy} onClick={onClose} aria-label="Close dialog" title="Close"><X size={18} /></button></header><div className="hb-dialog-content">{children}</div></div>
+    }}><header><h2 id={id}>{title}</h2><div className="hb-dialog-header-actions">{headerActions}<button type="button" className="hb-icon" disabled={busy} onClick={onClose} aria-label="Close dialog" title="Close"><X size={18} /></button></div></header><div className="hb-dialog-content">{children}</div></div>
   </div>, document.body);
 }

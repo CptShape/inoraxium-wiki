@@ -141,3 +141,70 @@ test('party selector sends a copy request without changing the source character'
   expect(request[0].id).toBe('qa-party'); expect(request[1]).toBe('item'); expect(request[2].id).toBe('qa-item'); expect(request[3]).toBe('hb-qa');
   expect(await page.evaluate(() => localStorage.getItem('battleTrackerLocalCharacters'))).toBe(before);
 });
+
+test('clipboard imports prefill each object type and persist only on Confirm', async ({ page }) => {
+  const dialog = page.getByRole('dialog');
+  for (const kind of ['item', 'spell', 'status']) {
+    const before = await page.evaluate(() => localStorage.getItem('battleTrackerLocalCharacters'));
+    await page.evaluate(kind => {
+      Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => JSON.stringify({ schema: 'inoraxium-character-entry', version: 1, kind, entry: {
+        id: 'original-export-id', name: `Imported ${kind}`, description: 'Clipboard description', quantity: 7,
+        magicSchool: 'Evocation', duration: '3', active: false, homebrewImageUrl: 'https://example.test/image.png',
+        actions: [{ id: 'source-action', name: 'Imported action', macros: [{ id: 'source-macro', name: 'Test roll', formula: '70 * (@int_mod + 1)' }] }],
+        localVariables: [{ id: 'local_a', kind: 'variable', value: '@level + 2', description: 'Imported local' }],
+      } }) } });
+    }, kind);
+    await page.getByRole('button', { name: 'Add', exact: true }).click();
+    await dialog.getByRole('button', { name: 'Import from Clipboard', exact: true }).click();
+    await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue(`Imported ${kind}`);
+    await expect(dialog.getByPlaceholder('Action name', { exact: true })).toHaveValue('Imported action');
+    if (kind === 'spell') await expect(dialog.getByLabel('Magic School', { exact: true })).toHaveValue('Evocation');
+    if (kind === 'status') await expect(dialog.getByRole('checkbox', { name: 'Active', exact: true })).not.toBeChecked();
+    expect(await page.evaluate(() => localStorage.getItem('battleTrackerLocalCharacters'))).toBe(before);
+    await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill(`Edited imported ${kind}`);
+    for (const width of [1280, 390]) {
+      await page.setViewportSize({ width, height: 900 });
+      const size = await dialog.evaluate(el => ({ width: el.clientWidth, scroll: el.scrollWidth }));
+      expect(size.scroll).toBeLessThanOrEqual(size.width + 1);
+      if (kind === 'item') await dialog.screenshot({ path: `.artifacts/demo-game/homebrew-import-${width}.png` });
+    }
+    await dialog.getByRole('button', { name: 'Confirm', exact: true }).click();
+    await expect(dialog).not.toBeVisible();
+    const entry = await page.evaluate(kind => {
+      const character = JSON.parse(localStorage.getItem('battleTrackerLocalCharacters')!)[0];
+      return character[kind === 'item' ? 'inventory' : kind === 'spell' ? 'spells' : 'statuses'].find((e: any) => e.name === `Edited imported ${kind}`);
+    }, kind);
+    expect(entry.id).not.toBe('original-export-id'); expect(entry.actions[0].id).not.toBe('source-action');
+    expect(entry.localVariables[0].id).toBe('local_a'); expect(entry.localVariables[0].value).toBe('@level + 2');
+    expect(entry.actions[0].macros[0].formula).toBe('70 * (@int_mod + 1)');
+    await page.setViewportSize({ width: 1280, height: 900 });
+  }
+});
+
+test('clipboard denial allows paste; invalid and cancelled imports preserve the form', async ({ page }) => {
+  const before = await page.evaluate(() => {
+    Object.defineProperty(navigator, 'clipboard', { configurable: true, value: { readText: async () => { throw new Error('Denied'); } } });
+    return localStorage.getItem('battleTrackerLocalCharacters');
+  });
+  await page.getByRole('button', { name: 'Add', exact: true }).click();
+  const dialog = page.getByRole('dialog');
+  await dialog.getByRole('button', { name: 'Item', exact: true }).click();
+  await dialog.getByRole('textbox', { name: 'Name', exact: true }).fill('Keep this draft');
+  await dialog.getByRole('button', { name: 'Import from Clipboard', exact: true }).click();
+  await dialog.getByLabel('Paste export JSON', { exact: true }).fill('invalid JSON');
+  await dialog.getByRole('button', { name: 'Load JSON', exact: true }).click();
+  await expect(dialog.getByRole('alert')).toContainText('valid JSON');
+  await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Keep this draft');
+  await dialog.getByLabel('Paste export JSON', { exact: true }).fill(JSON.stringify({ schema: 'inoraxium-character-entry', version: 1, kind: 'item', entry: { name: 'Replacement' } }));
+  await dialog.getByRole('button', { name: 'Load JSON', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Keep current form', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Keep this draft');
+  await dialog.getByRole('button', { name: 'Import from Clipboard', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Load JSON', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Replace form', exact: true }).click();
+  await expect(dialog.getByRole('textbox', { name: 'Name', exact: true })).toHaveValue('Replacement');
+  expect(await page.evaluate(() => localStorage.getItem('battleTrackerLocalCharacters'))).toBe(before);
+  await dialog.getByRole('button', { name: 'Close dialog', exact: true }).click();
+  await dialog.getByRole('button', { name: 'Discard', exact: true }).click();
+  expect(await page.evaluate(() => localStorage.getItem('battleTrackerLocalCharacters'))).toBe(before);
+});
