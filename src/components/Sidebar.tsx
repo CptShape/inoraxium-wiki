@@ -1,8 +1,9 @@
-import React from 'react';
-import { BookOpen } from 'lucide-react';
+import React, { useEffect, useId, useRef, useState } from 'react';
+import { BookOpen, Menu, X } from 'lucide-react';
 import { Chapter, GameSystemId } from '../types';
 import { ChapterTree } from './ChapterTree';
 import { LoginButton } from './LoginButton';
+import './sidebarCompact.css';
 
 interface SidebarProps {
   chapters: Chapter[];
@@ -17,6 +18,7 @@ interface SidebarProps {
   breadcrumb: string[];
   onOpenEditor: () => void;
   isEditorOpen: boolean;
+  compactOnMobile?: boolean;
 }
 
 export const Sidebar: React.FC<SidebarProps> = ({
@@ -32,11 +34,25 @@ export const Sidebar: React.FC<SidebarProps> = ({
   breadcrumb,
   onOpenEditor,
   isEditorOpen,
+  compactOnMobile = false,
 }) => {
   const nextSystemName = currentSystem === 'inoraxium' ? 'Horaghfus' : 'Inoraxium';
+  const [mobileOpen, setMobileOpen] = useState(false);
+  const panelId = useId();
+  const toggle = useRef<HTMLButtonElement>(null);
+  useEffect(() => { setMobileOpen(false); }, [activeChapterId, compactOnMobile]);
+  useEffect(() => {
+    if (!mobileOpen) return;
+    const close = (event: KeyboardEvent) => { if (event.key === 'Escape') { setMobileOpen(false); toggle.current?.focus(); } };
+    window.addEventListener('keydown', close);
+    return () => window.removeEventListener('keydown', close);
+  }, [mobileOpen]);
 
   return (
-    <div className="w-80 bg-stone-900/70 border-r-2 border-amber-800 p-6 shadow-xl shadow-black/30 backdrop-blur-sm overflow-y-auto flex flex-col">
+    <>
+    {compactOnMobile && <button ref={toggle} type="button" className="sidebar-mobile-toggle" aria-expanded={mobileOpen} aria-controls={panelId} aria-label={mobileOpen ? 'Close navigation' : 'Open navigation'} title={mobileOpen ? 'Close navigation' : 'Open navigation'} onClick={() => setMobileOpen(open => !open)}>{mobileOpen ? <X size={20} /> : <Menu size={20} />}</button>}
+    {compactOnMobile && mobileOpen && <button type="button" className="sidebar-mobile-backdrop" aria-label="Dismiss navigation" onClick={() => { setMobileOpen(false); toggle.current?.focus(); }} />}
+    <div id={panelId} className={`w-80 bg-stone-900/70 border-r-2 border-amber-800 p-6 shadow-xl shadow-black/30 backdrop-blur-sm overflow-y-auto flex flex-col ${compactOnMobile ? `sidebar-compact ${mobileOpen ? 'is-open' : ''}` : ''}`}>
       {/* Header */}
       <div className="text-center mb-6 pb-6 border-b border-amber-800/50">
         <button
@@ -72,7 +88,7 @@ export const Sidebar: React.FC<SidebarProps> = ({
           activeChapterId={activeChapterId}
           expandedChapters={expandedChapters}
           depth={0}
-          onChapterSelect={onChapterSelect}
+          onChapterSelect={(id, path) => { setMobileOpen(false); onChapterSelect(id, path); }}
           onToggleExpand={onToggleExpand}
           path={[]}
         />
@@ -99,5 +115,6 @@ export const Sidebar: React.FC<SidebarProps> = ({
         <LoginButton />
       </div>
     </div>
+    </>
   );
 };

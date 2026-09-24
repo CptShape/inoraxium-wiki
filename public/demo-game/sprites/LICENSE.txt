@@ -1,0 +1,9 @@
+DungeonTileset II v1.7
+Author: Robert Norenberg (0x72)
+Source: https://0x72.itch.io/dungeontileset-ii
+License: Creative Commons Zero (CC0 1.0 Universal)
+https://creativecommons.org/publicdomain/zero/1.0/
+
+The original author explicitly permits use for any purpose under CC0.
+Downloaded from the author's official itch.io distribution on 2026-09-22.
+Included unmodified: knight_m, wizzard_m and big_demon idle/run frames 0-3.

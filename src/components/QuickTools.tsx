@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { Check, ChevronLeft, Clock3, X } from 'lucide-react';
+import React, { useEffect, useState } from 'react';
+import { Check, ChevronLeft, Clock3, Plus, X } from 'lucide-react';
+import { HomebrewEntryDialog } from './HomebrewEntryDialog';
 import { CharacterData } from '../types/character';
 import { loadCharacterById, updateCharacterFields } from '../lib/firestore';
 import { applyCharacterTimeProgression, CharacterTimeAction } from '../lib/characterTime';
@@ -33,6 +34,14 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
   userId = null,
 }) => {
   const [isOpen, setIsOpen] = useState(false);
+  const [adding, setAdding] = useState(false);
+  const [notice, setNotice] = useState('');
+  useEffect(() => {
+    let timer: ReturnType<typeof setTimeout>;
+    const notify = (event: Event) => { setNotice(String((event as CustomEvent).detail)); clearTimeout(timer); timer = setTimeout(() => setNotice(''), 10000); };
+    window.addEventListener('homebrew-notice', notify);
+    return () => { window.removeEventListener('homebrew-notice', notify); clearTimeout(timer); };
+  }, []);
   const [minuteAction, setMinuteAction] = useState<typeof proceedOptions[number] | null>(null);
   const [minutesDraft, setMinutesDraft] = useState('1');
   const [message, setMessage] = useState<string | null>(null);
@@ -109,6 +118,7 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
         </div>
 
         <div className="flex flex-1 flex-col items-center justify-center gap-4 px-2">
+          <button type="button" aria-label="Add" title={canControl ? 'Add' : 'Control permission required'} disabled={!character || !canControl || isSaving} onClick={() => setAdding(true)} className="group flex w-full flex-col items-center justify-center gap-1 rounded-lg border border-amber-800/20 bg-amber-950/25 px-1 py-3 text-center transition hover:border-cyan-500/50 hover:bg-cyan-950/30 disabled:cursor-not-allowed disabled:opacity-35"><Plus size={23} className="text-cyan-200" /><span className="text-[9px] font-bold uppercase leading-3 text-amber-100">Add</span></button>
           <button
             type="button"
             onClick={() => setIsOpen(true)}
@@ -129,6 +139,9 @@ export const QuickTools: React.FC<QuickToolsProps> = ({
           </div>
         ) : null}
       </aside>
+
+      {adding && character && <HomebrewEntryDialog key={character.id} character={character} userId={userId} onUpdated={onCharacterUpdated} onClose={() => setAdding(false)} />}
+      {notice && <div role="status" className="fixed bottom-5 right-[82px] z-[10001] flex w-[min(360px,calc(100vw-100px))] items-start gap-3 rounded-lg border border-emerald-700 bg-stone-950 p-4 text-sm text-emerald-100 shadow-xl"><span className="min-w-0 flex-1 break-words">{notice}</span><button type="button" aria-label="Dismiss notification" title="Dismiss" onClick={() => setNotice('')}><X size={16} /></button></div>}
 
       {isOpen && (
         <div className="fixed inset-0 z-[9100] bg-black/25" onClick={() => setIsOpen(false)}>

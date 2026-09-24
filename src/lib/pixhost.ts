@@ -75,7 +75,7 @@ const normalizePixhostResponse = (data: PixhostApiResponse, fileName: string): P
   };
 };
 
-export const uploadImageToPixhost = async (file: File): Promise<PixhostUploadResult> => {
+export const uploadImageToPixhost = async (file: File, options: { preserveOriginal?: boolean } = {}): Promise<PixhostUploadResult> => {
   if (!file.type.startsWith('image/')) {
     throw new Error('Please choose an image file.');
   }
@@ -84,7 +84,7 @@ export const uploadImageToPixhost = async (file: File): Promise<PixhostUploadRes
   formData.append('img', file);
   formData.append('content_type', '0');
   formData.append('max_th_size', '420');
-  formData.append('optimize_for_web', '1');
+  formData.append('optimize_for_web', options.preserveOriginal ? '0' : '1');
 
   const uploadEndpoint = PIXHOST_UPLOAD_PROXY_ENDPOINT || PIXHOST_UPLOAD_ENDPOINT;
 

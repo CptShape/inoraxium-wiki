@@ -4,6 +4,7 @@ import { battleTrackerChapter } from './battle-tracker';
 import { campaignsChapter } from './campaigns';
 import { charactersChapter } from './characters';
 import { sessionChapter } from './session';
+import { demoGameChapter } from './demo-game';
 
 export const toolsChapter: Chapter = {
   id: 'tools',
@@ -11,7 +12,7 @@ export const toolsChapter: Chapter = {
   subtitle: 'Instruments and Utilities for the Game Master',
   icon: '🛠️',
   content: 'src/data/inoraxium/tools/chapters/tools.md',
-  subChapters: [battleTrackerChapter, charactersChapter, sessionChapter, campaignsChapter, assetCreatorChapter],
+  subChapters: [battleTrackerChapter, charactersChapter, sessionChapter, campaignsChapter, demoGameChapter, assetCreatorChapter],
 };
 
 export { assetCreatorChapter, battleTrackerChapter, campaignsChapter, charactersChapter, sessionChapter };

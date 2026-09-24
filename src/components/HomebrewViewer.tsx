@@ -6,6 +6,7 @@ import { authProvider } from '../lib/auth';
 import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
+import { HomebrewObjectTools } from './HomebrewObjectTools';
 
 export type HomebrewViewerEntityType = 'general-item' | 'inventory-item' | 'spell' | 'status';
 
@@ -546,7 +547,7 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
 
   return (
     <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 pr-24 text-stone-900" style={parchmentBackground}>
-      <QuickTools character={character} canControl={canControlCharacter} onCharacterUpdated={setCharacter} />
+      <QuickTools character={character} canControl={canControlCharacter} userId={userId} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
           type="button"
@@ -684,6 +685,7 @@ export const HomebrewViewer: React.FC<HomebrewViewerProps> = ({
         ) : (
           <div className="grid gap-6 lg:grid-cols-[1.2fr_0.8fr]">
             <article className={`${viewerSectionClass} relative overflow-hidden`}>
+              {character && <div className="mb-5"><HomebrewObjectTools key={`${character.id}:${viewerEntry.entry.id}`} character={character} entry={viewerEntry.entry} kind={entityType} userId={userId} canControl={canControlCharacter} onUpdated={setCharacter} /></div>}
               <div
                 className="absolute inset-x-0 top-0 h-1"
                 style={{ background: `linear-gradient(90deg, ${meta.accent}, transparent)` }}
