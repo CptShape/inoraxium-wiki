@@ -1,0 +1,62 @@
+const t=`<table class="tableRow">\r
+  <thead>\r
+    <tr>\r
+      <th>Level</th>\r
+      <th>XP to Next Level</th>\r
+      <th>Total XP</th>\r
+      <th>Proficiency Bonus</th>\r
+    </tr>\r
+  </thead>\r
+  <tbody>\r
+    <tr><td>1</td><td>100</td><td>0</td><td>2</td></tr>\r
+<tr><td>2</td><td>200</td><td>100</td><td>2</td></tr>\r
+<tr><td>3</td><td>340</td><td>300</td><td>2</td></tr>\r
+<tr><td>4</td><td>510</td><td>640</td><td>2</td></tr>\r
+<tr><td>5</td><td>765</td><td>1150</td><td>2</td></tr>\r
+<tr><td>6</td><td>1148</td><td>1915</td><td>3</td></tr>\r
+<tr><td>7</td><td>1722</td><td>3063</td><td>3</td></tr>\r
+<tr><td>8</td><td>2583</td><td>4785</td><td>3</td></tr>\r
+<tr><td>9</td><td>3875</td><td>7368</td><td>3</td></tr>\r
+<tr><td>10</td><td>5813</td><td>11243</td><td>3</td></tr>\r
+<tr><td>11</td><td>8720</td><td>17056</td><td>4</td></tr>\r
+<tr><td>12</td><td>13080</td><td>25776</td><td>4</td></tr>\r
+<tr><td>13</td><td>19620</td><td>38856</td><td>4</td></tr>\r
+<tr><td>14</td><td>29430</td><td>58476</td><td>4</td></tr>\r
+<tr><td>15</td><td>44145</td><td>87906</td><td>4</td></tr>\r
+<tr><td>16</td><td>66218</td><td>132051</td><td>5</td></tr>\r
+<tr><td>17</td><td>99327</td><td>198269</td><td>5</td></tr>\r
+<tr><td>18</td><td>148991</td><td>297596</td><td>5</td></tr>\r
+<tr><td>19</td><td>223487</td><td>446587</td><td>5</td></tr>\r
+<tr><td>20</td><td>335231</td><td>670074</td><td>5</td></tr>\r
+<tr><td>21</td><td>502847</td><td>1005305</td><td>6</td></tr>\r
+<tr><td>22</td><td>754271</td><td>1508152</td><td>6</td></tr>\r
+<tr><td>23</td><td>1131407</td><td>2262423</td><td>6</td></tr>\r
+<tr><td>24</td><td>1</td><td>3393830</td><td>6</td></tr>\r
+<tr><td>25</td><td>NaN</td><td>3393831</td><td>6</td></tr>\r
+<tr><td>26</td><td>NaN</td><td>undefined</td><td>7</td></tr>\r
+<tr><td>27</td><td>NaN</td><td>undefined</td><td>7</td></tr>\r
+<tr><td>28</td><td>NaN</td><td>undefined</td><td>7</td></tr>\r
+<tr><td>29</td><td>NaN</td><td>undefined</td><td>7</td></tr>\r
+<tr><td>30</td><td>NaN</td><td>undefined</td><td>7</td></tr>\r
+<tr><td>31</td><td>NaN</td><td>undefined</td><td>8</td></tr>\r
+<tr><td>32</td><td>NaN</td><td>undefined</td><td>8</td></tr>\r
+<tr><td>33</td><td>NaN</td><td>undefined</td><td>8</td></tr>\r
+<tr><td>34</td><td>NaN</td><td>undefined</td><td>8</td></tr>\r
+<tr><td>35</td><td>NaN</td><td>undefined</td><td>8</td></tr>\r
+<tr><td>36</td><td>NaN</td><td>undefined</td><td>9</td></tr>\r
+<tr><td>37</td><td>NaN</td><td>undefined</td><td>9</td></tr>\r
+<tr><td>38</td><td>NaN</td><td>undefined</td><td>9</td></tr>\r
+<tr><td>39</td><td>NaN</td><td>undefined</td><td>9</td></tr>\r
+<tr><td>40</td><td>NaN</td><td>undefined</td><td>9</td></tr>\r
+<tr><td>41</td><td>NaN</td><td>undefined</td><td>10</td></tr>\r
+<tr><td>42</td><td>NaN</td><td>undefined</td><td>10</td></tr>\r
+<tr><td>43</td><td>NaN</td><td>undefined</td><td>10</td></tr>\r
+<tr><td>44</td><td>NaN</td><td>undefined</td><td>10</td></tr>\r
+<tr><td>45</td><td>NaN</td><td>undefined</td><td>10</td></tr>\r
+<tr><td>46</td><td>NaN</td><td>undefined</td><td>11</td></tr>\r
+<tr><td>47</td><td>NaN</td><td>undefined</td><td>11</td></tr>\r
+<tr><td>48</td><td>NaN</td><td>undefined</td><td>11</td></tr>\r
+<tr><td>49</td><td>NaN</td><td>undefined</td><td>11</td></tr>\r
+<tr><td>50</td><td>NaN</td><td>undefined</td><td>11</td></tr>\r
+  </tbody>\r
+</table>`;export{t as default};

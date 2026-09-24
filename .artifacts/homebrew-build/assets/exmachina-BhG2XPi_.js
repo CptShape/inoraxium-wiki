@@ -1,0 +1,301 @@
+const r=`ufak main ırk tanıtımı\r
+\r
+<table class="tableRow">\r
+    <caption>Irk Avantaj Tablosu</caption>\r
+    <thead>\r
+        <tr>\r
+            <th>\r
+                Avantaj\r
+            </th>\r
+            <th>\r
+                Açıklama\r
+            </th>\r
+        </tr>\r
+    </thead>\r
+    <tbody>\r
+        <tr>\r
+            <td>\r
+                Machine\r
+            </td>\r
+            <td>\r
+                Yeme, içme, uyku ihtiyacın yok. Poison ve disease immunity.\r
+            </td>\r
+        </tr>\r
+        <tr>\r
+            <td>\r
+                Divine Gear\r
+            </td>\r
+            <td>\r
+                Zamanında mythical veya legendary bir varlıktın ve tanrılara tehdit olduğun için melekler tarafından kutsal objeye dönüştürüldün. Kutsal obje olarak host'a ihtiyaç duyuyordun, taa ki birisi bu objeye bir "beden" verene kadar. Eski güçlerini yavaş yavaş tekrar açığa çıkararak eski formuna dön. (Custom Skill Tree sistemi)\r
+            </td>\r
+        </tr>\r
+    </tbody>\r
+</table>\r
+\r
+<table class="tableRow">\r
+    <caption>Irk Dezavantaj Tablosu</caption>\r
+    <thead>\r
+        <tr>\r
+            <th>\r
+                Dezavantaj\r
+            </th>\r
+            <th>\r
+                Açıklama\r
+            </th>\r
+        </tr>\r
+    </thead>\r
+    <tbody>\r
+        <tr>\r
+            <td>\r
+                ???\r
+            </td>\r
+            <td>\r
+                ???\r
+            </td>\r
+        </tr>\r
+    </tbody>\r
+</table>\r
+\r
+## Ex Machina\r
+<img src="worlds/test.png" width="300">\r
+*açıklama*\r
+\r
+<table class="tableRow">\r
+        <caption>Özellik Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th>\r
+                    Özellik Adı\r
+                </th>\r
+                <th>\r
+                    Özellik\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <td>\r
+                    Base HP\r
+                </td>\r
+                <td>\r
+                    Custom\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <td>\r
+                    Size\r
+                </td>\r
+                <td>\r
+                    Custom\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <td>\r
+                    Speed\r
+                </td>\r
+                <td>\r
+                    Custom\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <td>\r
+                    Languages\r
+                </td>\r
+                <td>\r
+                    Custom\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+</table>\r
+\r
+<table class="tableRow">\r
+        <caption>Yaş Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th>\r
+                    Yaş\r
+                </th>\r
+                <th>\r
+                    Aşama\r
+                </th>\r
+                <th>\r
+                    Açıklama\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <td>\r
+                    <p>0 - ∞</p>\r
+                </td>\r
+                <td>\r
+                    <p>Machine</p>\r
+                </td>\r
+                <td>\r
+                    <p>Yaş sistemi sana işlemez.</p>\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+</table>\r
+\r
+<table class="tableRow">\r
+        <caption>Ahlak Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th> \r
+                </th>\r
+                <th>\r
+                    Lawful\r
+                </th>\r
+                <th>\r
+                    Neutral\r
+                </th>\r
+                <th>\r
+                    Chaotic\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <th>\r
+                    Good\r
+                </th>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    Neutral\r
+                </th>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    Evil\r
+                </th>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+                <td>\r
+                **\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+    </table>\r
+\r
+<table class="tableRow">\r
+        <caption>Önyargı Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th>\r
+                    Önyargı\r
+                </th>\r
+                <th>\r
+                    Irk\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <th>\r
+                    Sevgi\r
+                </th>\r
+                <td>\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    İyi\r
+                </th>\r
+                <td>\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    Nötr\r
+                </th>\r
+                <td>\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    Kötü\r
+                </th>\r
+                <td>\r
+                </td>\r
+            </tr>\r
+            <tr>\r
+                <th>\r
+                    Nefret\r
+                </th>\r
+                <td>\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+    </table>\r
+\r
+<table class="tableRow">\r
+        <caption>Irk Avantaj Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th>\r
+                    Avantaj\r
+                </th>\r
+                <th>\r
+                    Açıklama\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <td>\r
+                    ???\r
+                </td>\r
+                <td>\r
+                    ???\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+</table>\r
+\r
+<table class="tableRow">\r
+        <caption>Irk Dezavantaj Tablosu</caption>\r
+        <thead>\r
+            <tr>\r
+                <th>\r
+                    Dezavantaj\r
+                </th>\r
+                <th>\r
+                    Açıklama\r
+                </th>\r
+            </tr>\r
+        </thead>\r
+        <tbody>\r
+            <tr>\r
+                <td>\r
+                    ???\r
+                </td>\r
+                <td>\r
+                    ???\r
+                </td>\r
+            </tr>\r
+        </tbody>\r
+</table>`;export{r as default};

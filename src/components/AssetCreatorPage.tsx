@@ -1,7 +1,10 @@
-import React, { useState } from 'react';
+import React, { createContext, useContext, useState } from 'react';
+import BattleSettingsEditor from './BattleSettingsEditor';
+import { remapBattleSettings } from '../lib/battleSettings';
 import { Dices, Download, Package, Plus, ShieldCheck, Sparkles, Trash2, Upload } from 'lucide-react';
 import type {
   CharacterAction,
+  CharacterData,
   CharacterDiceMacro,
   CharacterInventoryItem,
   CharacterLocalVariable,
@@ -20,8 +23,21 @@ import type {
   StatusEffect,
 } from '../types/character';
 import { exportJsonWithChoice, importJsonTextWithChoice } from '../lib/jsonTransfer';
+import type { HomebrewObject, HomebrewObjectKind } from '../lib/homebrewEntries';
 
 type AssetKind = 'item' | 'spell' | 'status' | 'macro' | 'script';
+const AssetCharacterContext = createContext<CharacterData | undefined>(undefined);
+
+function EffectTargetPicker({ value, onChange, barsOnly = false }: { value: string; onChange: (value: string) => void; barsOnly?: boolean }) {
+  const character = useContext(AssetCharacterContext);
+  if (!character) return <input className={inputClass} value={value} onChange={e => onChange(e.target.value)} placeholder="attribute_id" />;
+  const options = barsOnly ? character.bars || [] : [
+    ...character.mainAttributes || [], ...(character.mainAttributes || []).map(a => ({ id: `${a.id}_mod`, name: `${a.name} Modifier` })),
+    ...character.secondaryAttributes || [], ...character.otherAttributes || [], ...character.skills || [], ...character.resistances || [],
+    ...(character.bars || []).flatMap(b => ['current', b.mode === 'resource' ? 'reset' : 'max'].map(s => ({ id: `${b.id}_${s}`, name: `${b.name} ${s}` }))),
+  ];
+  return <select aria-label={barsOnly ? 'Target bar' : 'Effect target'} className={inputClass} value={value} onChange={e => onChange(e.target.value)}><option value="">Select {barsOnly ? 'bar' : 'value'}</option>{options.map(o => <option key={o.id} value={o.id}>{o.name} ({o.id})</option>)}{value && !options.some(o => o.id === value) && <option value={value}>{value} (missing)</option>}</select>;
+}
 
 interface CharacterEntryExportPayload {
   schema: 'inoraxium-character-entry';
@@ -377,18 +393,22 @@ const normalizeImportedScript = (script: Partial<CharacterScript> = {}): Charact
   folderId: null,
 });
 
-const normalizeImportedAction = (action: Partial<CharacterAction> = {}): CharacterAction => ({
-  id: importString(action.id, `act_${uid()}`),
-  name: importString(action.name, 'Imported Action'),
-  description: importString(action.description, ''),
-  cost: importString(action.cost, ''),
-  usageRemaining: importString(action.usageRemaining, ''),
-  maxUsage: importString(action.maxUsage, ''),
-  replenishTrigger: action.replenishTrigger || 'custom',
-  replenishAmount: importString(action.replenishAmount, ''),
-  macros: Array.isArray(action.macros) ? action.macros.map(macro => normalizeImportedMacro(macro as Partial<CharacterDiceMacro>)) : [],
-  effects: Array.isArray(action.effects) ? action.effects.map(effect => normalizeImportedEffect(effect as Partial<StatusEffect>)) : [],
-});
+const normalizeImportedAction = (action: Partial<CharacterAction> = {}): CharacterAction => {
+  const effects = Array.isArray(action.effects) ? action.effects.map(effect => normalizeImportedEffect(effect as Partial<StatusEffect>)) : [];
+  return {
+    id: importString(action.id, `act_${uid()}`),
+    name: importString(action.name, 'Imported Action'),
+    description: importString(action.description, ''),
+    cost: importString(action.cost, ''),
+    usageRemaining: importString(action.usageRemaining, ''),
+    maxUsage: importString(action.maxUsage, ''),
+    replenishTrigger: action.replenishTrigger || 'custom',
+    replenishAmount: importString(action.replenishAmount, ''),
+    macros: Array.isArray(action.macros) ? action.macros.map(macro => normalizeImportedMacro(macro as Partial<CharacterDiceMacro>)) : [],
+    effects,
+    battleSettings: remapBattleSettings(action, effects),
+  };
+};
 
 const normalizeImportedItem = (entry: Partial<CharacterInventoryItem> = {}): CharacterInventoryItem => ({
   ...createItem(),
@@ -471,9 +491,11 @@ const dangerButtonClass = 'inline-flex items-center gap-1 rounded border border-
 interface EffectsEditorProps {
   effects: StatusEffect[];
   onChange: (effects: StatusEffect[]) => void;
+  autoStatus?: boolean;
 }
 
-const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
+const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange, autoStatus = false }) => {
+  const character = useContext(AssetCharacterContext);
   const updateEffect = (index: number, patch: Partial<StatusEffect>) => {
     onChange(effects.map((effect, effectIndex) => (effectIndex === index ? { ...effect, ...patch } : effect)));
   };
@@ -516,9 +538,9 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
       ) : effects.map((effect, index) => (
         effect.effectType === 'status' ? (
           <div key={effect.id || index} className="grid gap-2 rounded-md border border-indigo-900/30 bg-black/25 p-2 md:grid-cols-[auto_1fr_180px_auto]">
-            <span className="rounded border border-indigo-700/50 bg-indigo-900/30 px-3 py-2 text-xs font-semibold text-indigo-200">Apply</span>
+            <span className="rounded border border-indigo-700/50 bg-indigo-900/30 px-3 py-2 text-xs font-semibold text-indigo-200">{autoStatus ? 'Auto' : 'Apply'}</span>
             <input className={inputClass} value={effect.statusName || effect.statusEntry?.name || 'Imported Status'} readOnly />
-            <input className={inputClass} value="Choose category after import" readOnly />
+            {character ? <select aria-label="Status folder" className={inputClass} value={effect.statusFolderId || ''} onChange={e => updateEffect(index, { statusFolderId: e.target.value || null })}><option value="">General Statuses</option>{(character.statusFolders || []).map(folder => <option key={folder.id} value={folder.id}>{folder.name}</option>)}</select> : <input className={inputClass} value="Choose category after import" readOnly />}
             <button type="button" className={dangerButtonClass} onClick={() => onChange(effects.filter((_, effectIndex) => effectIndex !== index))}>
               <Trash2 size={14} />
             </button>
@@ -526,12 +548,13 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
         ) : effect.effectType === 'bar-update' ? (
           <div key={effect.id || index} className="grid gap-2 rounded-md border border-cyan-900/30 bg-black/25 p-2 md:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto]">
             <span className="rounded border border-cyan-700/50 bg-cyan-900/30 px-3 py-2 text-xs font-semibold text-cyan-200">Apply</span>
-            <input
+            {character ? <EffectTargetPicker barsOnly value={effect.targetId} onChange={targetId => updateEffect(index, { targetId })} /> : <input
               className={inputClass}
               value={effect.barUpdateDescription || ''}
               onChange={event => updateEffect(index, { barUpdateDescription: event.target.value, targetId: '' })}
               placeholder="Import prompt, e.g. Healing target bar"
-            />
+            />}
+            {character && <select aria-label="Overflow" className={inputClass} value={effect.canOverflow ? 'allow' : 'clamp'} onChange={e => updateEffect(index, { canOverflow: e.target.value === 'allow' })}><option value="clamp">Can't Overflow</option><option value="allow">Can Overflow</option></select>}
             <input
               className={inputClass}
               value={effect.value}
@@ -591,12 +614,7 @@ const EffectsEditor: React.FC<EffectsEditorProps> = ({ effects, onChange }) => {
             >
               {effect.active ? 'On' : 'Off'}
             </button>
-            <input
-              className={inputClass}
-              value={effect.targetId}
-              onChange={event => updateEffect(index, { targetId: event.target.value })}
-              placeholder="attribute_id"
-            />
+            <EffectTargetPicker value={effect.targetId} onChange={targetId => updateEffect(index, { targetId })} />
             <input
               className={inputClass}
               value={effect.value}
@@ -769,6 +787,7 @@ interface ActionsEditorProps {
 }
 
 const ActionsEditor: React.FC<ActionsEditorProps> = ({ actions, onChange }) => {
+  const character = useContext(AssetCharacterContext);
   const updateAction = (index: number, patch: Partial<CharacterAction>) => {
     onChange(actions.map((action, actionIndex) => (actionIndex === index ? { ...action, ...patch } : action)));
   };
@@ -849,6 +868,7 @@ const ActionsEditor: React.FC<ActionsEditorProps> = ({ actions, onChange }) => {
             onChange={event => updateAction(index, { description: event.target.value })}
             placeholder="What this action does..."
           />
+          <BattleSettingsEditor action={action} bars={character?.bars} onChange={(battleSettings, effects) => updateAction(index, { battleSettings, ...(effects ? { effects } : {}) })} />
           <MacrosEditor macros={action.macros || []} onChange={macros => updateAction(index, { macros })} />
           <EffectsEditor effects={action.effects || []} onChange={effects => updateAction(index, { effects })} />
         </div>
@@ -1164,11 +1184,14 @@ const ScriptEditor: React.FC<ScriptEditorProps> = ({ script, onChange }) => {
   );
 };
 
-const AssetCreatorPage: React.FC = () => {
-  const [selectedKind, setSelectedKind] = useState<AssetKind>('item');
-  const [item, setItem] = useState<CharacterInventoryItem>(() => createItem());
-  const [spell, setSpell] = useState<CharacterSpell>(() => createSpell());
-  const [status, setStatus] = useState<CharacterStatus>(() => createStatus());
+interface AssetCreatorPageProps {
+  embedded?: { kind: HomebrewObjectKind; initialEntry?: HomebrewObject; character: CharacterData; busy: boolean; onConfirm: (entry: HomebrewObject) => void };
+}
+const AssetCreatorPage: React.FC<AssetCreatorPageProps> = ({ embedded }) => {
+  const [selectedKind, setSelectedKind] = useState<AssetKind>(embedded?.kind || 'item');
+  const [item, setItem] = useState<CharacterInventoryItem>(() => embedded?.kind === 'item' && embedded.initialEntry ? structuredClone(embedded.initialEntry) as CharacterInventoryItem : createItem());
+  const [spell, setSpell] = useState<CharacterSpell>(() => embedded?.kind === 'spell' && embedded.initialEntry ? structuredClone(embedded.initialEntry) as CharacterSpell : createSpell());
+  const [status, setStatus] = useState<CharacterStatus>(() => embedded?.kind === 'status' && embedded.initialEntry ? structuredClone(embedded.initialEntry) as CharacterStatus : createStatus());
   const [macro, setMacro] = useState<CharacterDiceMacro>(() => createMacro());
   const [script, setScript] = useState<CharacterScript>(() => createScript());
 
@@ -1262,9 +1285,10 @@ const AssetCreatorPage: React.FC = () => {
   ];
 
   return (
-    <div className="min-h-[70vh] bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_32%),linear-gradient(135deg,rgba(2,8,23,0.98),rgba(7,20,37,0.96))] p-4 text-sky-50 md:p-8">
+    <AssetCharacterContext.Provider value={embedded?.character}>
+    <fieldset disabled={embedded?.busy} className={embedded ? 'hb-asset-form' : 'min-h-[70vh] bg-[radial-gradient(circle_at_top_left,rgba(56,189,248,0.16),transparent_32%),linear-gradient(135deg,rgba(2,8,23,0.98),rgba(7,20,37,0.96))] p-4 text-sky-50 md:p-8'}>
       <div className="mx-auto max-w-7xl space-y-6">
-        <div className="rounded-2xl border border-sky-800/50 bg-black/40 p-5 shadow-[0_0_35px_rgba(14,165,233,0.14)]">
+        {!embedded && <><div className="rounded-2xl border border-sky-800/50 bg-black/40 p-5 shadow-[0_0_35px_rgba(14,165,233,0.14)]">
           <div className="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
             <div>
               <p className="text-xs uppercase tracking-[0.28em] text-cyan-300/80" style={{ fontFamily: "'Cinzel', serif" }}>Inoraxium Tools</p>
@@ -1313,21 +1337,22 @@ const AssetCreatorPage: React.FC = () => {
           })}
         </div>
 
-        <div className="rounded-2xl border border-sky-800/50 bg-black/35 p-4 shadow-[0_0_28px_rgba(14,165,233,0.10)] md:p-5">
-          <div className="mb-4 flex items-center justify-between gap-3 border-b border-sky-900/60 pb-3">
+        </>}
+        <div className={embedded ? 'hb-asset-body' : 'rounded-2xl border border-sky-800/50 bg-black/35 p-4 shadow-[0_0_28px_rgba(14,165,233,0.10)] md:p-5'}>
+          {!embedded && <div className="mb-4 flex items-center justify-between gap-3 border-b border-sky-900/60 pb-3">
             <div>
               <p className="text-xs uppercase tracking-[0.2em] text-cyan-300/70" style={{ fontFamily: "'Cinzel', serif" }}>{titleCase(selectedKind)} Builder</p>
               <h3 className="text-xl font-bold text-sky-100" style={{ fontFamily: "'Cinzel', serif" }}>{getCurrentEntry().name || `New ${titleCase(selectedKind)}`}</h3>
             </div>
             <button type="button" className={smallButtonClass} onClick={() => resetAsset(selectedKind)}>Reset</button>
-          </div>
+          </div>}
 
           {selectedKind === 'item' && (
             <div className="space-y-4">
               <div className="grid gap-3 md:grid-cols-[2fr_11ch_160px_160px]">
                 <div className="space-y-1">
                   <FieldLabel>Name</FieldLabel>
-                  <input className={inputClass} value={item.name} onChange={event => setItem({ ...item, name: event.target.value })} />
+                  <input aria-label="Name" className={inputClass} value={item.name} onChange={event => setItem({ ...item, name: event.target.value })} />
                 </div>
                 <div className="space-y-1">
                   <FieldLabel>Quantity</FieldLabel>
@@ -1369,9 +1394,9 @@ const AssetCreatorPage: React.FC = () => {
               </div>
               <LocalVariablesEditor variables={item.localVariables || []} onChange={localVariables => setItem({ ...item, localVariables })} />
               <EmbeddedScriptsEditor scripts={item.scripts || []} onChange={scripts => setItem({ ...item, scripts })} />
-              <MacrosEditor macros={item.macros} onChange={macros => setItem({ ...item, macros })} />
+              <MacrosEditor macros={item.macros || []} onChange={macros => setItem({ ...item, macros })} />
               <ActionsEditor actions={item.actions || []} onChange={actions => setItem({ ...item, actions })} />
-              <EffectsEditor effects={item.effects || []} onChange={effects => setItem({ ...item, effects })} />
+              <EffectsEditor autoStatus effects={item.effects || []} onChange={effects => setItem({ ...item, effects })} />
             </div>
           )}
 
@@ -1380,7 +1405,7 @@ const AssetCreatorPage: React.FC = () => {
               <div className="grid gap-3 md:grid-cols-[2fr_100px_140px_max-content_max-content_150px_max-content_90px]">
                 <div className="space-y-1">
                   <FieldLabel>Name</FieldLabel>
-                  <input className={inputClass} value={spell.name} onChange={event => setSpell({ ...spell, name: event.target.value })} />
+                  <input aria-label="Name" className={inputClass} value={spell.name} onChange={event => setSpell({ ...spell, name: event.target.value })} />
                 </div>
                 <div className="space-y-1">
                   <FieldLabel>Level</FieldLabel>
@@ -1443,7 +1468,7 @@ const AssetCreatorPage: React.FC = () => {
                 <textarea className={textareaClass} value={spell.description} onChange={event => setSpell({ ...spell, description: event.target.value })} />
               </div>
               <LocalVariablesEditor variables={spell.localVariables || []} onChange={localVariables => setSpell({ ...spell, localVariables })} />
-              <MacrosEditor macros={spell.macros} onChange={macros => setSpell({ ...spell, macros })} />
+              <MacrosEditor macros={spell.macros || []} onChange={macros => setSpell({ ...spell, macros })} />
               <ActionsEditor actions={spell.actions || []} onChange={actions => setSpell({ ...spell, actions })} />
             </div>
           )}
@@ -1453,7 +1478,7 @@ const AssetCreatorPage: React.FC = () => {
               <div className="grid gap-3 md:grid-cols-[2fr_150px_130px_130px_160px_150px_150px_90px]">
                 <div className="space-y-1">
                   <FieldLabel>Name</FieldLabel>
-                  <input className={inputClass} value={status.name} onChange={event => setStatus({ ...status, name: event.target.value })} />
+                  <input aria-label="Name" className={inputClass} value={status.name} onChange={event => setStatus({ ...status, name: event.target.value })} />
                 </div>
                 <div className="space-y-1">
                   <FieldLabel>Duration Type</FieldLabel>
@@ -1534,7 +1559,7 @@ const AssetCreatorPage: React.FC = () => {
               </div>
               <LocalVariablesEditor variables={status.localVariables || []} onChange={localVariables => setStatus({ ...status, localVariables })} />
               <EmbeddedScriptsEditor scripts={status.scripts || []} onChange={scripts => setStatus({ ...status, scripts })} />
-              <EffectsEditor effects={status.effects} onChange={effects => setStatus({ ...status, effects })} />
+              <EffectsEditor autoStatus effects={status.effects || []} onChange={effects => setStatus({ ...status, effects })} />
               <ActionsEditor actions={status.actions || []} onChange={actions => setStatus({ ...status, actions })} />
             </div>
           )}
@@ -1560,9 +1585,11 @@ const AssetCreatorPage: React.FC = () => {
           {selectedKind === 'script' && (
             <ScriptEditor script={script} onChange={setScript} />
           )}
+          {embedded && <div className="hb-confirm-row"><button type="button" className="hb-confirm" disabled={embedded.busy} onClick={() => embedded.onConfirm(getCurrentEntry() as HomebrewObject)}>{embedded.busy ? 'Saving...' : 'Confirm'}</button></div>}
         </div>
       </div>
-    </div>
+    </fieldset>
+    </AssetCharacterContext.Provider>
   );
 };
 

@@ -9,6 +9,7 @@ import {
   CharacterStatus,
   PartyData,
 } from '../types/character';
+import { changeHomebrewEntry, copyHomebrewObject, HomebrewEntry, HomebrewEntryField } from './homebrewEntries';
 
 export interface UserProfile {
   uid: string;
@@ -39,7 +40,7 @@ async function getFirestore() {
 
   try {
     const { initializeApp, getApps, getApp } = await import('firebase/app');
-    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or, onSnapshot } = await import('firebase/firestore');
+    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or, onSnapshot, runTransaction } = await import('firebase/firestore');
 
     const app = getApps().length > 0 ? getApp() : initializeApp({
       apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -66,6 +67,7 @@ async function getFirestore() {
       arrayUnion,
       or,
       onSnapshot,
+      runTransaction,
     };
 
     return firestoreInstance;
@@ -113,6 +115,38 @@ export const updateCharacterFields = async (
     console.error('Failed to update character fields in Firestore:', err);
     return { localSaved: true, remoteSaved: false, remoteSkipped: false, error: err };
   }
+};
+
+export const saveHomebrewEntry = async (characterId: string, userId: string | null, field: HomebrewEntryField, draft: HomebrewEntry, original?: HomebrewEntry): Promise<CharacterData> => {
+  const entry = stripUndefinedDeep(draft) as HomebrewEntry;
+  const update = (character: CharacterData) => {
+    const next = changeHomebrewEntry(character, userId, field, entry, original);
+    return next === character ? character : { ...next, updatedAt: Math.max(Date.now(), (character.updatedAt || 0) + 1) };
+  };
+  if (!userId || userId === 'guest') {
+    const characters = getLocalCharacters();
+    const current = characters.find(c => c.id === characterId);
+    if (!current) throw new Error('Character not found.');
+    const next = update(current);
+    setLocalCharacters(characters.map(c => c.id === characterId ? next : c));
+    return next;
+  }
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database is unavailable. Nothing was saved.');
+  const ref = fs.doc(fs.db, 'characters', characterId);
+  const next = await fs.runTransaction(fs.db, async (transaction: any) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists()) throw new Error('Character not found.');
+    const current = { ...snapshot.data(), id: snapshot.id } as CharacterData;
+    const updated = update(current);
+    if (updated !== current) transaction.update(ref, { [field]: original ? updated[field] : fs.arrayUnion(entry), updatedAt: updated.updatedAt });
+    return updated;
+  }) as CharacterData;
+  try {
+    const local = getLocalCharacters();
+    setLocalCharacters([...local.filter(c => c.id !== characterId), next]);
+  } catch (error) { console.warn('Saved remotely, but local character cache could not be updated:', error); }
+  return next;
 };
 
 export const subscribeCharacterById = (
@@ -205,11 +239,6 @@ const uid = (prefix = '') => `${prefix}${Math.random().toString(36).slice(2, 10)
 const unique = (values: Array<string | null | undefined>): string[] => (
   Array.from(new Set(values.filter((value): value is string => typeof value === 'string' && value.trim().length > 0)))
 );
-
-const cloneWithId = <T extends { id: string }>(entry: T, prefix: string): T => ({
-  ...(JSON.parse(JSON.stringify(entry)) as T),
-  id: uid(prefix),
-});
 
 export const loadAdminAccess = async (uid: string | null, email?: string | null): Promise<AdminAccess> => {
   if (!uid) return { isAdmin: false, source: null };
@@ -1009,17 +1038,20 @@ export const addEntryToPartyInventory = async (
   party: PartyData,
   kind: 'item' | 'spell' | 'status',
   entry: CharacterGeneralItem | CharacterInventoryItem | CharacterSpell | CharacterStatus,
+  sourceCharacterId?: string,
 ): Promise<PartyData> => {
-  const nextParty: PartyData = { ...party, updatedAt: Date.now() };
-
-  if (kind === 'item') {
-    nextParty.generalItems = [...(party.generalItems || []), cloneWithId(entry as CharacterGeneralItem | CharacterInventoryItem, 'party_item_') as CharacterGeneralItem];
-  } else if (kind === 'spell') {
-    nextParty.spells = [...(party.spells || []), cloneWithId(entry as CharacterSpell, 'party_spell_')];
-  } else {
-    nextParty.statuses = [...(party.statuses || []), cloneWithId(entry as CharacterStatus, 'party_status_')];
-  }
-
-  await saveParty(nextParty);
-  return nextParty;
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database is unavailable. Nothing was sent.');
+  const copy = stripUndefinedDeep(copyHomebrewObject(entry));
+  const field = kind === 'item' ? 'generalItems' : kind === 'spell' ? 'spells' : 'statuses';
+  const ref = fs.doc(fs.db, 'parties', party.id);
+  return fs.runTransaction(fs.db, async (transaction: any) => {
+    const snapshot = await transaction.get(ref);
+    if (!snapshot.exists()) throw new Error('This party no longer exists.');
+    const current = { ...snapshot.data(), id: snapshot.id } as PartyData;
+    if (sourceCharacterId && !current.characterIds.includes(sourceCharacterId)) throw new Error('This character is no longer in that party.');
+    const updatedAt = Math.max(Date.now(), (current.updatedAt || 0) + 1);
+    transaction.update(ref, { [field]: fs.arrayUnion(copy), updatedAt });
+    return { ...current, [field]: [...current[field] || [], copy], updatedAt };
+  });
 };

@@ -17,6 +17,7 @@ import { authProvider } from '../lib/auth';
 import { buildCharacterFormulaContext, buildCharacterSheetSyncValues, buildLocalVariableContext, evalCharacterFormula, evalCharacterRollFormula, getCharacterBarMode } from '../lib/characterContext';
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
+import { HomebrewObjectTools } from './HomebrewObjectTools';
 import { downloadJsonFile } from '../lib/jsonTransfer';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { HomebrewPageNav, HomebrewPageId } from './HomebrewPageNav';
@@ -1576,8 +1577,9 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
 
     return (
       <aside className={`${sectionClass} sticky top-6 h-fit max-h-[calc(100vh-3rem)] overflow-y-auto`}>
-        {hasEntryControls && (
-          <div className="mb-5 flex items-center justify-between gap-3">
+        {(
+          <div className="mb-5 flex flex-wrap items-center gap-3">
+            {hasEntryControls && <>
             <button
               type="button"
               onClick={() => {
@@ -1603,11 +1605,13 @@ export const HomebrewLibraryViewer: React.FC<HomebrewLibraryViewerProps> = ({
               type="button"
               onClick={() => void deleteSelectedEntry()}
               disabled={!canControlCharacter}
-              className="inline-grid h-10 w-10 place-items-center rounded-lg border border-rose-500/45 bg-rose-700 text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
+              className="order-last ml-auto inline-grid h-10 w-10 place-items-center rounded-lg border border-rose-500/45 bg-rose-700 text-white shadow-sm transition hover:bg-rose-600 disabled:cursor-not-allowed disabled:opacity-60"
               title={isControlledStatus ? 'Delete status' : 'Delete item'}
             >
               <Trash2 size={18} />
             </button>
+            </>}
+            {character && <HomebrewObjectTools key={`${character.id}:${entry.id}`} character={character} entry={entry} kind={selectedEntry.kind} userId={userId} canControl={canControlCharacter} onUpdated={setCharacter} />}
           </div>
         )}
         {thumbUrl && (

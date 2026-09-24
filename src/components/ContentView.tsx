@@ -10,6 +10,7 @@ import Characters from './Characters';
 import AssetCreatorPage from './AssetCreatorPage';
 import SessionPage from './SessionPage';
 import CampaignsPage from './CampaignsPage';
+const DemoGamePage = React.lazy(() => import('./DemoGamePage'));
 
 interface WorkspaceFolderNode {
   id: string;
@@ -359,6 +360,12 @@ export const ContentView: React.FC<ContentViewProps> = ({
     );
   }
 
+  if (activeChapter.content === 'demo-game') {
+    return <div className="min-w-0 flex-1 overflow-auto p-2 sm:p-4">
+      <React.Suspense fallback={<p>Opening Demo Game...</p>}><DemoGamePage /></React.Suspense>
+    </div>;
+  }
+
   const wideModuleContents = new Set(['battle-tracker', 'world-map', 'characters', 'session', 'campaigns', 'asset-creator']);
   const isWideModule = wideModuleContents.has(activeChapter.content || '');
 
@@ -682,7 +689,7 @@ export const ContentView: React.FC<ContentViewProps> = ({
           ) : null}
 
           {/* ── Markdown content ───────────────────────────────────────────── */}
-          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'session' && activeChapter.content !== 'campaigns' && activeChapter.content !== 'asset-creator' && (
+          {workspaceTab === 'content' && activeChapter.content && activeChapter.content !== 'mythology' && activeChapter.content !== 'battle-tracker' && activeChapter.content !== 'world-map' && activeChapter.content !== 'characters' && activeChapter.content !== 'session' && activeChapter.content !== 'campaigns' && activeChapter.content !== 'asset-creator' && activeChapter.content !== 'demo-game' && (
             <div style={{ fontFamily: "'IM Fell English', serif" }}>
               <MarkdownRenderer
                 path={activeChapter.content}

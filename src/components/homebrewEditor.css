@@ -1,0 +1,37 @@
+.hb-dialog-backdrop { position: fixed; inset: 0; z-index: 12000; padding: 20px; display: grid; place-items: center; background: rgb(0 0 0 / 70%); }
+.hb-dialog { width: min(1080px, 100%); max-height: calc(100dvh - 40px); display: flex; flex-direction: column; min-width: 0; border: 1px solid #56746f; border-radius: 8px; background: #1a2425; color: #e8efec; font: 14px/1.5 system-ui,sans-serif; letter-spacing: 0; }
+.hb-dialog * { min-width: 0; box-sizing: border-box; letter-spacing: 0; }
+.hb-dialog > header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 20px; border-bottom: 1px solid #4b6260; flex: 0 0 auto; }
+.hb-dialog h2 { margin: 0; font: 600 20px/1.3 system-ui,sans-serif; overflow-wrap: anywhere; }
+.hb-dialog h3 { font-size: 15px; }
+.hb-dialog-content { overflow: auto; padding: 20px; overscroll-behavior: contain; }
+.hb-dialog button, .hb-object-tools > button { cursor: pointer; }
+.hb-dialog button:disabled { cursor: default; opacity: .5; }
+.hb-dialog :focus-visible { outline: 2px solid #9de3c5; outline-offset: 2px; }
+.hb-dialog .hb-icon, .hb-object-tools > button { display: inline-grid; place-items: center; width: 40px; height: 40px; flex: 0 0 40px; border-radius: 6px; border: 1px solid #658078; color: #dcf4e9; background: #284941; }
+.hb-object-tools { display: inline-flex; gap: 8px; align-items: center; }
+.hb-object-tools > button:disabled { opacity: .45; cursor: default; }
+.hb-form-grid { display: grid; grid-template-columns: repeat(auto-fit,minmax(min(100%,190px),1fr)); gap: 14px; margin-bottom: 20px; }
+.hb-form-grid label, .hb-field { display: flex; flex-direction: column; gap: 6px; font-size: 12px; }
+.hb-form-grid input:not([type=checkbox]), .hb-form-grid select, .hb-field input, .hb-field select { width: 100%; height: 38px; background: #111c1e; color: #e8efec; border: 1px solid #56746f; border-radius: 4px; padding: 7px 9px; }
+.hb-dialog .hb-checkbox { display: flex; flex-direction: row; align-items: center; gap: 8px; }
+.hb-checkbox input { width: 16px; height: 16px; accent-color: #8ed4b4; }
+.hb-kind-list { display: grid; grid-template-columns: repeat(4,minmax(0,1fr)); gap: 12px; }
+.hb-kind-list button { display: flex; flex-direction: column; align-items: center; gap: 10px; padding: 20px 12px; border-radius: 6px; border: 1px solid #4b6260; background: #263b3e; }
+.hb-kind-list button:hover { border-color: #9de3c5; }
+.hb-error { color: #ffb9c4; padding: 12px 0; overflow-wrap: anywhere; }
+.hb-success { color: #a7e1be; }
+.hb-confirm-row { position: sticky; bottom: -20px; display: flex; justify-content: flex-end; gap: 10px; padding: 14px 0; background: #1a2425; border-top: 1px solid #4b6260; z-index: 2; }
+.hb-confirm, .hb-secondary { display: inline-flex; justify-content: center; align-items: center; gap: 8px; padding: 9px 18px; border: 1px solid #82bea5; border-radius: 5px; background: #275846; color: #e6f5ed; cursor: pointer; }
+.hb-secondary { background: #263638; border-color: #647779; }
+.hb-asset-form { border: 0; padding: 0; margin: 0; width: 100%; color: #e8efec; }
+.hb-asset-form .grid[class*="md:grid-cols-"] { grid-template-columns: repeat(auto-fit,minmax(min(100%,150px),1fr)); }
+.hb-asset-form .grid > div, .hb-asset-form .flex { min-width: 0; }
+.hb-asset-form .flex.items-center.justify-between { flex-wrap: wrap; }
+.hb-asset-form input, .hb-asset-form select, .hb-asset-form textarea { max-width: 100%; }
+.hb-asset-form label { white-space: normal; height: auto; }
+.hb-asset-body > .space-y-4 > div:not(.grid):not(.space-y-1) { background: transparent; box-shadow: none; border-inline: 0; border-radius: 0; padding-inline: 0; }
+.hb-party-list { display: grid; gap: 8px; }
+.hb-party-list button { display: flex; align-items: center; justify-content: space-between; gap: 12px; border: 1px solid #55746e; border-radius: 6px; background: #243d3b; padding: 14px; text-align: left; }
+.hb-party-list strong, .hb-party-list small { display: block; overflow-wrap: anywhere; }
+@media(max-width:600px) { .hb-dialog-backdrop { padding: 10px; } .hb-dialog { max-height: calc(100dvh - 20px); } .hb-dialog-content { padding: 14px; } .hb-kind-list { grid-template-columns: repeat(2,minmax(0,1fr)); } .hb-asset-form .grid[class*="md:grid-cols-"] { grid-template-columns: minmax(0,1fr); } .hb-confirm-row { bottom: -14px; } }

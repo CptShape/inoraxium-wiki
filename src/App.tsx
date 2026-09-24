@@ -410,7 +410,8 @@ function App() {
 
   return (
     <div className={`theme-${currentSystem} flex h-screen bg-stone-900 text-amber-100 leather-bg`}>
-      <Sidebar
+      {!(activeChapter?.content === 'demo-game' && !isEditorOpen && !isHomebrewCharactersOpen && !homebrewViewerRoute && !homebrewLibraryRoute && !homebrewCharacterSheetRoute && !homebrewGalleryRoute) && <Sidebar
+        compactOnMobile={activeChapter?.content === 'characters'}
         chapters={chapters}
         activeChapterId={activeChapterId}
         expandedChapters={expandedChapters}
@@ -442,7 +443,7 @@ function App() {
           clearHash();
         }}
         isEditorOpen={isEditorOpen}
-      />
+      />}
       {isEditorOpen ? (
         <VisualPageEditor currentSystem={currentSystem} onExit={() => setIsEditorOpen(false)} />
       ) : isHomebrewCharactersOpen ? (

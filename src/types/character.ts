@@ -1,3 +1,5 @@
+import type { BattleSettings } from './battle';
+
 export interface CustomAttribute {
   id: string;
   name: string;
@@ -57,6 +59,7 @@ export interface CharacterAction {
   replenishAmount?: string;
   macros?: CharacterDiceMacro[];
   effects?: StatusEffect[];
+  battleSettings?: BattleSettings;
 }
 
 export interface CharacterLocalVariable {
@@ -298,6 +301,8 @@ export interface CharacterStatus {
 }
 
 export interface CharacterData {
+  updatedAt?: number;
+  sprites?: import('./sprites').CharacterSprites;
   id: string;
   name: string;
   race: string;

@@ -1,4 +1,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import BattleSettingsEditor from './BattleSettingsEditor';
+import { remapBattleSettings } from '../lib/battleSettings';
+import CharacterSpritesEditor from './CharacterSpritesEditor';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload, Copy } from 'lucide-react';
 import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGalleryTagCategory, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
@@ -176,7 +179,7 @@ interface CharacterEntryExportPayload {
 
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
 type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'scripts' | 'inventory' | 'spells' | 'statuses';
-type BioSheetSubTab = 'main' | 'overview' | 'gallery';
+type BioSheetSubTab = 'main' | 'overview' | 'gallery' | 'sprites';
 type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' | 'resistances' | 'unassigned';
 type MacroSheetSubTab = 'main' | 'rolls' | string;
 type ScriptSheetSubTab = 'main' | string;
@@ -773,6 +776,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [portraitImportUrl, setPortraitImportUrl] = useState('');
   const [portraitLoadError, setPortraitLoadError] = useState(false);
   const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
+  const [characterSprites, setCharacterSprites] = useState<CharacterData['sprites']>();
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
   const [galleryTagEditor, setGalleryTagEditor] = useState<{ imageId: string; x: number; y: number; input: string; category: CharacterGalleryTagCategory } | null>(null);
@@ -1029,7 +1033,6 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
 
   useEffect(() => {
     if (selectedCharacter) {
-      setActiveBioSubTab('main');
       setEditName(selectedCharacter.name);
       setEditRace(selectedCharacter.race);
       setEditClass(selectedCharacter.className);
@@ -1047,6 +1050,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setPortraitImportUrl(nextPortraitUrl);
       setPortraitLoadError(false);
       setGalleryImages(selectedCharacter.gallery || []);
+      setCharacterSprites(selectedCharacter.sprites);
       setGalleryTagCategories(normalizeGalleryTagCategoryMap(
         getGalleryCustomTags(selectedCharacter.gallery || []),
         selectedCharacter.galleryTagCategories,
@@ -1134,6 +1138,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     previousSelectedCharacterIdRef.current = currentCharacterId;
 
     if (!selectedCharacter || previousCharacterId === currentCharacterId) return;
+    setActiveBioSubTab('main');
     setRollResults([]);
     setEditingMacroId(null);
     setMacroEditBuffer({});
@@ -3501,18 +3506,22 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     maxValue: typeof variable.maxValue === 'string' ? variable.maxValue : '',
   });
 
-  const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => ({
-    id: `act_${uid()}`,
-    name: typeof action.name === 'string' ? action.name : 'New Action',
-    description: typeof action.description === 'string' ? action.description : '',
-    cost: typeof action.cost === 'string' ? action.cost : '',
-    usageRemaining: typeof action.usageRemaining === 'string' ? action.usageRemaining : '',
-    maxUsage: typeof action.maxUsage === 'string' ? action.maxUsage : '',
-    replenishTrigger: action.replenishTrigger || 'custom',
-    replenishAmount: typeof action.replenishAmount === 'string' ? action.replenishAmount : '',
-    macros: Array.isArray(action.macros) ? action.macros.map(cloneMacroForImport) : [],
-    effects: Array.isArray(action.effects) ? action.effects.map(cloneEffectForImport) : [],
-  });
+  const cloneActionForImport = (action: Partial<CharacterAction> = {}): CharacterAction => {
+    const effects = Array.isArray(action.effects) ? action.effects.map(cloneEffectForImport) : [];
+    return {
+      id: `act_${uid()}`,
+      name: typeof action.name === 'string' ? action.name : 'New Action',
+      description: typeof action.description === 'string' ? action.description : '',
+      cost: typeof action.cost === 'string' ? action.cost : '',
+      usageRemaining: typeof action.usageRemaining === 'string' ? action.usageRemaining : '',
+      maxUsage: typeof action.maxUsage === 'string' ? action.maxUsage : '',
+      replenishTrigger: action.replenishTrigger || 'custom',
+      replenishAmount: typeof action.replenishAmount === 'string' ? action.replenishAmount : '',
+      macros: Array.isArray(action.macros) ? action.macros.map(cloneMacroForImport) : [],
+      effects,
+      battleSettings: remapBattleSettings(action, effects),
+    };
+  };
 
   const getEffectTargetLabelById = (targetId: string): string => (
     getEffectTargetOptions().find(option => option.id === targetId)?.label || targetId
@@ -6415,12 +6424,16 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     ...variable,
   });
 
-  const cloneAction = (action: CharacterAction): CharacterAction => ({
-    ...action,
-    id: `act_${uid()}`,
-    macros: (action.macros || []).map((macro) => cloneDiceMacro(macro)),
-    effects: (action.effects || []).map(cloneStatusEffect),
-  });
+  const cloneAction = (action: CharacterAction): CharacterAction => {
+    const effects = (action.effects || []).map(cloneStatusEffect);
+    return {
+      ...action,
+      id: `act_${uid()}`,
+      macros: (action.macros || []).map((macro) => cloneDiceMacro(macro)),
+      effects,
+      battleSettings: remapBattleSettings(action, effects),
+    };
+  };
 
   const cloneEmbeddedScript = (script: CharacterScript): CharacterScript => buildImportedScript(script, null);
 
@@ -6625,6 +6638,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       notes,
       portraitUrl,
       gallery: galleryImages,
+      ...(characterSprites ? { sprites: characterSprites } : {}),
       galleryTagCategories: normalizeGalleryTagCategoryMap(allGalleryCustomTags, galleryTagCategories),
       tags: charTags,
       displayStats,
@@ -8316,6 +8330,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                       placeholder="Action description"
                       className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                     />
+                    <BattleSettingsEditor action={action} bars={bars} disabled={!canEdit} onImportStatus={importStatusApplyEffect} onChange={(battleSettings, effects) => updateStatusAction(status.id, action.id, current => ({ ...current, battleSettings, ...(effects ? { effects } : {}) }))} />
                     <button onClick={() => toggleStatusActionDescription(status.id, action.id)} className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer">
                       {isExpanded ? 'Show More' : 'Hide'}
                     </button>
@@ -8797,7 +8812,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     );
 
     return (
-      <div className="w-full bg-stone-900/50 p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px]" style={{ fontFamily: "'IM Fell English', serif" }}>
+      <div className={`w-full bg-stone-900/50 p-3 sm:p-6 rounded-2xl border border-amber-800/40 shadow-xl animate-fade-in text-[15px] ${activeSheetTab === 'bio' && activeBioSubTab === 'sprites' ? 'character-sheet--sprites' : ''}`} style={{ fontFamily: "'IM Fell English', serif" }}>
         {renderBarTargetResolverModal()}
         {renderEffectTargetResolverModal()}
         {renderLocalInputModal()}
@@ -9259,7 +9274,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
               <ArrowLeft size={20} /> Back to List
             </button>
           )}
-          <div className="flex gap-3">
+          <div className="sheet-utility-actions flex flex-wrap min-w-0 gap-3">
             {sheetSyncStatus && (
               <div
                 className={`flex items-center px-3 py-2 text-xs rounded border ${
@@ -9392,6 +9407,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 { key: 'main', label: 'Main' },
                 { key: 'overview', label: 'Character Overview' },
                 { key: 'gallery', label: 'Gallery' },
+                { key: 'sprites', label: 'Sprites' },
               ].map((tab) => {
                 const isActive = activeBioSubTab === tab.key;
                 return (
@@ -10160,6 +10176,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           </div>
           )}
 
+          {activeSheetTab === 'bio' && activeBioSubTab === 'sprites' && <CharacterSpritesEditor key={selectedCharacter.id} value={characterSprites} disabled={!isCharacterOwner} onChange={setCharacterSprites} />}
           {activeSheetTab === 'bio' && activeBioSubTab === 'gallery' && (
           <div className="border border-cyan-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
             <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
@@ -12737,6 +12754,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                               className="w-full bg-stone-900 border border-stone-800 rounded px-3 py-2 text-sm text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                               placeholder="Action description"
                                             />
+                                            <BattleSettingsEditor action={action} bars={bars} disabled={!canEditInventory} onImportStatus={importStatusApplyEffect} onChange={(battleSettings, effects) => updateGeneralAction(item.id, action.id, current => ({ ...current, battleSettings, ...(effects ? { effects } : {}) }))} />
                                             <button onClick={() => toggleInventoryActionDescription(action.id)} className="mt-2 text-sm text-amber-300 hover:text-amber-200 cursor-pointer">
                                               {isActionExpanded ? 'Show More' : 'Hide'}
                                             </button>
@@ -13280,6 +13298,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                         placeholder="Action description"
                                         className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                       />
+                                      <BattleSettingsEditor action={action} bars={bars} disabled={!canEditInventory} onImportStatus={importStatusApplyEffect} onChange={(battleSettings, effects) => updateInventoryAction(item.id, action.id, current => ({ ...current, battleSettings, ...(effects ? { effects } : {}) }))} />
                                       <button
                                         onClick={() => toggleInventoryActionDescription(action.id)}
                                         className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
@@ -13961,6 +13980,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                                         placeholder="Action description"
                                         className="w-full bg-stone-900 border border-stone-800 rounded px-4 py-3 text-base text-amber-100 focus:outline-none resize-none disabled:opacity-60"
                                       />
+                                      <BattleSettingsEditor action={action} bars={bars} disabled={!isCharacterOwner} onImportStatus={importStatusApplyEffect} onChange={(battleSettings, effects) => updateSpellAction(spell.id, action.id, current => ({ ...current, battleSettings, ...(effects ? { effects } : {}) }))} />
                                       <button
                                         onClick={() => toggleSpellActionDescription(action.id)}
                                         className="mt-2 text-base text-amber-300 hover:text-amber-200 cursor-pointer"
