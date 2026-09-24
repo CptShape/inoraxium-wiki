@@ -24,6 +24,7 @@ import type {
 } from '../types/character';
 import { exportJsonWithChoice, importJsonTextWithChoice } from '../lib/jsonTransfer';
 import type { HomebrewObject, HomebrewObjectKind } from '../lib/homebrewEntries';
+import { copyHomebrewObject } from '../lib/homebrewEntries';
 
 type AssetKind = 'item' | 'spell' | 'status' | 'macro' | 'script';
 const AssetCharacterContext = createContext<CharacterData | undefined>(undefined);
@@ -349,6 +350,7 @@ const normalizeImportedScriptBarUpdate = (entry: Partial<CharacterScriptBarUpdat
   id: importString(entry.id, `script_bar_${uid()}`),
   targetId: importString(entry.targetId, ''),
   value: importString(entry.value, '0'),
+  canOverflow: entry.canOverflow ?? false,
   lastMatched: false,
 });
 
@@ -471,6 +473,22 @@ const normalizeImportedStatus = (entry: Partial<CharacterStatus> = {}): Characte
   hidden: importBoolean(entry.hidden, false),
   folderId: null,
 });
+
+export function parseHomebrewObjectImport(raw: string): { kind: HomebrewObjectKind; entry: HomebrewObject; folderName: string | null } {
+  let parsed: unknown;
+  try { parsed = JSON.parse(raw); }
+  catch { throw new Error('Clipboard does not contain valid JSON. Copy an item, spell or status export.'); }
+  const payload = asRecord(parsed);
+  const entry = asRecord(payload?.entry);
+  if (payload?.schema !== 'inoraxium-character-entry' || payload.version !== 1 || !entry || !['item', 'spell', 'status'].includes(String(payload.kind))) {
+    throw new Error('Import an item, spell or status exported from Character Sheet or Asset Creator.');
+  }
+  const kind = payload.kind as HomebrewObjectKind;
+  const normalized = kind === 'item' ? normalizeImportedItem(entry) : kind === 'spell' ? normalizeImportedSpell(entry) : normalizeImportedStatus(entry);
+  if ('homebrewImageUrl' in normalized) normalized.homebrewImageUrl = importString(entry.homebrewImageUrl, '');
+  if ('homebrewImageThumbUrl' in normalized) normalized.homebrewImageThumbUrl = importString(entry.homebrewImageThumbUrl, '');
+  return { kind, entry: copyHomebrewObject(normalized), folderName: typeof payload.folderName === 'string' ? payload.folderName : null };
+}
 
 const FieldLabel: React.FC<{ children: React.ReactNode }> = ({ children }) => (
   <label
