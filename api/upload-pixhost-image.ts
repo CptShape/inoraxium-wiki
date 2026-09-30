@@ -1,6 +1,6 @@
 import { Readable } from 'node:stream';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { applyApiCors } from './_lib/http';
+import { applyApiCors } from './_lib/http.js';
 
 const PIXHOST_UPLOAD_URL = 'https://api.pixhost.to/images';
 

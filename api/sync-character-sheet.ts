@@ -1,7 +1,7 @@
 import { timingSafeEqual } from 'node:crypto';
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { applyApiCors } from './_lib/http';
-import { syncCharacterSheetToGoogle, type CharacterSheetSyncInput, type CharacterValues } from './_lib/googleSheets';
+import { applyApiCors } from './_lib/http.js';
+import { syncCharacterSheetToGoogle, type CharacterSheetSyncInput, type CharacterValues } from './_lib/googleSheets.js';
 
 type JsonResponse =
   | {
