@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "vite",
     "build": "vite build",
+    "typecheck:api": "tsc -p tsconfig.api.json",
     "preview": "vite preview",
     "test:demo-game": "vitest run src/lib/demoGame/engine.test.ts",
     "test:demo-game:ui": "playwright test --config playwright.demo-game.config.ts",
@@ -18,6 +19,7 @@
     "@dice-roller/rpg-dice-roller": "^5.5.1",
     "clsx": "2.1.1",
     "firebase": "^12.12.1",
+    "googleapis": "^171.4.0",
     "gray-matter": "^4.0.3",
     "jsep": "^1.4.0",
     "lucide-react": "^1.0.1",
@@ -38,6 +40,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "@vercel/node": "^5.7.13",
     "@vitejs/plugin-react": "5.1.1",
     "tailwindcss": "4.1.17",
     "typescript": "5.9.3",

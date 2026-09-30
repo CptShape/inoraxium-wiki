@@ -1,5 +1,6 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { Plus, Trash2, Download, Upload, Copy, Dices, Zap, Edit3, Check, X, AlertTriangle } from 'lucide-react';
+import { apiUrl } from '../lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -336,7 +337,7 @@ function executeMacro(macro: DiceMacro, modifiers: Modifier[]): RollResult {
 
 async function sendToDiscord(webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> {
   // We now hit our secure serverless backend which acts as a CORS proxy and message formatter.
-  const endpointUrl = "https://ulunavir-vercel.vercel.app/api/send-dice";
+  const endpointUrl = apiUrl('/api/send-dice');
 
   try {
     const response = await fetch(endpointUrl, {

@@ -1,3 +1,5 @@
+import { apiUrl } from './api';
+
 export interface CharacterSheetSyncPayload {
   characterId: string;
   characterName: string;
@@ -26,7 +28,7 @@ export interface CharacterSheetSyncResult {
   };
 }
 
-const CHARACTER_SYNC_ENDPOINT = 'https://ulunavir-vercel.vercel.app/api/sync-character-sheet';
+const CHARACTER_SYNC_ENDPOINT = apiUrl('/api/sync-character-sheet');
 const CHARACTER_SYNC_SECRET = 'ulunavirSync_yasoes31';
 export const DEFAULT_CHARACTER_SYNC_SHEET_ID = '1I3OY-TlUcG4DMqDMGS-Vzim4EHtBgW-XTE16ta9lPbo';
 export const DEFAULT_CHARACTER_SYNC_TAB_NAME = 'CptShape';

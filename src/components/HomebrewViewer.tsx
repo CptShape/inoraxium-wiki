@@ -7,6 +7,7 @@ import { buildCharacterFormulaContext, buildLocalVariableContext, evalCharacterF
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { QuickTools } from './QuickTools';
 import { HomebrewObjectTools } from './HomebrewObjectTools';
+import { apiUrl } from '../lib/api';
 
 export type HomebrewViewerEntityType = 'general-item' | 'inventory-item' | 'spell' | 'status';
 
@@ -135,7 +136,7 @@ const getHomebrewImageThumbUrl = (entry: ViewerEntry['entry']): string => (
 
 const sendToDiscord = async (webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> => {
   try {
-    const response = await fetch('https://ulunavir-vercel.vercel.app/api/send-dice', {
+    const response = await fetch(apiUrl('/api/send-dice'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ webhookUrl, characterName, result }),

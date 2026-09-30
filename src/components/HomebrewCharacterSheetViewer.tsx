@@ -10,6 +10,7 @@ import { buildCharacterFormulaContext, buildCharacterSheetSyncValues, buildLocal
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { HomebrewPageNav } from './HomebrewPageNav';
 import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
+import { apiUrl } from '../lib/api';
 
 interface HomebrewCharacterSheetViewerProps {
   characterId: string;
@@ -475,7 +476,7 @@ const rollDice = (notation: string): DiceRoll => {
 
 const sendToDiscord = async (webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> => {
   try {
-    const response = await fetch('https://ulunavir-vercel.vercel.app/api/send-dice', {
+    const response = await fetch(apiUrl('/api/send-dice'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({ webhookUrl, characterName, result }),

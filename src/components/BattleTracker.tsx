@@ -9,6 +9,7 @@ import {
   loadBattleTrackerRows,
   saveBattleTrackerRows,
 } from '../lib/battleTracker';
+import { apiUrl } from '../lib/api';
 
 // ─── Types ────────────────────────────────────────────────────────────────────
 
@@ -206,7 +207,7 @@ export const BattleTracker: React.FC = () => {
 
     setDiscordStatus(type === 'start' ? 'Sending encounter start...' : 'Sending encounter end...');
 
-    const endpointUrl = "https://ulunavir-vercel.vercel.app/api/send-encounter";
+    const endpointUrl = apiUrl('/api/send-encounter');
 
     try {
       const response = await fetch(endpointUrl, {
