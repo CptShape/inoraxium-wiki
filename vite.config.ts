@@ -15,5 +15,5 @@ export default defineConfig({
       "@": path.resolve(__dirname, "src"),
     },
   },
-  base: '/inoraxium-wiki/'
+  base: process.env.VERCEL ? '/' : '/inoraxium-wiki/'
 });

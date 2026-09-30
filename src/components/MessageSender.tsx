@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { Send } from 'lucide-react';
+import { apiUrl } from '../lib/api';
 
 const STORAGE_KEY_WEBHOOK = 'messageSenderWebhookUrl';
 const STORAGE_KEY_NAME = 'messageSenderName';
@@ -33,7 +34,7 @@ const sendMessage = async () => {
   setStatus('Sending message to server...');
 
   try {
-    const response = await fetch('https://ulunavir-vercel.vercel.app/api/send-message', {
+    const response = await fetch(apiUrl('/api/send-message'), {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',

@@ -1,3 +1,5 @@
+import { apiUrl } from './api';
+
 export interface PixhostUploadResult {
   showUrl: string;
   thumbUrl: string;
@@ -15,7 +17,6 @@ interface PixhostApiResponse {
   data?: PixhostApiResponse;
 }
 
-const PIXHOST_UPLOAD_ENDPOINT = 'https://api.pixhost.to/images';
 const PIXHOST_UPLOAD_PROXY_ENDPOINT = import.meta.env.VITE_PIXHOST_UPLOAD_PROXY_URL as string | undefined;
 
 const isPixhostShowUrl = (url: string): boolean => {
@@ -86,7 +87,7 @@ export const uploadImageToPixhost = async (file: File, options: { preserveOrigin
   formData.append('max_th_size', '420');
   formData.append('optimize_for_web', options.preserveOriginal ? '0' : '1');
 
-  const uploadEndpoint = PIXHOST_UPLOAD_PROXY_ENDPOINT || PIXHOST_UPLOAD_ENDPOINT;
+  const uploadEndpoint = PIXHOST_UPLOAD_PROXY_ENDPOINT?.trim() || apiUrl('/api/upload-pixhost-image');
 
   let response: Response;
   try {
@@ -98,10 +99,7 @@ export const uploadImageToPixhost = async (file: File, options: { preserveOrigin
       body: formData,
     });
   } catch (error) {
-    const needsProxy = !PIXHOST_UPLOAD_PROXY_ENDPOINT;
-    throw new Error(needsProxy
-      ? 'Image upload failed because the browser could not reach Pixhost directly. Pixhost direct browser uploads are likely blocked by CORS, so this needs a small Vercel upload proxy.'
-      : `Image upload proxy could not be reached. ${error instanceof Error ? error.message : ''}`.trim());
+    throw new Error(`Image upload proxy could not be reached. ${error instanceof Error ? error.message : ''}`.trim());
   }
 
   const data = await response.json().catch(() => ({})) as PixhostApiResponse;

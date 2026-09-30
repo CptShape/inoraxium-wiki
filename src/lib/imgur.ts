@@ -1,3 +1,5 @@
+import { apiUrl } from './api';
+
 export interface ImgurAlbumImage {
   url: string;
   label: string;
@@ -22,24 +24,13 @@ type UnknownRecord = Record<string, unknown>;
 
 const IMGUR_CLIENT_ID = import.meta.env.VITE_IMGUR_CLIENT_ID as string | undefined;
 const CONFIGURED_IMGUR_ALBUM_PROXY_ENDPOINT = import.meta.env.VITE_IMGUR_ALBUM_PROXY_URL as string | undefined;
-const PIXHOST_UPLOAD_PROXY_ENDPOINT = import.meta.env.VITE_PIXHOST_UPLOAD_PROXY_URL as string | undefined;
 
 const getImgurAlbumProxyEndpoint = (): string => {
   if (CONFIGURED_IMGUR_ALBUM_PROXY_ENDPOINT?.trim()) {
     return CONFIGURED_IMGUR_ALBUM_PROXY_ENDPOINT.trim();
   }
 
-  if (PIXHOST_UPLOAD_PROXY_ENDPOINT?.trim()) {
-    try {
-      const url = new URL(PIXHOST_UPLOAD_PROXY_ENDPOINT.trim());
-      url.pathname = url.pathname.replace(/\/[^/]*$/, '/imgur-album');
-      return url.toString();
-    } catch {
-      return '';
-    }
-  }
-
-  return '';
+  return apiUrl('/api/imgur-album');
 };
 
 export const parseImgurAlbumId = (rawUrl: string): string => {

@@ -7,6 +7,7 @@ import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSe
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
 import { exportJsonWithChoice, importJsonTextWithChoice, showTwoOptionModal } from '../lib/jsonTransfer';
 import { evalCharacterRollFormula } from '../lib/characterContext';
+import { apiUrl } from '../lib/api';
 
 const splitFormulaArgs = (argsString: string): string[] => {
   const args: string[] = [];
@@ -684,7 +685,7 @@ function executeCharacterMacro(
 }
 
 async function sendToDiscord(webhookUrl: string, characterName: string, result: RollResult): Promise<string | null> {
-  const endpointUrl = 'https://ulunavir-vercel.vercel.app/api/send-dice';
+  const endpointUrl = apiUrl('/api/send-dice');
 
   try {
     const response = await fetch(endpointUrl, {
@@ -706,7 +707,7 @@ async function sendToDiscord(webhookUrl: string, characterName: string, result: 
 
 async function sendMessageToDiscord(webhookUrl: string, username: string, message: string): Promise<string | null> {
   try {
-    const response = await fetch('https://ulunavir-vercel.vercel.app/api/send-message', {
+    const response = await fetch(apiUrl('/api/send-message'), {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
