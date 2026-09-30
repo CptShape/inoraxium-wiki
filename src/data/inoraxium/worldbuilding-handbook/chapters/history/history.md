@@ -15,7 +15,7 @@ ranges:
     end: 1257
     color: '#8b5cf6'
   - id: era-of-reckoning
-    label: Era of Peace
+    label: Era of Reckoning
     start: 1258
     end: 2000
     color: '#8b5cf6'
@@ -24,7 +24,9 @@ events:
   - id: creation-of-drakthar
     year: 0
     title: Drakthar İmparatorluğunun Kuruluşu
-    description:
+    image: https://imgur.com/z5wn50L.png
+    imageAlt: Test imageAlt
+    description: test description
     color: '#facc15'
     size: lg
     goChapter: era-of-drakthar

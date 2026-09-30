@@ -8,6 +8,7 @@ export const chronicleChapter: Chapter = {
   subtitle: 'A Timeline of Ages and Upheavals',
   icon: '⏳',
   content: 'src/data/inoraxium/worldbuilding-handbook/chapters/history/history.md',
+  width: 0.9,
   prevChapter: 'players-handbook',
   nextChapter: 'kinships',
   subChapters: [eraOfDraktharChapter,eraOfReckoningChapter],

@@ -31,6 +31,9 @@ export interface TimelineEvent {
   year: number;
   title: string;
   description?: string;
+  image?: string;
+  imageAlt?: string;
+  tags?: string[];
   color?: string;
   size?: 'sm' | 'md' | 'lg';
   goChapter?: string;
