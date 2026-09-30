@@ -728,6 +728,37 @@ async function sendMessageToDiscord(webhookUrl: string, username: string, messag
   }
 }
 
+async function announceGalleryImages(
+  userName: string,
+  characterId: string,
+  characterName: string,
+  imageUrls: string[],
+): Promise<string | null> {
+  if (imageUrls.length === 0) return null;
+
+  const galleryUrl = new URL(import.meta.env.BASE_URL, window.location.origin);
+  galleryUrl.hash = `homebrew-gallery/${encodeURIComponent(characterId)}`;
+
+  try {
+    const response = await fetch(apiUrl('/api/announce-gallery-images'), {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        userName,
+        characterName,
+        galleryUrl: galleryUrl.toString(),
+        imageUrls,
+      }),
+    });
+    const data = await response.json().catch(() => ({}));
+    if (!response.ok) return data.error || `Gallery announcement failed (${response.status}).`;
+    return null;
+  } catch (error) {
+    console.error('Failed to announce gallery images:', error);
+    return 'Gallery announcement API could not be reached.';
+  }
+}
+
 interface CharactersProps {
   embeddedCharacterId?: string | null;
   embeddedMode?: boolean;
@@ -736,6 +767,7 @@ interface CharactersProps {
 export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = null, embeddedMode = false }) => {
   const [userId, setUserId] = useState<string | null>(null);
   const [userEmail, setUserEmail] = useState<string | null>(null);
+  const [userDisplayName, setUserDisplayName] = useState<string | null>(null);
   const [isAdmin, setIsAdmin] = useState(false);
   const [adminSource, setAdminSource] = useState<string | null>(null);
   const [userProfiles, setUserProfiles] = useState<UserProfile[]>([]);
@@ -963,6 +995,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
     return authProvider.onAuthChange((state) => {
       setUserId(state.uid);
       setUserEmail(state.email);
+      setUserDisplayName(state.displayName);
     });
   }, []);
 
@@ -6622,6 +6655,8 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       return;
     }
 
+    const previousGalleryImageIds = new Set((selectedCharacter.gallery || []).map(image => image.id));
+    const newlyAddedGalleryImages = galleryImages.filter(image => !previousGalleryImageIds.has(image.id));
     const updated: CharacterData = {
       ...selectedCharacter,
       name: editName.trim() || selectedCharacter.name,
@@ -6692,6 +6727,13 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       });
       return;
     }
+
+    const galleryAnnouncementError = await announceGalleryImages(
+      userDisplayName?.trim() || userEmail?.trim() || 'Bir kullanıcı',
+      updated.id,
+      updated.name,
+      newlyAddedGalleryImages.map(getGalleryImageUrl),
+    );
     if (updated.sendToSpreadsheet ?? true) {
       const syncValues = buildCharacterSheetSyncValues(getCharacterContext());
       setIsSheetSyncing(true);
@@ -6704,13 +6746,17 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       });
       setIsSheetSyncing(false);
       setSheetSyncStatus({
-        tone: syncResult.success ? 'success' : 'error',
-        message: syncResult.message,
+        tone: syncResult.success && !galleryAnnouncementError ? 'success' : 'error',
+        message: galleryAnnouncementError
+          ? `${syncResult.message} Gallery announcement failed: ${galleryAnnouncementError}`
+          : syncResult.message,
       });
     } else {
       setSheetSyncStatus({
-        tone: 'success',
-        message: 'Spreadsheet sync skipped for this character.',
+        tone: galleryAnnouncementError ? 'error' : 'success',
+        message: galleryAnnouncementError
+          ? `Spreadsheet sync skipped. Gallery announcement failed: ${galleryAnnouncementError}`
+          : 'Spreadsheet sync skipped for this character.',
       });
     }
   };
