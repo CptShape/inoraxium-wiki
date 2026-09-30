@@ -71,7 +71,10 @@ const devMarkdownUrl = (value: string) => {
     return null;
   }
 
-  const basePath = `/${trimmed}`;
+  const baseUrl = import.meta.env.BASE_URL.endsWith('/')
+    ? import.meta.env.BASE_URL
+    : `${import.meta.env.BASE_URL}/`;
+  const basePath = `${baseUrl}${trimmed}`;
   const separator = basePath.includes('?') ? '&' : '?';
   return `${basePath}${separator}raw`;
 };
