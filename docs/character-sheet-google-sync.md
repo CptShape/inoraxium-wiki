@@ -10,7 +10,7 @@ The character sheet now mirrors computed values to the Vercel Sheets sync endpoi
 
 ### Backend target
 
-- Endpoint: `https://ulunavir-vercel.vercel.app/api/sync-character-sheet`
+- Endpoint: `https://inoraxium-wiki-three.vercel.app/api/sync-character-sheet`
 - Sheet id: `1I3OY-TlUcG4DMqDMGS-Vzim4EHtBgW-XTE16ta9lPbo`
 - Tab name: `CptShape`
 
