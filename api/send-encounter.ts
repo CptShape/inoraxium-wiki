@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { applyApiCors, resolveDiscordWebhook } from './_lib/http';
+import { applyApiCors, resolveDiscordWebhook } from './_lib/http.js';
 
 type CombatantStatus = 'fighting' | 'stunned' | 'unknown' | 'defeated';
 

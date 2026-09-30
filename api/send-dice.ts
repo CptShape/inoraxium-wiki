@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { applyApiCors, resolveDiscordWebhook } from './_lib/http';
+import { applyApiCors, resolveDiscordWebhook } from './_lib/http.js';
 
 // Vercel serverless function to securely forward dice rolls to Discord.
 // This hides the Webhook URL from the client browser and prevents spam.

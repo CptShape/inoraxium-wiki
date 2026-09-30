@@ -1,5 +1,5 @@
 import type { VercelRequest, VercelResponse } from '@vercel/node';
-import { applyApiCors } from './_lib/http';
+import { applyApiCors } from './_lib/http.js';
 
 const IMGUR_BASE_URL = 'https://imgur.com';
 const IMGUR_IMAGE_URL = 'https://i.imgur.com';
