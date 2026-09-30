@@ -42,7 +42,7 @@ jobs:
           VITE_FIREBASE_STORAGE_BUCKET: "ulunavir-wiki.firebasestorage.app"
           VITE_FIREBASE_MESSAGING_SENDER_ID: "675177665887"
           VITE_FIREBASE_APP_ID: "1:675177665887:web:1de272741f1baa304b12ea"
-          VITE_API_BASE_URL: "https://ulunavir-vercel.vercel.app"
+          VITE_API_BASE_URL: "https://inoraxium-wiki-three.vercel.app"
 
       - name: Setup Pages
         uses: actions/configure-pages@v5
