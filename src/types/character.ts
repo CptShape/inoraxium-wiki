@@ -323,6 +323,8 @@ export interface CharacterData {
   backstory?: string;
   notes?: string;
   portraitUrl?: string;
+  /** Relative GLB or FBX path within public/models; empty string clears the selection. */
+  model3dPath?: string;
   gallery?: CharacterGalleryImage[];
   galleryTagCategories?: Record<string, CharacterGalleryTagCategory>;
   createdAt?: number;

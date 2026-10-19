@@ -11,6 +11,8 @@ import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncC
 import { HomebrewPageNav } from './HomebrewPageNav';
 import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/homebrewCharacterCache';
 import { apiUrl } from '../lib/api';
+import { characterModelUrl, useCharacterModels } from '../lib/characterModels';
+import CharacterModelViewer from './CharacterModelViewer';
 
 interface HomebrewCharacterSheetViewerProps {
   characterId: string;
@@ -498,6 +500,14 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
   const [character, setCharacterState] = useState<CharacterData | null>(() => getCachedHomebrewCharacter(characterId));
   const [isLoading, setIsLoading] = useState(() => !getCachedHomebrewCharacter(characterId));
   const [error, setError] = useState<string | null>(null);
+  const [modelViewCharacterId, setModelViewCharacterId] = useState<string | null>(null);
+  const modelLibrary = useCharacterModels();
+  const selectedModel = modelLibrary.models.find(model => model.path === character?.model3dPath);
+  const show3dModel = !!selectedModel && modelViewCharacterId === characterId;
+  const modelUnavailableReason = modelLibrary.loading ? 'Loading model library…'
+    : modelLibrary.error ? modelLibrary.error
+    : !character?.model3dPath ? 'Select a 3D model in Character Sheet → Bio → 3D Model first.'
+    : !selectedModel ? 'The selected 3D model is no longer available in the model library.' : '';
   const [actionMessage, setActionMessage] = useState<string | null>(null);
   const [diceSettings, setDiceSettings] = useState<UserDiceSettings>({ macros: [], webhookUrl: '', autoSend: false });
   const [rollPopupResult, setRollPopupResult] = useState<RollResult | null>(null);
@@ -1104,7 +1114,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
   ] : [];
 
   return (
-    <div className="flex-1 overflow-y-auto bg-[#efe2bd] p-6 pr-24 text-stone-900" style={parchmentBackground}>
+    <div className="min-w-0 flex-1 overflow-y-auto bg-[#efe2bd] px-3 py-6 pr-20 text-stone-900 sm:p-6 sm:pr-24" style={parchmentBackground}>
       <QuickTools character={character} canControl={canControlCharacter} userId={userId} onCharacterUpdated={setCharacter} />
       {rollPopupResult && (
         <button
@@ -1412,10 +1422,15 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                   )}
                 </div>
                 <div>
-                  <div className="mb-3 inline-flex rounded-full border border-amber-900/20 bg-amber-100/60 px-3 py-1 text-xs uppercase tracking-[0.24em] text-amber-950">
-                    Overview
+                  <div className="mb-3 flex flex-wrap items-center justify-between gap-3">
+                    <span className="inline-flex rounded-full border border-amber-900/20 bg-amber-100/60 px-3 py-1 text-xs uppercase tracking-[0.24em] text-amber-950">Overview</span>
+                    <div className="inline-flex rounded-full border border-amber-900/25 bg-white/50 p-1 text-sm text-amber-950" role="group" aria-label="Overview display mode" title={modelUnavailableReason || 'Switch between 2D artwork and the 3D viewer'}>
+                      <button type="button" aria-pressed={!show3dModel} onClick={() => setModelViewCharacterId(null)} className={`rounded-full px-4 py-1.5 font-bold transition ${!show3dModel ? 'bg-amber-900 text-amber-50 shadow-sm' : 'hover:bg-amber-100'}`}>2D</button>
+                      <button type="button" aria-pressed={show3dModel} disabled={!selectedModel || modelLibrary.loading || !!modelLibrary.error} onClick={() => setModelViewCharacterId(characterId)} className={`rounded-full px-4 py-1.5 font-bold transition disabled:cursor-not-allowed disabled:opacity-35 ${show3dModel ? 'bg-amber-900 text-amber-50 shadow-sm' : 'hover:bg-amber-100'}`}>3D</button>
+                    </div>
                   </div>
-                  <h1 className="text-5xl text-amber-950" style={{ fontFamily: "'Cinzel', serif" }}>
+                  {modelLibrary.error && character.model3dPath && <button type="button" onClick={modelLibrary.reload} className="mb-2 text-xs text-rose-900 underline">Retry model library</button>}
+                  <h1 className="break-words text-3xl text-amber-950 sm:text-5xl" style={{ fontFamily: "'Cinzel', serif" }}>
                     {character.name || 'Unnamed Character'}
                   </h1>
                   <p className="mt-3 text-xl italic text-stone-700" style={{ fontFamily: "'IM Fell English', serif" }}>
@@ -1435,7 +1450,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
             </section>
             )}
 
-            {page === 'overview' && (overviewMainAttributes.length > 0 || overviewBoxes.length > 0) && (
+            {page === 'overview' && (show3dModel || overviewMainAttributes.length > 0 || overviewBoxes.length > 0) && (
               <section className="overflow-hidden rounded-[2rem] border-[3px] border-amber-950/55 bg-[#d8c996] shadow-[0_28px_70px_rgba(68,38,17,0.28)]">
                 <div className="border-b-[3px] border-stone-950/55 bg-[#8d8562]/95 px-6 py-4 shadow-[0_8px_0_rgba(0,0,0,0.22)]">
                   <div className="flex flex-wrap items-end justify-between gap-3">
@@ -1446,7 +1461,9 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                     {character.alignment && <span className="rounded border border-stone-900/40 px-3 py-1 text-xs uppercase tracking-[0.14em] text-stone-800">{character.alignment}</span>}
                   </div>
                 </div>
-                <div className="relative min-h-[620px] overflow-hidden bg-stone-900">
+                {show3dModel && selectedModel ? (
+                  <CharacterModelViewer key={`${characterId}:${selectedModel.path}`} src={characterModelUrl(selectedModel.path)} name={character.name} />
+                ) : <div className="relative min-h-[620px] overflow-hidden bg-stone-900">
                   {splashArtUrl ? (
                     <>
                       <img
@@ -1758,7 +1775,7 @@ export const HomebrewCharacterSheetViewer: React.FC<HomebrewCharacterSheetViewer
                     })}
                   </div>
                   </div>
-                </div>
+                </div>}
               </section>
             )}
 

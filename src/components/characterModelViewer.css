@@ -1,0 +1,30 @@
+.character-model-viewer { position: relative; display: flex; flex-direction: column; min-width: 0; min-height: 560px; overflow: hidden; isolation: isolate; color: #f5e8d3; font-family: system-ui, sans-serif; background-image: radial-gradient(ellipse at 50% 40%, #fbbf2410, transparent 70%); }
+.character-model-viewer:fullscreen { width: 100%; height: 100%; }
+.character-model-viewer button, .character-model-viewer select { border: 1px solid #a8977440; border-radius: 8px; background: #161412dc; color: #f5e8d3; cursor: pointer; }
+.character-model-viewer button { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 8px 10px; transition: background .15s, border-color .15s; }
+.character-model-viewer button:hover:not(:disabled), .character-model-viewer button[aria-pressed="true"] { background: #785721; border-color: #fbbf2490; }
+.character-model-viewer button:disabled { opacity: .35; cursor: not-allowed; }
+.character-model-viewer :is(button, select, input):focus-visible { outline: 2px solid #fbbf24; outline-offset: 3px; }
+.cmv-toolbar { z-index: 2; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; padding: 12px 16px; background: #0c0a09c9; border-bottom: 1px solid #a8977430; }
+.cmv-title { display: flex; align-items: center; gap: 8px; font-size: 10px; font-weight: 700; letter-spacing: .2em; }
+.cmv-live { width: 6px; height: 6px; border-radius: 50%; background: #d4a650; box-shadow: 0 0 12px #fbbf2450; }
+.cmv-tools { display: flex; flex-wrap: wrap; gap: 5px; }
+.cmv-stage { position: relative; flex: 1; min-height: 400px; }
+.cmv-stage model-viewer { display: block; width: 100%; height: 100%; min-height: 400px; position: absolute; inset: 0; --progress-bar-color: #d4a650; --progress-bar-height: 3px; }
+.cmv-message { position: absolute; z-index: 1; inset: 85px 16px 90px; display: flex; align-items: center; justify-content: center; flex-direction: column; gap: 12px; text-align: center; font-size: 14px; }
+.cmv-message span { max-width: 380px; font-size: 12px; opacity: .7; }
+.cmv-spinner { width: 26px; height: 26px; border: 2px solid #a8977430; border-top-color: #d4a650; border-radius: 50%; animation: cmv-spin 1s linear infinite; }
+@keyframes cmv-spin { to { transform: rotate(360deg); } }
+@media (prefers-reduced-motion: reduce) { .cmv-spinner { animation: none; } }
+.cmv-presets { position: absolute; top: 78px; left: 16px; right: 16px; z-index: 1; display: flex; flex-wrap: wrap; gap: 5px; pointer-events: none; }
+.cmv-presets button { min-height: 30px; padding: 5px 10px; font-size: 11px; pointer-events: auto; }
+.cmv-settings { position: absolute; z-index: 3; right: 16px; top: 112px; width: min(235px, calc(100% - 32px)); padding: 16px; display: grid; gap: 14px; border: 1px solid #a8977440; border-radius: 12px; background: #161412f5; box-shadow: 0 10px 35px #0005; }
+.character-model-viewer label { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 6px; font-size: 11px; }
+.cmv-settings select, .cmv-settings input { width: 100%; }
+.character-model-viewer select { padding: 5px 8px; min-width: 0; max-width: 100%; font-size: 12px; }
+.cmv-settings input { accent-color: #d4a650; }
+.cmv-animation { position: relative; z-index: 2; display: flex; align-items: center; flex-wrap: wrap; gap: 12px; margin: 0 16px 10px; padding: 8px; border: 1px solid #a8977430; border-radius: 10px; background: #0c0a09c9; }
+.cmv-animation-select { flex: 1; min-width: 110px; }
+.cmv-animation-select select { flex: 1; width: 100px; }
+.cmv-footer { z-index: 1; padding: 10px 16px; display: grid; gap: 6px; font-size: 10px; line-height: 1.7; color: #d7cdb9; background: #0c0a09c9; border-top: 1px solid #a8977420; }
+@media (max-width: 480px) { .cmv-toolbar { padding: 12px; } .cmv-tools { gap: 4px; } .character-model-viewer { min-height: 520px; } .character-model-viewer button { padding: 8px; } .cmv-title { letter-spacing: .1em; } .cmv-presets { top: 110px; } .cmv-settings { top: 152px; } }

@@ -17,6 +17,7 @@
   },
   "dependencies": {
     "@dice-roller/rpg-dice-roller": "^5.5.1",
+    "@google/model-viewer": "^4.4.0",
     "clsx": "2.1.1",
     "firebase": "^12.12.1",
     "googleapis": "^171.4.0",
@@ -32,6 +33,7 @@
     "rehype-raw": "^7.0.0",
     "remark-gfm": "^4.0.1",
     "tailwind-merge": "3.4.0",
+    "three": "^0.183.2",
     "yaml": "^2.8.3"
   },
   "devDependencies": {
@@ -40,6 +42,7 @@
     "@types/node": "^22.0.0",
     "@types/react": "19.2.7",
     "@types/react-dom": "19.2.3",
+    "@types/three": "^0.183.1",
     "@vercel/node": "^5.7.13",
     "@vitejs/plugin-react": "5.1.1",
     "tailwindcss": "4.1.17",

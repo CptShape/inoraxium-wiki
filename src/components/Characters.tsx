@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback } from 'react';
 import BattleSettingsEditor from './BattleSettingsEditor';
 import { remapBattleSettings } from '../lib/battleSettings';
 import CharacterSpritesEditor from './CharacterSpritesEditor';
+import CharacterModelEditor from './CharacterModelEditor';
 import { Plus, Star, Trash2, Save, ArrowLeft, Shield, Wand2, RefreshCw, Search, X, Filter, Settings, Dices, Zap, Edit3, Check, AlertTriangle, ArrowUp, ArrowDown, Share2, Crown, Upload, Copy } from 'lucide-react';
 import { CharacterAction, CharacterAttributeSectionColumns, CharacterAttributeSectionModes, CharacterBar, CharacterData, CharacterDiceMacro, CharacterDisplayStat, CharacterEntryFolder, CharacterGalleryImage, CharacterGalleryImageTag, CharacterGalleryTagCategory, CharacterGeneralItem, CharacterInventoryItem, CharacterLocalVariable, CharacterOverviewSettings, CharacterReplenishTrigger, CharacterScript, CharacterScriptBarUpdateEntry, CharacterScriptCondition, CharacterScriptConditionOperator, CharacterScriptPlaceholder, CharacterScriptStatusEntry, CharacterScriptTrigger, CharacterSpell, CharacterStatusDurationEndBehavior, CharacterStatusDurationType, CustomAttribute, CharacterStatus, PartyData, SkillAttribute, StatusEffect } from '../types/character';
 import { DEFAULT_CHARACTER_SYNC_SHEET_ID, DEFAULT_CHARACTER_SYNC_TAB_NAME, syncCharacterSheet } from '../lib/characterSheetSync';
@@ -180,7 +181,7 @@ interface CharacterEntryExportPayload {
 
 type AttributeCalculationType = NonNullable<CustomAttribute['calculationType']>;
 type CharacterSheetTab = 'bio' | 'attributes' | 'macros' | 'scripts' | 'inventory' | 'spells' | 'statuses';
-type BioSheetSubTab = 'main' | 'overview' | 'gallery' | 'sprites';
+type BioSheetSubTab = 'main' | 'overview' | 'gallery' | 'sprites' | 'model3d';
 type AttributeSheetSubTab = 'bars' | 'main' | 'secondary' | 'skills' | 'other' | 'resistances' | 'unassigned';
 type MacroSheetSubTab = 'main' | 'rolls' | string;
 type ScriptSheetSubTab = 'main' | string;
@@ -810,6 +811,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
   const [portraitLoadError, setPortraitLoadError] = useState(false);
   const [galleryImages, setGalleryImages] = useState<CharacterGalleryImage[]>([]);
   const [characterSprites, setCharacterSprites] = useState<CharacterData['sprites']>();
+  const [model3dPath, setModel3dPath] = useState('');
   const [galleryUploading, setGalleryUploading] = useState(false);
   const [fullscreenGalleryImage, setFullscreenGalleryImage] = useState<CharacterGalleryImage | null>(null);
   const [galleryTagEditor, setGalleryTagEditor] = useState<{ imageId: string; x: number; y: number; input: string; category: CharacterGalleryTagCategory } | null>(null);
@@ -1085,6 +1087,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       setPortraitLoadError(false);
       setGalleryImages(selectedCharacter.gallery || []);
       setCharacterSprites(selectedCharacter.sprites);
+      setModel3dPath(selectedCharacter.model3dPath || '');
       setGalleryTagCategories(normalizeGalleryTagCategoryMap(
         getGalleryCustomTags(selectedCharacter.gallery || []),
         selectedCharacter.galleryTagCategories,
@@ -6675,6 +6678,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
       portraitUrl,
       gallery: galleryImages,
       ...(characterSprites ? { sprites: characterSprites } : {}),
+      model3dPath,
       galleryTagCategories: normalizeGalleryTagCategoryMap(allGalleryCustomTags, galleryTagCategories),
       tags: charTags,
       displayStats,
@@ -9454,6 +9458,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
                 { key: 'main', label: 'Main' },
                 { key: 'overview', label: 'Character Overview' },
                 { key: 'gallery', label: 'Gallery' },
+                { key: 'model3d', label: '3D Model' },
                 { key: 'sprites', label: 'Sprites' },
               ].map((tab) => {
                 const isActive = activeBioSubTab === tab.key;
@@ -10224,6 +10229,7 @@ export const Characters: React.FC<CharactersProps> = ({ embeddedCharacterId = nu
           )}
 
           {activeSheetTab === 'bio' && activeBioSubTab === 'sprites' && <CharacterSpritesEditor key={selectedCharacter.id} value={characterSprites} disabled={!isCharacterOwner} onChange={setCharacterSprites} />}
+          {activeSheetTab === 'bio' && activeBioSubTab === 'model3d' && <CharacterModelEditor key={selectedCharacter.id} value={model3dPath} name={editName || selectedCharacter.name} disabled={!isCharacterOwner} onChange={setModel3dPath} />}
           {activeSheetTab === 'bio' && activeBioSubTab === 'gallery' && (
           <div className="border border-cyan-800/30 bg-black/20 p-6 rounded-xl relative overflow-hidden">
             <div className="absolute inset-0 opacity-10 bg-[url('https://www.transparenttextures.com/patterns/dark-leather.png')] pointer-events-none"></div>
