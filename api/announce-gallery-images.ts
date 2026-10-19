@@ -2,6 +2,7 @@ import type { VercelRequest, VercelResponse } from '@vercel/node';
 import { applyApiCors, resolveDiscordWebhook } from './_lib/http.js';
 
 interface GalleryAnnouncementPayload {
+  scope?: unknown;
   userName?: unknown;
   characterName?: unknown;
   galleryUrl?: unknown;
@@ -72,12 +73,17 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
 
   const userName = escapeDiscordMarkdown(cleanText(body.userName, 'Bir kullanıcı', 120));
   const characterName = escapeDiscordMarkdown(cleanText(body.characterName, 'İsimsiz karakter', 120));
-  const description = [
+  const description = body.scope === 'global' ? [
+    `**${userName} kullanıcısı** global galeriye **${imageUrls.length} görsel** yükledi.`,
+    '',
+    `[Galeriye git](${galleryUrl})`,
+  ].join('\n') : [
     `**${userName} kullanıcısı**`,
     `${characterName} karakterinin galerisine yeni ekleme yapmıştır.`,
     '',
     `[Galeriye git](${galleryUrl})`,
   ].join('\n');
+  let announcedImages = 0;
 
   try {
     for (const imageChunk of chunk(imageUrls, MAX_EMBEDS_PER_MESSAGE)) {
@@ -100,15 +106,18 @@ export default async function handler(req: VercelRequest, res: VercelResponse) {
       if (!response.ok) {
         const details = await response.text().catch(() => '');
         return res.status(502).json({
+          announcedImages,
           error: `Discord rejected the gallery announcement (${response.status}).`,
           details: details.slice(0, 500),
         });
       }
+      announcedImages += imageChunk.length;
     }
 
     return res.status(200).json({ success: true, announcedImages: imageUrls.length });
   } catch (error) {
     return res.status(502).json({
+      announcedImages,
       error: `Failed to send gallery announcement: ${error instanceof Error ? error.message : 'Unknown error'}`,
     });
   }

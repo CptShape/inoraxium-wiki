@@ -7,6 +7,8 @@ import { getCachedHomebrewCharacter, setCachedHomebrewCharacter } from '../lib/h
 import { getPixhostDirectImageUrl, isDirectImageUrl } from '../lib/pixhost';
 import { HomebrewPageNav } from './HomebrewPageNav';
 import { QuickTools } from './QuickTools';
+import { useGallery } from '../lib/useGallery';
+import { characterGalleryImages } from '../lib/gallery';
 
 interface HomebrewGalleryViewerProps {
   characterId: string;
@@ -26,8 +28,9 @@ const GALLERY_TAG_CATEGORY_LABELS: Record<CharacterGalleryTagCategory, string> =
   character: 'Character Tags',
   meta: 'Meta Tags',
   general: 'General Tags',
+  'character-specific': 'Character Specific',
 };
-const GALLERY_TAG_CATEGORY_ORDER: CharacterGalleryTagCategory[] = ['character', 'meta', 'general'];
+const GALLERY_TAG_CATEGORY_ORDER: CharacterGalleryTagCategory[] = ['character', 'meta', 'general', 'character-specific'];
 
 const getGalleryDisplayUrl = (image: CharacterGalleryImage): string => {
   const imageUrl = image.url || '';
@@ -41,6 +44,7 @@ const getGalleryThumbUrl = (image: CharacterGalleryImage): string => (
 );
 
 export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ characterId, onBack }) => {
+  const globalGallery = useGallery(true);
   const [userId, setUserId] = useState<string | null>(authProvider.getUid());
   const [character, setCharacterState] = useState<CharacterData | null>(() => getCachedHomebrewCharacter(characterId));
   const [isLoading, setIsLoading] = useState(() => !getCachedHomebrewCharacter(characterId));
@@ -90,11 +94,12 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
   }, [characterId, userId]);
 
   const galleryImages = useMemo(() => (
-    (character?.gallery || [])
+    (character ? characterGalleryImages(character, globalGallery.images) : [])
+      .map(image => ({ ...image, tags: [...new Set([...(image.tags || []), ...(image.characterSpecificTags || [])])] }))
       .filter(image => image.url || image.thumbUrl)
       .slice()
       .sort((left, right) => (right.createdAt || 0) - (left.createdAt || 0))
-  ), [character?.gallery]);
+  ), [character, globalGallery.images]);
 
   const galleryTags = useMemo(() => {
     const tagMap = new Map<string, string>();
@@ -110,12 +115,13 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
   }, [galleryImages]);
 
   const galleryTagsByCategory = useMemo(() => {
-    const categories = character?.galleryTagCategories || {};
+    const categories = { ...character?.galleryTagCategories, ...Object.fromEntries(globalGallery.tags.map(tag => [tag.name, tag.category])) };
+    (character?.gallery || []).forEach(image => (image.characterSpecificTags || []).forEach(tag => { categories[tag.toLowerCase()] = 'character-specific'; }));
     return GALLERY_TAG_CATEGORY_ORDER.reduce((acc, category) => {
       acc[category] = galleryTags.filter(tag => (categories[tag.toLowerCase()] || 'general') === category);
       return acc;
     }, {} as Record<CharacterGalleryTagCategory, string[]>);
-  }, [character?.galleryTagCategories, galleryTags]);
+  }, [character?.gallery, character?.galleryTagCategories, galleryTags, globalGallery.tags]);
 
   const filteredGalleryImages = useMemo(() => {
     const includedTags = Object.entries(tagFilters)
@@ -245,6 +251,7 @@ export const HomebrewGalleryViewer: React.FC<HomebrewGalleryViewerProps> = ({ ch
         </header>
 
         <section className={sectionClass}>
+          {globalGallery.error && <p role="alert" className="mb-4 text-rose-800">Global images could not be loaded: {globalGallery.error}</p>}
           {galleryTags.length > 0 && (
             <div className="mb-5 rounded-2xl border border-amber-900/15 bg-white/35 p-3">
               <div className="space-y-3">

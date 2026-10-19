@@ -94,6 +94,83 @@ service cloud.firestore {
         || controlsExistingCharacter();
     }
 
+    match /galleryImages/{imageId} {
+      allow read: if true;
+      allow create: if signedIn()
+        && request.resource.data.userId == request.auth.uid
+        && request.resource.data.id == imageId
+        && request.resource.data.keys().hasOnly(['id', 'userId', 'url', 'thumbUrl', 'label', 'tags', 'createdAt', 'updatedAt'])
+        && request.resource.data.url is string
+        && request.resource.data.url.matches('https?://.*')
+        && request.resource.data.url.size() <= 4096
+        && request.resource.data.tags is list
+        && request.resource.data.tags.size() <= 100;
+      allow update: if signedIn()
+        && (resource.data.userId == request.auth.uid || isAdmin())
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.id == imageId
+        && request.resource.data.keys().hasOnly(['id', 'userId', 'url', 'thumbUrl', 'label', 'tags', 'createdAt', 'updatedAt'])
+        && request.resource.data.url is string
+        && request.resource.data.url.matches('https?://.*')
+        && request.resource.data.url.size() <= 4096
+        && request.resource.data.tags is list
+        && request.resource.data.tags.size() <= 100;
+      allow delete: if signedIn() && (resource.data.userId == request.auth.uid || isAdmin());
+    }
+
+    function galleryReactionBefore(uid, imageKey) {
+      let path = /databases/$(database)/documents/users/$(uid)/galleryReactions/$(imageKey);
+      return exists(path) ? get(path).data : {'liked': false, 'favorite': false, 'rockets': 0};
+    }
+    function galleryLikesBefore(imageKey) {
+      let path = /databases/$(database)/documents/galleryLikeCounts/$(imageKey);
+      return exists(path) ? get(path).data.likes : 0;
+    }
+    function galleryLikeDelta(before, after) {
+      return (after.liked ? 1 : 0) - (before.liked ? 1 : 0);
+    }
+    match /users/{uid}/galleryReactions/{imageKey} {
+      allow read: if signedIn() && request.auth.uid == uid;
+      allow create, update: if signedIn() && request.auth.uid == uid
+        && imageKey.matches('[a-f0-9]{64}')
+        && request.resource.data.keys().hasOnly(['liked', 'favorite', 'rockets', 'updatedAt'])
+        && request.resource.data.liked is bool
+        && request.resource.data.favorite is bool
+        && request.resource.data.rockets is int
+        && request.resource.data.rockets >= 0
+        && request.resource.data.rockets <= 9007199254740991
+        && request.resource.data.updatedAt is number
+        && request.resource.data.rockets >= galleryReactionBefore(uid, imageKey).rockets
+        && request.resource.data.rockets <= galleryReactionBefore(uid, imageKey).rockets + 1
+        && (request.resource.data.liked == galleryReactionBefore(uid, imageKey).liked
+          || getAfter(/databases/$(database)/documents/galleryLikeCounts/$(imageKey)).data.likes
+            == galleryLikesBefore(imageKey) + galleryLikeDelta(galleryReactionBefore(uid, imageKey), request.resource.data));
+      allow delete: if false;
+    }
+    match /galleryLikeCounts/{imageKey} {
+      allow read: if true;
+      allow create, update: if signedIn()
+        && imageKey.matches('[a-f0-9]{64}')
+        && request.resource.data.keys().hasOnly(['likes'])
+        && request.resource.data.likes is int && request.resource.data.likes >= 0
+        && galleryLikeDelta(galleryReactionBefore(request.auth.uid, imageKey), getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/galleryReactions/$(imageKey)).data) != 0
+        && request.resource.data.likes == galleryLikesBefore(imageKey)
+          + galleryLikeDelta(galleryReactionBefore(request.auth.uid, imageKey), getAfter(/databases/$(database)/documents/users/$(request.auth.uid)/galleryReactions/$(imageKey)).data);
+      allow delete: if false;
+    }
+
+    match /galleryTags/{tagId} {
+      allow read: if true;
+      allow create, update: if signedIn()
+        && request.resource.data.keys().hasOnly(['name', 'category'])
+        && request.resource.data.name is string
+        && request.resource.data.name.size() > 0
+        && request.resource.data.name.size() <= 64
+        && request.resource.data.category in ['character', 'meta', 'general', 'character-specific']
+        && (!exists(/databases/$(database)/documents/galleryTags/$(tagId)) || request.resource.data.name == resource.data.name);
+      allow delete: if isAdmin();
+    }
+
     match /users/{userId} {
       allow read: if signedIn();
 

@@ -12,7 +12,7 @@ export const toolsChapter: Chapter = {
   subtitle: 'Instruments and Utilities for the Game Master',
   icon: '🛠️',
   content: 'src/data/inoraxium/tools/chapters/tools.md',
-  subChapters: [battleTrackerChapter, charactersChapter, sessionChapter, campaignsChapter, demoGameChapter, assetCreatorChapter],
+  subChapters: [battleTrackerChapter, charactersChapter, { id: 'gallery', title: 'Gallery', subtitle: 'The shared visual archive', icon: '🖼️', content: 'global-gallery' }, sessionChapter, campaignsChapter, demoGameChapter, assetCreatorChapter],
 };
 
 export { assetCreatorChapter, battleTrackerChapter, campaignsChapter, charactersChapter, sessionChapter };

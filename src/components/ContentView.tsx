@@ -11,6 +11,7 @@ import AssetCreatorPage from './AssetCreatorPage';
 import SessionPage from './SessionPage';
 import CampaignsPage from './CampaignsPage';
 const DemoGamePage = React.lazy(() => import('./DemoGamePage'));
+const GlobalGallery = React.lazy(() => import('./GlobalGallery'));
 
 interface WorkspaceFolderNode {
   id: string;
@@ -358,6 +359,10 @@ export const ContentView: React.FC<ContentViewProps> = ({
         </div>
       </div>
     );
+  }
+
+  if (activeChapter.content === 'global-gallery') {
+    return <div className="min-w-0 flex-1 overflow-auto"><React.Suspense fallback={<p className="p-6 text-amber-200">Opening gallery…</p>}><GlobalGallery /></React.Suspense></div>;
   }
 
   if (activeChapter.content === 'demo-game') {

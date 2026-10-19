@@ -411,7 +411,7 @@ function App() {
   return (
     <div className={`theme-${currentSystem} flex h-screen bg-stone-900 text-amber-100 leather-bg`}>
       {!(activeChapter?.content === 'demo-game' && !isEditorOpen && !isHomebrewCharactersOpen && !homebrewViewerRoute && !homebrewLibraryRoute && !homebrewCharacterSheetRoute && !homebrewGalleryRoute) && <Sidebar
-        compactOnMobile={activeChapter?.content === 'characters' || !!homebrewCharacterSheetRoute}
+        compactOnMobile={activeChapter?.content === 'characters' || activeChapter?.content === 'global-gallery' || !!homebrewCharacterSheetRoute || !!homebrewGalleryRoute}
         chapters={chapters}
         activeChapterId={activeChapterId}
         expandedChapters={expandedChapters}

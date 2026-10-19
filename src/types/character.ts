@@ -124,7 +124,7 @@ export interface CharacterOverviewSettings {
 }
 
 export type CharacterGalleryImageTag = 'main' | 'splash-art' | 'token' | (string & {});
-export type CharacterGalleryTagCategory = 'character' | 'meta' | 'general';
+export type CharacterGalleryTagCategory = 'character' | 'meta' | 'general' | 'character-specific';
 
 export interface CharacterGalleryImage {
   id: string;
@@ -133,6 +133,10 @@ export interface CharacterGalleryImage {
   label?: string;
   tags?: CharacterGalleryImageTag[];
   createdAt?: number;
+  /** Character-local role selection referencing an image from the shared gallery. */
+  globalGalleryImageId?: string;
+  /** Tags scoped to this character; never published to the global tag registry. */
+  characterSpecificTags?: string[];
 }
 
 export interface CharacterSpell {
@@ -326,6 +330,10 @@ export interface CharacterData {
   /** Relative GLB or FBX path within public/models; empty string clears the selection. */
   model3dPath?: string;
   gallery?: CharacterGalleryImage[];
+  /** Global gallery Character tag used to collect this character's images. */
+  galleryCharacterTag?: string;
+  /** Images matching any selected Character tag are included in this gallery. */
+  galleryCharacterTags?: string[];
   galleryTagCategories?: Record<string, CharacterGalleryTagCategory>;
   createdAt?: number;
   tags?: string[];

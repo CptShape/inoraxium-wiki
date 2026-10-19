@@ -4,12 +4,363 @@ import {
   CharacterData,
   CharacterEntryFolder,
   CharacterGeneralItem,
+  CharacterGalleryImage,
+  CharacterGalleryTagCategory,
   CharacterInventoryItem,
   CharacterSpell,
   CharacterStatus,
   PartyData,
 } from '../types/character';
 import { changeHomebrewEntry, copyHomebrewObject, HomebrewEntry, HomebrewEntryField } from './homebrewEntries';
+import { GalleryPost, GalleryTag, GALLERY_CATEGORIES, imageTags, normalizeTag, publicCharacterGallery, usedGalleryTagNames, characterImageTagScopes, withCharacterImageTags, galleryImageUrl } from './gallery';
+
+import { EMPTY_GALLERY_REACTION, GalleryReaction, GalleryLikeCount, GalleryReactionAction, galleryReactionKey, nextGalleryReaction } from './galleryReactions';
+
+const LOCAL_REACTIONS_KEY = 'eldritchGalleryReactionsV1';
+const readLocalGalleryReactions = (): { reactions: Record<string, GalleryReaction>; counts: Record<string, GalleryLikeCount> } => {
+  try { return JSON.parse(localStorage.getItem(LOCAL_REACTIONS_KEY) || '{"reactions":{},"counts":{}}'); }
+  catch { return { reactions: {}, counts: {} }; }
+};
+export const subscribeGalleryReactions = (
+  uid: string | null,
+  onCounts: (counts: Record<string, GalleryLikeCount>) => void,
+  onReactions: (reactions: Record<string, GalleryReaction>) => void,
+  onError: (reason: unknown) => void,
+): (() => void) => {
+  if (uid === 'guest') {
+    const refresh = () => { const data = readLocalGalleryReactions(); onCounts(data.counts); onReactions(data.reactions); };
+    refresh();
+    window.addEventListener('gallery-reactions-updated', refresh);
+    window.addEventListener('storage', refresh);
+    return () => { window.removeEventListener('gallery-reactions-updated', refresh); window.removeEventListener('storage', refresh); };
+  }
+  let disposed = false;
+  const cleanup: Array<() => void> = [];
+  getFirestore().then(fs => {
+    if (disposed) return;
+    if (!fs) { onError(new Error('Gallery reactions unavailable.')); return; }
+    cleanup.push(fs.onSnapshot(fs.collection(fs.db, 'galleryLikeCounts'), (snapshot: any) => {
+      if (!disposed) onCounts(Object.fromEntries(snapshot.docs.map((item: any) => [item.id, item.data()])));
+    }, onError));
+    if (uid) cleanup.push(fs.onSnapshot(fs.collection(fs.db, 'users', uid, 'galleryReactions'), (snapshot: any) => {
+      if (!disposed) onReactions(Object.fromEntries(snapshot.docs.map((item: any) => [item.id, item.data()])));
+    }, onError));
+    else onReactions({});
+  }).catch(onError);
+  return () => { disposed = true; cleanup.forEach(stop => stop()); };
+};
+export const updateGalleryReaction = async (uid: string | null, image: CharacterGalleryImage, action: GalleryReactionAction) => {
+  if (!uid) throw new Error('Sign in to react to images.');
+  const key = await galleryReactionKey(image);
+  if (uid === 'guest') {
+    const data = readLocalGalleryReactions();
+    const current = data.reactions[key] || EMPTY_GALLERY_REACTION;
+    const next = nextGalleryReaction(current, action);
+    data.reactions[key] = next;
+    if (action === 'like') data.counts[key] = { likes: Math.max(0, (data.counts[key]?.likes || 0) + Number(next.liked) - Number(current.liked)) };
+    localStorage.setItem(LOCAL_REACTIONS_KEY, JSON.stringify(data));
+    window.dispatchEvent(new Event('gallery-reactions-updated'));
+    return;
+  }
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database unavailable. Reaction was not saved.');
+  const reactionRef = fs.doc(fs.db, 'users', uid, 'galleryReactions', key);
+  const countRef = fs.doc(fs.db, 'galleryLikeCounts', key);
+  for (let attempt = 0; ; attempt++) {
+    let observed: { likes: number; reaction: GalleryReaction } | undefined;
+    try {
+      await fs.runTransaction(fs.db, async (transaction: any) => {
+        const snapshot = await transaction.get(reactionRef);
+        const countSnapshot = action === 'like' ? await transaction.get(countRef) : null;
+        const current: GalleryReaction = snapshot.exists() ? snapshot.data() : EMPTY_GALLERY_REACTION;
+        const likes = countSnapshot?.exists() ? countSnapshot.data().likes : 0;
+        observed = { likes, reaction: current };
+        const next = nextGalleryReaction(current, action);
+        transaction.set(reactionRef, next);
+        if (countSnapshot) transaction.set(countRef, { likes: likes + Number(next.liked) - Number(current.liked) });
+      });
+      return;
+    } catch (reason) {
+      if (attempt >= 3 || !observed || (reason as { code?: string }).code !== 'permission-denied') throw reason;
+      // Rules can reject stale reaction fields before Firestore reports the transaction conflict.
+      // Retry only when fresh reads prove another action changed the observed state.
+      let currentReaction: any, currentCount: any;
+      try { [currentReaction, currentCount] = await Promise.all([fs.getDoc(reactionRef), action === 'like' ? fs.getDoc(countRef) : Promise.resolve(null)]); }
+      catch { throw reason; }
+      const fresh: GalleryReaction = currentReaction.exists() ? currentReaction.data() : EMPTY_GALLERY_REACTION;
+      if ((currentCount?.exists() ? currentCount.data().likes : 0) === observed.likes
+        && fresh.liked === observed.reaction.liked && fresh.favorite === observed.reaction.favorite
+        && fresh.rockets === observed.reaction.rockets) throw reason;
+    }
+  }
+};
+
+const LOCAL_GALLERY_KEY = 'eldritchGalleryV1';
+const readLocalGallery = (): { images: GalleryPost[]; tags: GalleryTag[] } => {
+  try { return JSON.parse(localStorage.getItem(LOCAL_GALLERY_KEY) || '{"images":[],"tags":[]}'); }
+  catch { return { images: [], tags: [] }; }
+};
+const isGalleryGuest = (uid: string | null) => !uid || uid === 'guest';
+
+export const subscribeGlobalGallery = (
+  uid: string | null,
+  onImages: (images: GalleryPost[]) => void,
+  onTags: (tags: GalleryTag[]) => void,
+  onError: (error: unknown) => void,
+): (() => void) => {
+  let disposed = false;
+  const cleanup: Array<() => void> = [];
+  if (uid === 'guest') {
+    const refresh = () => { const data = readLocalGallery(); onImages(data.images); onTags(data.tags); };
+    refresh();
+    window.addEventListener('gallery-updated', refresh);
+    window.addEventListener('storage', refresh);
+    return () => { window.removeEventListener('gallery-updated', refresh); window.removeEventListener('storage', refresh); };
+  }
+  let remoteImages: GalleryPost[] = [], remoteTags: GalleryTag[] = [];
+  const refresh = () => {
+    const local = !uid ? readLocalGallery() : { images: [], tags: [] };
+    onImages([...remoteImages, ...local.images]);
+    onTags([...remoteTags, ...local.tags]);
+  };
+  if (!uid) {
+    window.addEventListener('gallery-updated', refresh);
+    cleanup.push(() => window.removeEventListener('gallery-updated', refresh));
+  }
+  getFirestore().then(fs => {
+    if (disposed) return;
+    if (!fs) { onError(new Error('Gallery database unavailable.')); return; }
+    cleanup.push(fs.onSnapshot(fs.collection(fs.db, 'galleryImages'), (snapshot: any) => {
+      if (!disposed) { remoteImages = snapshot.docs.map((item: any) => ({ ...item.data(), id: item.id })); refresh(); }
+    }, onError));
+    cleanup.push(fs.onSnapshot(fs.collection(fs.db, 'galleryTags'), (snapshot: any) => {
+      if (!disposed) { remoteTags = snapshot.docs.map((item: any) => item.data()); refresh(); }
+    }, onError));
+  }).catch(onError);
+  return () => { disposed = true; cleanup.forEach(unsubscribe => unsubscribe()); };
+};
+
+export const subscribePublicGalleryCharacters = (onChange: (characters: CharacterData[]) => void, onError: (error: unknown) => void): (() => void) => {
+  let disposed = false, unsubscribe = () => {};
+  getFirestore().then(fs => {
+    if (disposed) return;
+    if (!fs) { onError(new Error('Public character galleries unavailable.')); return; }
+    unsubscribe = fs.onSnapshot(fs.query(fs.collection(fs.db, 'characters'), fs.where('visibility', '==', 'public')), (snapshot: any) => {
+      if (!disposed) onChange(snapshot.docs.map((item: any) => ({ ...item.data(), id: item.id })));
+    }, onError);
+  }).catch(onError);
+  return () => { disposed = true; unsubscribe(); };
+};
+
+export const saveGlobalGallery = async (uid: string | null, images: GalleryPost[], tags: GalleryTag[]) => {
+  if (images.length > 100 || tags.length > 200) throw new Error('Save up to 100 images and 200 tags at a time.');
+  const cleanTags = [...new Map(tags.map(tag => {
+    const name = normalizeTag(tag.name);
+    if (!name || !GALLERY_CATEGORIES.includes(tag.category)) throw new Error('Invalid tag.');
+    return [name, { name, category: tag.category }] as const;
+  })).values()];
+  const cleanImages = images.map(image => {
+    if (image.sourceCharacterId || image.userId !== (uid || 'guest')) throw new Error('Only your own global images can be edited here.');
+    if (!/^https?:\/\//i.test(image.url)) throw new Error('Use an HTTP or HTTPS image URL.');
+    const normalizedTags = imageTags(image);
+    if (normalizedTags.length > 100) throw new Error('Each image can have up to 100 tags.');
+    return stripUndefinedDeep({ ...image, tags: normalizedTags, updatedAt: Date.now() }) as GalleryPost;
+  });
+  if (isGalleryGuest(uid)) {
+    const data = readLocalGallery();
+    const imageMap = new Map(data.images.map(image => [image.id, image]));
+    const tagMap = new Map(data.tags.map(tag => [tag.name, tag]));
+    cleanImages.forEach(image => imageMap.set(image.id, image));
+    cleanTags.forEach(tag => tagMap.set(tag.name, tag));
+    const nextImages = [...imageMap.values()];
+    const used = usedGalleryTagNames(nextImages);
+    localStorage.setItem(LOCAL_GALLERY_KEY, JSON.stringify({ images: nextImages, tags: [...tagMap.values()].filter(tag => used.has(normalizeTag(tag.name))) }));
+    window.dispatchEvent(new Event('gallery-updated'));
+    return;
+  }
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database unavailable. Images were not published.');
+  const batch = fs.writeBatch(fs.db);
+  cleanImages.forEach(image => batch.set(fs.doc(fs.db, 'galleryImages', image.id), image));
+  cleanTags.forEach(tag => batch.set(fs.doc(fs.db, 'galleryTags', encodeURIComponent(tag.name)), tag, { merge: true }));
+  await batch.commit();
+};
+
+export const deleteGlobalGalleryImage = async (uid: string | null, image: GalleryPost) => {
+  if (image.sourceCharacterId || image.userId !== (uid || 'guest')) throw new Error('Only the uploader can delete this image.');
+  if (isGalleryGuest(uid)) {
+    const data = readLocalGallery();
+    const images = data.images.filter(item => item.id !== image.id);
+    const used = usedGalleryTagNames(images);
+    localStorage.setItem(LOCAL_GALLERY_KEY, JSON.stringify({ images, tags: data.tags.filter(tag => used.has(normalizeTag(tag.name))) }));
+    window.dispatchEvent(new Event('gallery-updated'));
+    return;
+  }
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database unavailable.');
+  await fs.deleteDoc(fs.doc(fs.db, 'galleryImages', image.id));
+};
+
+/** Update only tags; admin edits never replace uploader metadata or stale image fields. */
+export const saveGalleryImageTags = async (uid: string | null, image: GalleryPost, rawTags: string[], definitions: GalleryTag[]) => {
+  const tags = [...new Set(rawTags.map(normalizeTag).filter(Boolean))];
+  if (tags.length > 100) throw new Error('Each image can have up to 100 tags.');
+  const owner = !image.sourceCharacterId && image.userId === (uid || 'guest');
+  if (!owner && (isGalleryGuest(uid) || !(await loadAdminAccess(uid)).isAdmin)) throw new Error('Only the uploader or an administrator can edit these tags.');
+  const cleanDefinitions = [...new Map(definitions.filter(tag => tags.includes(normalizeTag(tag.name))).map(tag => {
+    if (!GALLERY_CATEGORIES.includes(tag.category)) throw new Error('Invalid tag category.');
+    const name = normalizeTag(tag.name);
+    return [name, { name, category: tag.category }] as const;
+  })).values()];
+  if (isGalleryGuest(uid)) {
+    const current = readLocalGallery().images.find(item => item.id === image.id);
+    if (!current) throw new Error('Image no longer exists.');
+    return saveGlobalGallery(uid, [{ ...current, tags }], cleanDefinitions);
+  }
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Database unavailable. Tags were not saved.');
+  if (image.sourceCharacterId) {
+    if (!image.sourceImageId) throw new Error('Original character image could not be identified.');
+    const ref = fs.doc(fs.db, 'characters', image.sourceCharacterId);
+    await fs.runTransaction(fs.db, async (transaction: any) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw new Error('Character no longer exists.');
+      const character = snapshot.data() as CharacterData;
+      if (!(character.gallery || []).some(item => item.id === image.sourceImageId)) throw new Error('Image no longer exists.');
+      const categories = { ...character.galleryTagCategories };
+      const gallery = (character.gallery || []).map(item => {
+        if (item.id !== image.sourceImageId) return item;
+        const nextTags = tags.map(tag => (item.tags || []).find(original => normalizeTag(original) === tag) || tag);
+        nextTags.forEach(tag => { const definition = cleanDefinitions.find(item => item.name === normalizeTag(tag)); if (definition) categories[tag.toLowerCase()] = definition.category; });
+        const scopes = characterImageTagScopes(item, character.galleryTagCategories);
+        return { ...item, tags: [...new Set([...scopes.roles, ...nextTags])], ...(scopes.specific.length ? { characterSpecificTags: scopes.specific } : {}) };
+      });
+      transaction.update(ref, { gallery, galleryTagCategories: categories, updatedAt: Date.now() });
+      cleanDefinitions.forEach(tag => transaction.set(fs.doc(fs.db, 'galleryTags', encodeURIComponent(tag.name)), tag, { merge: true }));
+    });
+    return;
+  }
+  const batch = fs.writeBatch(fs.db);
+  batch.update(fs.doc(fs.db, 'galleryImages', image.id), { tags, updatedAt: Date.now() });
+  cleanDefinitions.forEach(tag => batch.set(fs.doc(fs.db, 'galleryTags', encodeURIComponent(tag.name)), tag, { merge: true }));
+  await batch.commit();
+};
+
+/** Save character-local scopes and the shared publication together, without replacing other character edits. */
+export const saveCharacterGalleryImageTags = async (
+  uid: string | null,
+  characterId: string,
+  image: CharacterGalleryImage,
+  shared: string[],
+  specific: string[],
+  definitions: GalleryTag[],
+  categories: Record<string, CharacterGalleryTagCategory>,
+  central?: GalleryPost,
+  syncShared = true,
+): Promise<CharacterGalleryImage> => {
+  if (!uid) throw new Error('Sign in to edit image tags.');
+  shared = [...new Set(shared.map(normalizeTag).filter(Boolean))];
+  specific = [...new Set(specific.map(normalizeTag).filter(Boolean))];
+  if (shared.length > 100 || specific.length > 100) throw new Error('Use up to 100 tags per scope.');
+  const previous = characterImageTagScopes(image, categories).shared;
+  const changed = shared.some(tag => !previous.includes(tag)) || previous.some(tag => !shared.includes(tag));
+  const publish = syncShared && (!!central || (shared.length > 0 && changed));
+  if (central && central.userId !== uid && syncShared && !(await loadAdminAccess(uid)).isAdmin) throw new Error('Only the uploader or an administrator can edit global tags.');
+  if (!/^https?:\/\//i.test(galleryImageUrl(image))) throw new Error('Invalid image URL.');
+  const digest = publish && !central ? Array.from(new Uint8Array(await crypto.subtle.digest('SHA-256', new TextEncoder().encode(galleryImageUrl(image))))).map(value => value.toString(16).padStart(2, '0')).join('') : '';
+  const globalId = central?.id || (publish ? `shared-${digest}` : image.globalGalleryImageId);
+  const cleanDefinitions: GalleryTag[] = shared.map(name => ({ name, category: definitions.find(tag => normalizeTag(tag.name) === name && tag.category !== 'character-specific')?.category || 'general' }));
+  const patch = (saved: CharacterGalleryImage): CharacterGalleryImage => stripUndefinedDeep({
+    ...withCharacterImageTags(saved, shared, specific, categories),
+    ...(globalId ? { globalGalleryImageId: globalId } : {}),
+  }) as CharacterGalleryImage;
+  const updateCharacter = (character: CharacterData) => {
+    const saved = (character.gallery || []).find(item => item.id === image.id || galleryImageUrl(item) === galleryImageUrl(image));
+    // Persist saved roles; the caller retains any unsaved role selections in its own draft.
+    const next = patch(saved || { ...image, tags: [] });
+    const gallery = saved ? (character.gallery || []).map(item => item.id === saved.id ? next : item) : [...(character.gallery || []), next];
+    const galleryTagCategories = { ...character.galleryTagCategories };
+    cleanDefinitions.forEach(tag => { galleryTagCategories[tag.name] = tag.category; });
+    specific.forEach(tag => { galleryTagCategories[tag] = 'character-specific'; });
+    return { gallery, galleryTagCategories, updatedAt: Date.now() };
+  };
+  const publication = (existing?: GalleryPost): GalleryPost => existing
+    ? { ...existing, tags: shared, updatedAt: Date.now() }
+    : stripUndefinedDeep({ id: globalId!, url: galleryImageUrl(image), thumbUrl: image.thumbUrl, label: image.label, userId: uid, tags: shared, createdAt: image.createdAt || Date.now(), updatedAt: Date.now() }) as GalleryPost;
+  if (isGalleryGuest(uid)) {
+    const characters = getLocalCharacters();
+    const character = characters.find(item => item.id === characterId);
+    if (!character) throw new Error('Save the character before editing image tags.');
+    const data = readLocalGallery();
+    const existing = data.images.find(item => item.id === globalId);
+    if (publish && existing && existing.userId !== uid) throw new Error('Only the uploader can edit global tags.');
+    const nextCharacters = characters.map(item => item.id === characterId ? { ...item, ...updateCharacter(character) } : item);
+    const posts = publish ? [...data.images.filter(item => item.id !== globalId), publication(existing)] : data.images;
+    const tags = new Map(data.tags.map(tag => [tag.name, tag]));
+    if (publish) cleanDefinitions.forEach(tag => tags.set(tag.name, tag));
+    const used = usedGalleryTagNames(posts);
+    const oldCharacters = localStorage.getItem('battleTrackerLocalCharacters');
+    const oldGallery = localStorage.getItem(LOCAL_GALLERY_KEY);
+    try {
+      localStorage.setItem('battleTrackerLocalCharacters', JSON.stringify(nextCharacters));
+      localStorage.setItem(LOCAL_GALLERY_KEY, JSON.stringify({ images: posts, tags: [...tags.values()].filter(tag => used.has(tag.name)) }));
+    } catch (error) {
+      if (oldCharacters !== null) localStorage.setItem('battleTrackerLocalCharacters', oldCharacters);
+      if (oldGallery !== null) localStorage.setItem(LOCAL_GALLERY_KEY, oldGallery);
+      throw error;
+    }
+    window.dispatchEvent(new Event('gallery-updated'));
+  } else {
+    const fs = await getFirestore();
+    if (!fs) throw new Error('Database unavailable. Tags were not saved.');
+    const ref = fs.doc(fs.db, 'characters', characterId);
+    await fs.runTransaction(fs.db, async (transaction: any) => {
+      const snapshot = await transaction.get(ref);
+      if (!snapshot.exists()) throw new Error('Save the character before editing image tags.');
+      const globalRef = publish ? fs.doc(fs.db, 'galleryImages', globalId!) : null;
+      const globalSnapshot = globalRef ? await transaction.get(globalRef) : null;
+      transaction.update(ref, updateCharacter(snapshot.data() as CharacterData));
+      if (globalRef) {
+        if (globalSnapshot.exists()) transaction.update(globalRef, { tags: shared, updatedAt: Date.now() });
+        else transaction.set(globalRef, publication());
+        cleanDefinitions.forEach(tag => transaction.set(fs.doc(fs.db, 'galleryTags', encodeURIComponent(tag.name)), tag, { merge: true }));
+      }
+    });
+  }
+  return patch(image);
+};
+
+/** Admin cleanup rechecks image usage; ordinary gallery reads never delete data. */
+export const pruneUnusedGalleryTags = async (uid: string | null, candidates: string[]) => {
+  const names = [...new Set(candidates.map(normalizeTag).filter(Boolean))];
+  if (!names.length) return;
+  if (isGalleryGuest(uid)) {
+    const data = readLocalGallery(), used = usedGalleryTagNames(data.images);
+    const tags = data.tags.filter(tag => !names.includes(normalizeTag(tag.name)) || used.has(normalizeTag(tag.name)));
+    if (tags.length === data.tags.length) return;
+    localStorage.setItem(LOCAL_GALLERY_KEY, JSON.stringify({ ...data, tags }));
+    window.dispatchEvent(new Event('gallery-updated'));
+    return;
+  }
+  if (!(await loadAdminAccess(uid)).isAdmin) return;
+  const fs = await getFirestore();
+  if (!fs) throw new Error('Gallery tag cleanup is unavailable.');
+  const publicSnapshot = await fs.getDocs(fs.query(fs.collection(fs.db, 'characters'), fs.where('visibility', '==', 'public')));
+  const legacy = publicCharacterGallery(publicSnapshot.docs.map((item: any) => ({ ...item.data(), id: item.id })));
+  const legacyUsed = usedGalleryTagNames(legacy.images);
+  for (const name of names) {
+    if (legacyUsed.has(name)) continue;
+    await fs.runTransaction(fs.db, async (transaction: any) => {
+      const ref = fs.doc(fs.db, 'galleryTags', encodeURIComponent(name));
+      const tag = await transaction.get(ref);
+      if (!tag.exists()) return;
+      // Image publishers also write this tag document. A concurrent publish
+      // conflicts with this read and retries cleanup against the new image usage.
+      const usage = await fs.getDocs(fs.query(fs.collection(fs.db, 'galleryImages'), fs.where('tags', 'array-contains', name)));
+      if (usage.empty) transaction.delete(ref);
+    });
+  }
+};
 
 export interface UserProfile {
   uid: string;
@@ -40,7 +391,7 @@ async function getFirestore() {
 
   try {
     const { initializeApp, getApps, getApp } = await import('firebase/app');
-    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or, onSnapshot, runTransaction } = await import('firebase/firestore');
+    const { getFirestore: fbGetFirestore, collection, doc, setDoc, updateDoc, getDocs, getDoc, deleteDoc, query, where, arrayUnion, or, onSnapshot, runTransaction, writeBatch } = await import('firebase/firestore');
 
     const app = getApps().length > 0 ? getApp() : initializeApp({
       apiKey: import.meta.env.VITE_FIREBASE_API_KEY,
@@ -68,6 +419,7 @@ async function getFirestore() {
       or,
       onSnapshot,
       runTransaction,
+      writeBatch,
     };
 
     return firestoreInstance;
