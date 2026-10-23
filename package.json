@@ -13,7 +13,8 @@
     "import:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/import-user-pages.ps1",
     "list:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/list-user-workspaces.ps1",
     "delete:user-pages": "powershell -ExecutionPolicy Bypass -File scripts/delete-user-workspace.ps1",
-    "import:chronicler": "powershell -ExecutionPolicy Bypass -File scripts/import-chronicler-world.ps1"
+    "import:chronicler": "powershell -ExecutionPolicy Bypass -File scripts/import-chronicler-world.ps1",
+    "prepare": "node scripts/install-git-hooks.mjs"
   },
   "dependencies": {
     "@dice-roller/rpg-dice-roller": "^5.5.1",
